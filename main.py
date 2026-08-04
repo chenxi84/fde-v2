@@ -25,7 +25,7 @@ try:
 except ImportError:
     pass
 
-from fde_platform.web import HOST, PORT, app, platform  # noqa: E402
+from fde_platform.web import HOST, PORT, VERSION, app, platform  # noqa: E402
 
 # 启用鉴权（可插拔）：删除 fde_platform/auth.py 与 users.py 后此处 import 失败，
 # 平台自动回落无认证模式，其余代码无需改动。
@@ -70,7 +70,7 @@ def main():
     names = platform.app_names()
     bar = "=" * 54
     print(f"\n{bar}")
-    print("FDE 技术平台 v2 启动")
+    print(f"FDE 技术平台 {VERSION} 启动")
     print(bar)
     print(f"浏览器端 : http://{HOST}:{PORT}")
     print(f"鉴权     : {'开启（首次登录 admin/admin，请尽快改密）' if AUTH_ON else '关闭（无认证模式）'}")

@@ -40,6 +40,7 @@ from fde_platform import builtin_tools, scanner, users, view_registry
 from fde_platform.runtime import FdePlatform
 
 _PKG_DIR = Path(__file__).parent
+VERSION = "v2.1.1-beta"
 HOST = os.environ.get("PLATFORM_HOST", "127.0.0.1")
 PORT = int(os.environ.get("PLATFORM_PORT", 4000))
 

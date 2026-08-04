@@ -541,7 +541,7 @@ class GroupBuildState(TypedDict, total=False):
     brd_context: str        # 来源①：brd/ 各文件内容拼装
     outline_md: str         # ① 聚合根清单总表（含简短引言）
     app_names: list         # 从总表解析出的应用名（决定扇出与卡顺序）
-    cards: dict             # {应用名: 聚合根卡 markdown}
+    app_cards: dict             # {应用名: 聚合根卡 markdown}
     relations_md: str       # ③ 聚合关系图 + 关键设计决策 + 待确认
     architecture_md: str    # 拼装后的最终文档
     error: str
@@ -869,7 +869,7 @@ def node_cards(state: GroupBuildState) -> dict:
     if failed:
         raise RuntimeError(f"以下聚合根卡生成失败：{', '.join(failed)}")
     groupbuild_store.append_log(task_id, f"cards 完成：{len(cards)} 张聚合根卡。")
-    return {"cards": cards}
+    return {"app_cards": cards}
 
 
 def node_relations(state: GroupBuildState) -> dict:
@@ -879,7 +879,7 @@ def node_relations(state: GroupBuildState) -> dict:
     groupbuild_store.append_log(task_id, "relations：生成聚合关系图与设计决策…")
 
     outline = state.get("outline_md") or ""
-    cards = state.get("cards") or {}
+    cards = state.get("app_cards") or {}
     cards_digest = "\n\n".join(f"#### {n}\n{cards[n]}" for n in (state.get("app_names") or []) if n in cards)
     system = (_ROLE_PREAMBLE +
               "本次【只】产出输出结构③『聚合关系图』及其后内容：\n"
@@ -902,7 +902,7 @@ def node_assemble(state: GroupBuildState) -> dict:
     task_id, group = state["task_id"], state["group"]
     groupbuild_store.update_task(task_id, current_step="assemble")
     app_names = state.get("app_names") or []
-    cards = state.get("cards") or {}
+    cards = state.get("app_cards") or {}
     missing_cards = [n for n in app_names if n not in cards]
     if missing_cards:
         raise RuntimeError(f"缺少聚合根卡：{', '.join(missing_cards)}")
