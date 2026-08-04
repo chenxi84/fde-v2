@@ -1,0 +1,765 @@
+{% extends "base.html" %}
+{% block title %}应用组构建 · FDE 平台{% endblock %}
+{% block content %}
+<p><a href="/">← 应用清单</a></p>
+<div class="section-title">FDE 应用组构建</div>
+<p class="muted">流程步骤：① 建应用组（中文名 + 英文名，自动建 <code>app/&lt;英文名&gt;/</code> 与 <code>brd/</code>）
+  → ② 上传 / 删除业务设计文件（存入 <code>brd/</code>，含子文件夹）→ ③ 架构创建（长文本业务描述，后台大模型按
+  <code>design/架构设计.md</code> 技能生成 <code>app/&lt;组&gt;/architecture.md</code>）→ ④ 应用详设（基于 architecture.md + brd，
+  后台大模型按 <code>design/应用设计.md</code> 技能为<b>每个聚合根</b>生成 <code>app/&lt;组&gt;/&lt;应用名&gt;/应用详设.md</code>）
+  → ⑤ 应用编码（基于 应用详设.md，后台大模型按 <code>design/CONVENTION.md</code> 为<b>每个聚合根</b>生成
+  <code>app/&lt;组&gt;/&lt;应用名&gt;/&lt;应用名&gt;.py</code> + <code>README.md</code>，生成后过静态门禁）
+  → ⑥ 测试用例（基于 architecture.md + 各详设，后台大模型按 <code>design/应用测试.md</code> 为<b>整组</b>生成
+  <code>app/&lt;组&gt;/测试用例.md</code>，覆盖主链 + 分支 + 异步回执模拟，含自洽测试数据；生成与执行分离）
+  → ⑦ 测试执行（第⑤步，基于 测试用例.md，后台大模型按 <code>design/测试执行.md</code> 把用例翻译成
+  <code>verify_chain_&lt;组&gt;.py</code> 并<b>真实树直跑</b>，失败自动 triage + 修脚本重跑，产出测试报告；
+  <b style="color:#c0392b">清表初始化：运行会清空该组全部业务数据</b>（测试环境语义；config/ 平台库不受影响）
+  → ⑧ 契约冻结（第③步收尾 · 前端段依赖屏障：隔离沙箱内跑契约 dump，生成 <code>app/&lt;组&gt;/_contracts.md</code>——服务签名 + 真实返回样例；代码变更后重跑刷新）。
+  任务<b>后台运行</b>，关闭本页不停止，重启可续跑。本页<b>不自动刷新</b>——上传 / 生成 / 删除后会即时更新，
+  生成完成后点「刷新」查看结果。</p>
+
+<div class="card">
+  <h3>① 新建应用组</h3>
+  <div class="row">
+    <div><label>中文名</label>
+      <input type="text" id="g-cn" placeholder="如 客户关系管理"></div>
+    <div><label>英文名（app/ 下目录名，snake_case）</label>
+      <input type="text" id="g-en" placeholder="如 crm / sales_order"></div>
+  </div>
+  <div style="margin-top:8px">
+    <button id="g-create">创建应用组</button>
+    <span class="muted" id="g-msg"></span>
+  </div>
+</div>
+
+<div class="section-title">应用组
+  <button class="mini" onclick="loadGroups(true)" title="手动刷新组 / 文件 / 架构 / 任务状态">⟳ 刷新</button>
+</div>
+<div id="g-list"><div class="card muted">加载中…</div></div>
+
+<style>
+  .grp{margin-bottom:14px}
+  .badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;margin-left:6px}
+  .badge.on{background:#e4f5ea;color:#2e9e5b}
+  .badge.off{background:#f0f0f0;color:#888}
+  .fileline{display:flex;justify-content:space-between;align-items:center;padding:3px 0;font-size:13px}
+  .fileline .del{color:#c0392b;cursor:pointer;font-size:12px}
+  .dirnode{margin:3px 0}
+  .dirnode>summary{cursor:pointer;font-size:13px;font-weight:600;list-style:none;user-select:none}
+  .dirnode>summary::-webkit-details-marker{display:none}
+  .dirnode>summary::before{content:"▸ ";color:#888;font-size:11px}
+  .dirnode[open]>summary::before{content:"▾ "}
+  .btnlink{display:inline-block;margin:0 4px;font-size:13px}
+  .mini{font-size:12px;padding:2px 10px;vertical-align:middle;margin-left:8px}
+  .dlog{max-height:180px;overflow:auto;background:#f6f7f9;padding:8px;font-size:12px;white-space:pre-wrap;margin-top:6px}
+  .task{border-top:1px solid #eee;padding:6px 0}
+  .st-queued{color:#888}.st-running{color:#3a7afe}.st-done{color:#2e9e5b}.st-failed{color:#c0392b}.st-cancelled{color:#94a3b8}.st-manual{color:#b8860b}
+  textarea{width:100%}
+</style>
+
+<script>
+const STATUS_LABEL = {queued:'排队中', running:'运行中', done:'已完成', failed:'失败', cancelled:'已终止'};
+const KIND_LABEL = {arch:'架构', detail:'详设', code:'编码', testcase:'用例', testexec:'测试',
+                    bugfix:'BUG提案', 'bugfix-apply':'BUG应用', contracts:'契约',
+                    fdesign:'前端详设', fcode:'前端编码', ftest:'前端测试', fverify:'前端测试执行'};
+function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function escA(s){ return esc(s).replace(/'/g, '&#39;'); }   // 用于 onclick 字符串参数
+function fmtSize(n){ if(n<1024) return n+' B'; if(n<1048576) return (n/1024).toFixed(1)+' KB'; return (n/1048576).toFixed(1)+' MB'; }
+
+const TEXT_CACHE = {};   // {组名: 业务描述输入} —— 动作触发的重渲染后回填，避免输入丢失
+function saveBt(en, val){ TEXT_CACHE[en] = val; }
+
+function countFiles(node){ return node.type==='file' ? 1 : (node.children||[]).reduce((s,c)=>s+countFiles(c),0); }
+function renderTree(nodes, en, depth){
+  return nodes.map(n=>{
+    if(n.type==='dir'){
+      return `<details class="dirnode" style="margin-left:${depth*16}px" open>`+
+        `<summary>📁 ${esc(n.name)} <span class="muted" style="font-weight:normal">${countFiles(n)} 个文件</span></summary>`+
+        `<div>${renderTree(n.children, en, depth+1)}</div></details>`;
+    }
+    return `<div class="fileline" style="padding-left:${depth*16+14}px">`+
+      `<span class="mono">📄 ${esc(n.name)} <span class="muted">${fmtSize(n.size)}</span></span>`+
+      `<span class="del" onclick="delFile('${escA(en)}','${escA(n.relpath)}')">删除</span></div>`;
+  }).join('');
+}
+
+async function loadGroups(){
+  try{
+    const r = await fetch('/api/groupbuild/groups'); const j = await r.json();
+    if(j.status!=='ok') return;
+    const box = document.getElementById('g-list');
+    if(!j.data.length){ box.innerHTML = '<div class="card muted">尚无应用组，请先创建。</div>'; return; }
+    box.innerHTML = j.data.map(g=>{
+      const en = escA(g.name_en);
+      return `
+      <div class="card grp" data-en="${esc(g.name_en)}">
+        <h3>${esc(g.name_cn)||'<span class=muted>（未填中文名）</span>'}
+          <span class="mono muted">${esc(g.name_en)}</span>
+          <span class="badge ${g.has_architecture?'on':'off'}">${g.has_architecture?'已生成架构':'未生成架构'}</span>
+          <span class="muted" style="font-weight:normal;font-size:12px">${esc(g.created_at||'')}</span></h3>
+
+        <div><b>② 业务设计文件</b> <span class="muted">brd/（${g.brd_count} 个文件）</span>
+          <div style="margin:6px 0">
+            <input type="file" id="fu-${en}" multiple>
+            <button onclick="uploadFiles('${en}')">上传</button>
+            <span class="muted" id="fum-${en}"></span>
+          </div>
+          <div id="files-${en}" class="muted">加载中…</div>
+        </div>
+
+        <div style="margin-top:10px"><b>③ 架构创建</b>
+          <label class="muted">业务描述（长文本；若已上传 BRD 可留空，两者至少其一）</label>
+          <textarea id="bt-${en}" rows="4" oninput="saveBt('${en}', this.value)"
+            placeholder="背景 / 主流程 / 涉及数据 / 角色…">${esc(TEXT_CACHE[g.name_en]||'')}</textarea>
+          <div style="margin-top:6px">
+            <button onclick="genArch('${en}')">${g.has_architecture?'重新生成架构':'生成架构'}</button>
+            <span class="muted" id="gam-${en}"></span>
+          </div>
+        </div>
+
+        <div style="margin-top:10px"><b>架构文件</b>
+          ${g.has_architecture
+            ? `<span class="badge on">已生成</span>
+               <a class="btnlink" href="/api/groupbuild/groups/${en}/architecture" download="architecture.md">下载</a>
+               <button onclick="delArch('${en}')">删除</button>
+               <span class="muted" style="font-size:12px">app/${esc(g.name_en)}/architecture.md</span>`
+            : `<span class="badge off">未生成</span>`}
+        </div>
+
+        <div style="margin-top:10px"><b>④ 应用详设</b>
+          <span class="badge ${g.design_count>0?'on':'off'}">已生成 ${g.design_count||0} / 共 ${g.aggregate_count||0} 个聚合根</span>
+          <div style="margin:6px 0">
+            <button onclick="genDesign('${en}')" ${g.has_architecture?'':'disabled title="请先生成架构"'}>${g.design_count>0?'重新生成应用详设':'生成应用详设（全部聚合根）'}</button>
+            ${g.design_count>0?`<a class="btnlink" href="/api/groupbuild/groups/${en}/design?zip=1" download="${en}_应用详设.zip">打包下载全部</a>`:''}
+            <span class="muted" id="gdm-${en}"></span>
+          </div>
+          <div id="design-${en}" class="muted">${g.has_architecture?'加载中…':'（需先生成架构）'}</div>
+        </div>
+
+        <div style="margin-top:10px"><b>⑤ 应用编码</b>
+          <span class="badge ${g.code_count>0?'on':'off'}">已编码 ${g.code_count||0} / 共 ${g.design_count||0} 个详设</span>
+          <div style="margin:6px 0">
+            <button onclick="genCode('${en}', ${g.code_count||0})" ${g.design_count>0?'':'disabled title="请先生成应用详设"'}>${g.code_count>0?'重新生成应用代码':'生成应用代码（全部详设）'}</button>
+            ${g.code_count>0?`<a class="btnlink" href="/api/groupbuild/groups/${en}/code?zip=1" download="${en}_应用代码.zip">打包下载全部</a>`:''}
+            <span class="muted" id="gcm-${en}"></span>
+          </div>
+          ${g.code_count>0?`<div class="muted" style="font-size:12px">⚠️ 重新生成会<b>覆盖</b>已有 <code>.py</code> / <code>README.md</code>（手工改过的代码请勿重跑）。</div>`:''}
+          <div id="code-${en}" class="muted">${g.design_count>0?'加载中…':'（需先生成应用详设）'}</div>
+        </div>
+
+        <div style="margin-top:10px"><b>⑥ 测试用例</b>
+          <span class="badge ${g.has_testcase?'on':'off'}">${g.has_testcase?'已生成测试用例':'未生成测试用例'}</span>
+          <div style="margin:6px 0">
+            <button onclick="genTestcase('${en}')" ${g.design_count>0?'':'disabled title="请先生成应用详设"'}>${g.has_testcase?'重新生成测试用例':'生成测试用例（整组）'}</button>
+            ${g.has_testcase?`<a class="btnlink" href="/api/groupbuild/groups/${en}/testcase" download="测试用例.md">下载</a>
+            <button onclick="delTestcase('${en}')">删除</button>`:''}
+            <span class="muted" id="gtm-${en}"></span>
+          </div>
+          <div class="muted" style="font-size:12px">整组一份 <code>app/${esc(g.name_en)}/测试用例.md</code>：覆盖主业务链 + 分支 + 异步回执模拟，含自洽测试数据。生成与执行分离（本步只生成用例）。</div>
+        </div>
+
+        <div style="margin-top:10px"><b>⑦ 测试执行</b>
+          <span class="badge ${g.has_testexec?'on':'off'}">${g.has_testexec?'已有测试脚本':'未执行'}</span>
+          <div style="margin:6px 0">
+            <button onclick="genTestexec('${en}')" ${g.has_testcase?'':'disabled title="请先生成测试用例"'}>${g.has_testexec?'重新执行测试':'执行测试'}</button>
+            ${g.has_testexec?`<a class="btnlink" href="/api/groupbuild/groups/${en}/testexec?zip=1" download="test_${en}.zip">脚本包</a>
+            <a class="btnlink" href="/api/groupbuild/groups/${en}/testexec" download="verify_chain_${en}.py">编排器</a>
+            <a class="btnlink" href="/api/groupbuild/groups/${en}/testexec?report=1" download="测试报告_${en}.md">报告</a>
+            <button onclick="delTestexec('${en}')">删除</button>`:''}
+            <span class="muted" id="gem-${en}"></span>
+          </div>
+          <div class="muted" style="font-size:12px">第⑤步：把测试用例翻译成 <code>app/${en}/tests/verify_chain_${en}.py</code>（产物与报告统一落 <code>app/${en}/tests/</code>，与第⑨步前端产物同处）并<b>真实树直跑</b>（清表初始化）；失败自动 triage + 修脚本重跑（≤3 轮），应用 bug 只记录（报告 / BUGS_${en}.md）不自动改码。耗时数分钟，串行占用后台队列。</div>
+          <div style="margin-top:8px; padding:8px; border:1px dashed var(--line); border-radius:6px">
+            <b>BUG 修复回路</b>
+            ${g.bugfix&&g.bugfix.open?`<span class="badge on">${g.bugfix.open} 条未闭环提案（${g.bugfix.approved} 已批准）</span>`:''}
+            <div style="margin:6px 0">
+              <button onclick="genBugfix('${en}')" ${g.has_testexec?'':'disabled title="请先运行测试"'}>生成修复提案</button>
+              <button onclick="applyBugfix('${en}')" ${g.bugfix&&g.bugfix.approved?'':'disabled title="没有已批准的提案"'}>应用已批准并重测</button>
+              ${g.has_bugfix_doc?`<a class="btnlink" href="/api/groupbuild/groups/${en}/bugfix/doc" download="修复提案_${en}.md">提案文档</a>`:''}
+              <span class="muted" id="gbm-${en}"></span>
+            </div>
+            <div class="muted" style="font-size:12px">对测试报告的失败用例逐条 triage 并提案（<b>只提案，批准后</b>才改码；改前自动备份原文件，应用后自动重测对账消项）。</div>
+            <div id="bugfix-${en}"></div>
+          </div>
+        </div>
+
+        <div style="margin-top:10px"><b>⑧ 契约冻结（第③步收尾 · 前端段依赖屏障）</b>
+          <span class="badge ${g.has_contracts?'on':'off'}">${g.has_contracts?'已冻结契约':'未冻结'}</span>
+          <div style="margin:6px 0">
+            <button onclick="genContracts('${en}')" ${g.code_count>0?'':'disabled title="请先生成应用代码"'}>${g.has_contracts?'重新冻结契约':'冻结契约（沙箱 dump）'}</button>
+            ${g.has_contracts?`<a class="btnlink" href="/api/groupbuild/groups/${en}/contracts" download="_contracts.md">下载</a>
+            <button onclick="delContracts('${en}')">删除</button>`:''}
+            <span class="muted" id="gkm-${en}"></span>
+          </div>
+          <div class="muted" style="font-size:12px">在<b>隔离沙箱</b>内跑契约 dump 生成 <code>app/${esc(g.name_en)}/_contracts.md</code>（提供 <code>seed_contracts.py</code> 造数链的组得签名 + 真实返回样例，其他组签名级）——⑨ 前端详设的前置依赖；代码变更（重编码 / BUG 修复）后重跑刷新。耗时 1–3 分钟。</div>
+        </div>
+
+        <div style="margin-top:10px"><b>⑨ 前端详设（规格九步法第⑥步）</b>
+          <span class="badge ${g.fdesign_count>0?'on':'off'}">已生成 ${g.fdesign_count||0} / 共 ${g.aggregate_count||0} 个应用</span>
+          ${g.has_fdesign_dashboard?'<span class="badge on">看板</span>':''}
+          <div style="margin:6px 0">
+            <button onclick="genFdesign('${en}', ${g.fdesign_count||0})" ${g.has_contracts?'':'disabled title="请先冻结契约（⑧）"'}>${g.fdesign_count>0?'重新生成前端详设':'生成前端详设（全部应用）'}</button>
+            ${g.fdesign_count>0||g.has_fdesign_dashboard?`<a class="btnlink" href="/api/groupbuild/groups/${en}/fdesign?zip=1" download="${en}_前端详设.zip">打包下载全部</a>`:''}
+            ${g.has_fdesign_dashboard?`<a class="btnlink" href="/api/groupbuild/groups/${en}/fdesign/dashboard" download="dashboard.md">看板</a>`:''}
+            <span class="muted" id="gfm-${en}"></span>
+          </div>
+          ${g.fdesign_count>0?`<div class="muted" style="font-size:12px">⚠️ 重新生成会<b>覆盖</b>已有 <code>前端详设.md</code>（手工精修过的文档请勿重跑）。</div>`:''}
+          <div id="fdesign-${en}" class="muted">${g.has_contracts?'加载中…':'（需先冻结契约 ⑧）'}</div>
+        </div>
+
+        <div style="margin-top:10px"><b>⑩ 前端编码（规格九步法第⑦步）</b>
+          <span class="badge ${g.fcode_count>0?'on':'off'}">已编码 ${g.fcode_count||0} / 共 ${g.fdesign_count||0} 个应用</span>
+          ${g.has_fcode_dashboard?'<span class="badge on">看板</span>':''}
+          <div style="margin:6px 0">
+            <button onclick="genFcode('${en}', ${g.fcode_count||0})" ${g.fdesign_count>0?'':'disabled title="请先生成前端详设（⑨）"'}>${g.fcode_count>0?'重新生成前端代码':'生成前端代码（全部应用）'}</button>
+            ${g.fcode_count>0||g.has_fcode_dashboard?`<a class="btnlink" href="/api/groupbuild/groups/${en}/fcode?zip=1" download="${en}_前端编码.zip">打包下载全部</a>`:''}
+            ${g.has_fcode_dashboard?`<a class="btnlink" href="/api/groupbuild/groups/${en}/fcode/dashboard" download="dashboard_view.zip">看板</a>`:''}
+            <span class="muted" id="gfc-${en}"></span>
+          </div>
+          ${g.fcode_count>0?`<div class="muted" style="font-size:12px">⚠️ 重新生成会<b>覆盖</b>已有 <code>view.{js,html}</code>（手工精修过的页面请勿重跑）。</div>`:''}
+          <div class="muted" style="font-size:12px">单元两阶段生成（view.js → view.html）+ 确定性门禁（默认导出 / svc 字面量 / node --check 等）；产物<b>零接线</b>，落盘即进菜单 / 路由 / 授权清单（浏览器刷新生效）。</div>
+          <div id="fcode-${en}" class="muted">${g.fdesign_count>0?'加载中…':'（需先生成前端详设 ⑨）'}</div>
+        </div>
+
+        <div style="margin-top:10px"><b>⑪ 前端测试（规格九步法第⑧步）</b>
+          <span class="badge ${g.ftest_count>0?'on':'off'}">已生成 ${g.ftest_count||0} / 共 ${g.fdesign_count||0} 个应用</span>
+          ${g.has_ftest_group?'<span class="badge on">组级补充</span>':''}
+          <div style="margin:6px 0">
+            <button onclick="genFtest('${en}', ${g.ftest_count||0})" ${g.fdesign_count>0?'':'disabled title="请先生成前端详设（⑨）"'}>${g.ftest_count>0?'重新生成测试用例':'生成测试用例（全部应用）'}</button>
+            ${g.ftest_count>0||g.has_ftest_group?`<a class="btnlink" href="/api/groupbuild/groups/${en}/ftest?zip=1" download="${en}_前端测试用例.zip">打包下载全部</a>`:''}
+            ${g.has_ftest_group?`<a class="btnlink" href="/api/groupbuild/groups/${en}/ftest/_group" download="前端测试用例.md">组级补充</a>`:''}
+            <span class="muted" id="gft-${en}"></span>
+          </div>
+          ${g.ftest_count>0?`<div class="muted" style="font-size:12px">⚠️ 重新生成会<b>覆盖</b>已有 <code>前端测试用例.md</code>（手工精修/回填过的用例请勿重跑）。</div>`:''}
+          <div class="muted" style="font-size:12px">第⑧步：逐应用前端详设 + 契约 → 逐应用 <code>前端测试用例.md</code> + 组级补充一份（壳/菜单序/受限用户/dashboard）；只生成用例、不运行（执行在 ⑫）。</div>
+          <div id="ftest-${en}" class="muted">${g.fdesign_count>0?'加载中…':'（需先生成前端详设 ⑨）'}</div>
+        </div>
+
+        <div style="margin-top:10px"><b>⑫ 前端测试执行（规格九步法第⑨步）</b>
+          <span class="badge ${g.fverify_count>0||g.has_fverify_group?'on':'off'}">脚本 ${g.fverify_count||0} 个${g.has_fverify_group?' + 组级':''}</span>
+          ${g.has_fverify_report?'<span class="badge on">有报告</span>':''}
+          <div style="margin:6px 0">
+            <button onclick="genFverify('${en}', ${g.fverify_count||0})" ${g.ftest_count>0&&g.has_ftest_group?'':'disabled title="请先生成前端测试用例（⑪，含组级补充）"'}>${g.fverify_count>0?'重新执行前端测试':'执行前端测试'}</button>
+            ${g.fverify_count>0||g.has_fverify_group?`<a class="btnlink" href="/api/groupbuild/groups/${en}/fverify?zip=1" download="verify_view_${en}.zip">脚本包</a>`:''}
+            ${g.has_fverify_report?`<a class="btnlink" href="/api/groupbuild/groups/${en}/fverify?report=1" download="前端测试报告.md">报告</a>`:''}
+            ${g.fverify_count>0||g.has_fverify_group?`<button onclick="delFverify('${en}')">删除</button>`:''}
+            <span class="muted" id="gfv-${en}"></span>
+          </div>
+          <div class="muted" style="font-size:12px">第⑨步：用例逐应用翻译成 <code>app/${en}/tests/verify_view_${en}_&lt;应用&gt;.py</code> + 组级 <code>verify_view_${en}.py</code>（产物统一落 <code>app/${en}/tests/</code>，含测试报告）并<b>串行真跑</b>（playwright + 无头 Chromium；每脚本 dbguard 隔离、退出还原，<b>用户数据零污染</b>）；失败自动修脚本重跑 ≤2 轮，前端/后端 bug 只记录进报告。⚠️ 重新执行会<b>覆盖</b>已有脚本（手工调优过的脚本请先回填用例再重跑）；运行期间（数十分钟级）请避免在平台对该组做业务操作（dbguard 移库窗口）。</div>
+          <div id="fverify-${en}" class="muted">${g.ftest_count>0&&g.has_ftest_group?'加载中…':'（需先生成前端测试用例 ⑪）'}</div>
+        </div>
+
+        <div style="margin-top:10px"><b>任务（架构 / 详设 / 编码 / 用例 / 测试 / 契约 / 前端详设 / 前端编码 / 前端测试 / 前端测试执行）</b></div>
+        <div id="tasks-${en}" class="muted">—</div>
+      </div>`;}).join('');
+    // 逐个组加载文件树与任务
+    j.data.forEach(g=>{ loadFiles(g.name_en); loadDesign(g.name_en); loadCode(g.name_en); loadFdesign(g.name_en); loadFcode(g.name_en); loadFtest(g.name_en); loadFverify(g.name_en); loadTasks(g.name_en); loadProposals(g.name_en); });
+  }catch(e){}
+}
+
+async function loadFiles(en){
+  try{
+    const r = await fetch('/api/groupbuild/groups/'+en+'/files'); const j = await r.json();
+    const el = document.getElementById('files-'+en); if(!el) return;
+    if(j.status!=='ok'){ el.textContent = '加载失败'; return; }
+    if(!j.data.tree.length){ el.innerHTML = '<span class="muted">（暂无文件，可上传 BRD）</span>'; return; }
+    el.innerHTML = renderTree(j.data.tree, en, 0);
+  }catch(e){}
+}
+
+async function loadTasks(en){
+  try{
+    const r = await fetch('/api/groupbuild/tasks?group='+encodeURIComponent(en)); const j = await r.json();
+    const el = document.getElementById('tasks-'+en); if(!el) return;
+    if(j.status!=='ok'){ el.textContent = '加载失败'; return; }
+    if(!j.data.length){ el.innerHTML = '<span class="muted">（尚无任务）</span>'; return; }
+    el.innerHTML = j.data.slice(0,5).map(t=>`
+      <div class="task">
+        <div>#${t.id} <span class="badge ${t.kind==='arch'?'off':'on'}">${KIND_LABEL[t.kind]||t.kind}</span>
+          <span class="st-${esc(t.status)}">${STATUS_LABEL[t.status]||t.status}</span>
+          <span class="muted">步骤 ${esc(t.current_step||'—')} · ${esc(t.created_at||'')}</span>
+          ${(t.status==='queued'||t.status==='running')?`<button class="mini" onclick="cancelTask('${en}',${t.id})" title="请求终止该任务（在最近的检查点生效）">终止</button>`:''}</div>
+        ${t.error?`<div class="st-failed">${esc(t.error)}</div>`:''}
+        <details><summary class="muted">日志</summary><div class="dlog">${esc(t.log||'')}</div></details>
+        <div class="muted" style="font-size:12px">产物：<code>${esc(t.artifact)}</code></div>
+      </div>`).join('');
+  }catch(e){}
+}
+
+async function cancelTask(en, id){
+  if(!confirm('终止任务 #'+id+' ？已完成步骤的产物保留，任务标记为「已终止」（重启不会再续跑）。')) return;
+  try{
+    const r = await fetch('/api/groupbuild/tasks/'+id+'/cancel', {method:'POST'});
+    const j = await r.json();
+    if(j.status!=='ok'){ alert(j.message || '终止失败'); }
+    loadTasks(en);
+  }catch(e){ alert('请求失败：'+e); }
+}
+
+const PROPOSAL_STATUS = {pending:'待批准', approved:'已批准', rejected:'已驳回',
+                         applied:'已应用', failed:'应用失败', resolved:'已修复勾销',
+                         manual:'待人工处理'};
+
+async function loadProposals(en){
+  const el = document.getElementById('bugfix-'+en); if(!el) return;
+  try{
+    const r = await fetch('/api/groupbuild/groups/'+en+'/bugfix/proposals'); const j = await r.json();
+    if(j.status!=='ok') return;
+    if(!j.data.length){ el.innerHTML = '<div class="muted" style="font-size:12px">（暂无修复提案）</div>'; return; }
+    el.innerHTML = j.data.slice(0,12).map(p => `
+      <div style="border-top:1px solid var(--line); padding:6px 0; font-size:12px">
+        <div>#${p.id} <b>${esc(p.entry_ref)}</b>
+          <span class="badge ${p.category==='app_bug'?'on':'off'}">${esc(p.category)}</span>
+          <span class="st-${esc(p.status)}">${PROPOSAL_STATUS[p.status]||esc(p.status)}</span>
+          ${p.target_file?`<code>${esc(p.target_file)}</code>`:''}</div>
+        <div>${esc(p.rationale)}</div>
+        ${p.old_text?`<details><summary class="muted">查看 diff</summary><div class="dlog">${esc(p.old_text)}\n↓ 改为 ↓\n${esc(p.new_text)}</div></details>`:''}
+        ${p.status==='pending'?`<button class="mini" onclick="decideProposal('${en}',${p.id},'approve')">${p.category==='design_issue'?'确认（待人工）':'批准'}</button><button class="mini" onclick="decideProposal('${en}',${p.id},'reject')">驳回</button>`:''}
+      </div>`).join('');
+  }catch(e){}
+}
+
+async function genBugfix(en){
+  const msg = document.getElementById('gbm-'+en);
+  if(!confirm('将对测试报告中每个未通过用例逐条 triage 并生成修复提案（只提案，批准后才落码）。继续？')) return;
+  msg.textContent = '提交中…';
+  try{
+    const r = await fetch('/api/groupbuild/groups/'+en+'/bugfix',
+      {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    const j = await r.json();
+    if(j.status==='ok'){
+      msg.textContent = '已创建提案任务 #'+j.id+'（'+j.count+' 条失败例），后台运行中，完成后点「刷新」看下方提案列表';
+      loadTasks(en);
+    } else msg.textContent = j.message || '创建失败';
+  }catch(e){ msg.textContent = '请求失败：'+e; }
+}
+
+async function decideProposal(en, id, action){
+  try{
+    const r = await fetch('/api/groupbuild/proposals/'+id+'/decision',
+      {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({action: action})});
+    const j = await r.json();
+    if(j.status!=='ok'){ alert(j.message || '操作失败'); return; }
+    loadProposals(en); loadGroups();
+  }catch(e){ alert('请求失败：'+e); }
+}
+
+async function applyBugfix(en){
+  if(!confirm('将应用已批准的提案（修改对应应用代码 / 测试用例，改前自动备份原文件至 .bugfix_backup/），并自动重跑测试对账消项。继续？')) return;
+  try{
+    const r = await fetch('/api/groupbuild/groups/'+en+'/bugfix/apply',
+      {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    const j = await r.json();
+    if(j.status==='ok'){
+      alert('已派发应用任务 #'+j.id+'（'+j.count+' 条已批准提案）；应用后将自动派生重测任务，均在后台串行运行。');
+      loadTasks(en); loadGroups();
+    } else alert(j.message || '应用失败');
+  }catch(e){ alert('请求失败：'+e); }
+}
+
+async function uploadFiles(en){
+  const input = document.getElementById('fu-'+en);
+  const msg = document.getElementById('fum-'+en);
+  if(!input.files.length){ msg.textContent = '请先选择文件'; return; }
+  const fd = new FormData();
+  for(const f of input.files) fd.append('files', f);
+  msg.textContent = '上传中…';
+  try{
+    const r = await fetch('/api/groupbuild/groups/'+en+'/files', {method:'POST', body: fd});
+    const j = await r.json();
+    if(j.status==='ok'){
+      msg.textContent = `已上传 ${j.data.saved.length} 个` +
+        (j.data.skipped.length?`，跳过 ${j.data.skipped.length} 个（非法名）`:'');
+      input.value = ''; loadFiles(en); loadGroups();   // 上传后刷新
+    } else { msg.textContent = j.message || '上传失败'; }
+  }catch(e){ msg.textContent = '上传出错'; }
+}
+
+async function delFile(en, relpath){
+  if(!confirm('删除 brd/'+relpath+' ？')) return;
+  const r = await fetch('/api/groupbuild/groups/'+en+'/files/'+encodeURIComponent(relpath), {method:'DELETE'});
+  const j = await r.json();
+  if(j.status!=='ok'){ alert(j.message || '删除失败'); return; }
+  loadFiles(en); loadGroups();
+}
+
+async function delArch(en){
+  if(!confirm('删除 app/'+en+'/architecture.md ？删除后可重新生成。')) return;
+  const r = await fetch('/api/groupbuild/groups/'+en+'/architecture', {method:'DELETE'});
+  const j = await r.json();
+  if(j.status!=='ok'){ alert(j.message || '删除失败'); return; }
+  loadGroups();   // 刷新徽章与下载/删除按钮
+}
+
+async function genArch(en){
+  const msg = document.getElementById('gam-'+en);
+  const body = {business_text: document.getElementById('bt-'+en).value};
+  msg.textContent = '提交中…';
+  try{
+    const r = await fetch('/api/groupbuild/groups/'+en+'/architecture',
+      {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json();
+    if(j.status==='ok'){ msg.textContent = '已创建任务 #'+j.id+'，后台运行中，稍后点「刷新」查看结果'; loadTasks(en); }
+    else { msg.textContent = j.message || '创建失败'; }
+  }catch(e){ msg.textContent = '提交出错'; }
+}
+
+async function loadDesign(en){
+  const el = document.getElementById('design-'+en); if(!el) return;
+  try{
+    const r = await fetch('/api/groupbuild/groups/'+en+'/design'); const j = await r.json();
+    if(j.status!=='ok'){ el.textContent = '加载失败'; return; }
+    if(!j.data.items.length){
+      el.innerHTML = j.data.aggregate_count>0
+        ? '<span class="muted">（尚未生成，可点上方按钮）</span>'
+        : '<span class="muted">（架构无聚合根或尚未生成架构）</span>';
+      return;
+    }
+    el.innerHTML = j.data.items.map(it=>`
+      <div class="fileline">
+        <span class="mono">📄 ${esc(it.app)} <span class="muted">应用详设.md · ${fmtSize(it.size)}</span></span>
+        <span>
+          <a class="btnlink" href="/api/groupbuild/groups/${escA(en)}/design/${encodeURIComponent(it.app)}" download="应用详设.md">下载</a>
+          <span class="del" onclick="delDesign('${escA(en)}','${escA(it.app)}')">删除</span>
+        </span>
+      </div>`).join('');
+  }catch(e){ el.textContent = '加载出错'; }
+}
+
+async function genDesign(en){
+  const msg = document.getElementById('gdm-'+en);
+  msg.textContent = '提交中…';
+  try{
+    const r = await fetch('/api/groupbuild/groups/'+en+'/design',
+      {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({app_names: []})});
+    const j = await r.json();
+    if(j.status==='ok'){ msg.textContent = '已创建详设任务 #'+j.id+'（'+j.count+' 个聚合根），后台运行中，稍后点「刷新」查看'; loadTasks(en); }
+    else { msg.textContent = j.message || '创建失败'; }
+  }catch(e){ msg.textContent = '提交出错'; }
+}
+
+async function delDesign(en, app){
+  if(!confirm('删除 app/'+en+'/'+app+'/应用详设.md ？删除后可重新生成。')) return;
+  const r = await fetch('/api/groupbuild/groups/'+en+'/design/'+encodeURIComponent(app), {method:'DELETE'});
+  const j = await r.json();
+  if(j.status!=='ok'){ alert(j.message || '删除失败'); return; }
+  loadDesign(en); loadGroups();
+}
+
+async function loadCode(en){
+  const el = document.getElementById('code-'+en); if(!el) return;
+  try{
+    const r = await fetch('/api/groupbuild/groups/'+en+'/code'); const j = await r.json();
+    if(j.status!=='ok'){ el.textContent = '加载失败'; return; }
+    if(!j.data.items.length){
+      el.innerHTML = j.data.design_count>0
+        ? '<span class="muted">（尚未编码，可点上方按钮）</span>'
+        : '<span class="muted">（尚无应用详设，需先生成）</span>';
+      return;
+    }
+    el.innerHTML = j.data.items.map(it=>`
+      <div class="fileline">
+        <span class="mono">📄 ${esc(it.app)} <span class="muted">${esc(it.app)}.py · ${fmtSize(it.size)}${it.has_readme?' + README.md':''}</span></span>
+        <span>
+          <a class="btnlink" href="/api/groupbuild/groups/${escA(en)}/code/${encodeURIComponent(it.app)}" download="${escA(it.app)}.py">代码</a>
+          ${it.has_readme?`<a class="btnlink" href="/api/groupbuild/groups/${escA(en)}/code/${encodeURIComponent(it.app)}?readme=1" download="README.md">README</a>`:''}
+          <span class="del" onclick="delCode('${escA(en)}','${escA(it.app)}')">删除</span>
+        </span>
+      </div>`).join('');
+  }catch(e){ el.textContent = '加载出错'; }
+}
+
+async function genCode(en, codeCount){
+  const msg = document.getElementById('gcm-'+en);
+  const ask = codeCount>0
+    ? '将为该组全部已详设聚合根重新生成代码（.py + README.md）。\n⚠️ 注意：会覆盖已有的 '+codeCount+' 个应用的 .py / README.md（手工改过的代码会丢失），确认继续？'
+    : '将为该组全部已详设聚合根生成代码（.py + README.md），确认开始？';
+  if(!confirm(ask)) return;
+  msg.textContent = '提交中…';
+  try{
+    const r = await fetch('/api/groupbuild/groups/'+en+'/code',
+      {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({app_names: []})});
+    const j = await r.json();
+    if(j.status==='ok'){ msg.textContent = '已创建编码任务 #'+j.id+'（'+j.count+' 个聚合根），后台运行中，稍后点「刷新」查看'; loadTasks(en); }
+    else { msg.textContent = j.message || '创建失败'; }
+  }catch(e){ msg.textContent = '提交出错'; }
+}
+
+async function delCode(en, app){
+  if(!confirm('删除 app/'+en+'/'+app+'/'+app+'.py 与 README.md ？（不删 .db / resource/）删除后可重新生成。')) return;
+  const r = await fetch('/api/groupbuild/groups/'+en+'/code/'+encodeURIComponent(app), {method:'DELETE'});
+  const j = await r.json();
+  if(j.status!=='ok'){ alert(j.message || '删除失败'); return; }
+  loadCode(en); loadGroups();
+}
+
+async function genTestcase(en){
+  const msg = document.getElementById('gtm-'+en);
+  if(!confirm('将为该组生成整份测试用例（app/'+en+'/测试用例.md，覆盖主链 + 分支 + 回执模拟，含测试数据）。\n重新生成会覆盖已有测试用例，确认继续？')) return;
+  msg.textContent = '提交中…';
+  try{
+    const r = await fetch('/api/groupbuild/groups/'+en+'/testcase',
+      {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({})});
+    const j = await r.json();
+    if(j.status==='ok'){ msg.textContent = '已创建测试用例任务 #'+j.id+'（'+j.count+' 个聚合根），后台运行中，稍后点「刷新」查看'; loadTasks(en); }
+    else { msg.textContent = j.message || '创建失败'; }
+  }catch(e){ msg.textContent = '提交出错'; }
+}
+
+async function delTestcase(en){
+  if(!confirm('删除 app/'+en+'/测试用例.md ？删除后可重新生成。')) return;
+  const r = await fetch('/api/groupbuild/groups/'+en+'/testcase', {method:'DELETE'});
+  const j = await r.json();
+  if(j.status!=='ok'){ alert(j.message || '删除失败'); return; }
+  loadGroups();
+}
+
+async function genTestexec(en){
+  const msg = document.getElementById('gem-'+en);
+  if(!confirm('将为该组生成测试脚本并真实树直跑（产物落 app/'+en+'/tests/，耗时数分钟，串行占用后台队列）。\n运行失败会自动 triage 并修复脚本重跑（≤3 轮）；应用 bug 只记录（报告/BUGS_'+en+'.md）不自动改码。\n重新执行会覆盖已有脚本与报告，确认继续？')) return;
+  msg.textContent = '提交中…';
+  try{
+    const r = await fetch('/api/groupbuild/groups/'+en+'/testexec',
+      {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({})});
+    const j = await r.json();
+    if(j.status==='ok'){ msg.textContent = '已创建测试执行任务 #'+j.id+'（'+j.count+' 个应用），后台运行中，稍后点「刷新」查看结果'; loadTasks(en); }
+    else { msg.textContent = j.message || '创建失败'; }
+  }catch(e){ msg.textContent = '提交出错'; }
+}
+
+async function delTestexec(en){
+  if(!confirm('删除 app/'+en+'/tests/verify_chain_'+en+'*.py 脚本与 app/'+en+'/tests/测试报告_'+en+'.md？（BUGS_'+en+'.md 台账保留，可随后重新执行）')) return;
+  const r = await fetch('/api/groupbuild/groups/'+en+'/testexec', {method:'DELETE'});
+  const j = await r.json();
+  if(j.status!=='ok'){ alert(j.message || '删除失败'); return; }
+  loadGroups();
+}
+
+async function genContracts(en){
+  const msg = document.getElementById('gkm-'+en);
+  if(!confirm('将为该组在隔离沙箱内运行契约 dump（造数链 + 签名内省 → app/'+en+'/_contracts.md，耗时 1–3 分钟，串行占用后台队列）。\n重新冻结会覆盖已有契约文件，确认继续？')) return;
+  msg.textContent = '提交中…';
+  try{
+    const r = await fetch('/api/groupbuild/groups/'+en+'/contracts',
+      {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({})});
+    const j = await r.json();
+    if(j.status==='ok'){ msg.textContent = '已创建契约冻结任务 #'+j.id+'（'+j.count+' 个应用），后台运行中，稍后点「刷新」查看结果'; loadTasks(en); }
+    else { msg.textContent = j.message || '创建失败'; }
+  }catch(e){ msg.textContent = '提交出错'; }
+}
+
+async function delContracts(en){
+  if(!confirm('删除 app/'+en+'/_contracts.md ？\n⚠️ ⑨ 前端详设依赖此文件（依赖屏障），删除后需重新冻结。')) return;
+  const r = await fetch('/api/groupbuild/groups/'+en+'/contracts', {method:'DELETE'});
+  const j = await r.json();
+  if(j.status!=='ok'){ alert(j.message || '删除失败'); return; }
+  loadGroups();
+}
+
+async function loadFdesign(en){
+  const el = document.getElementById('fdesign-'+en); if(!el) return;
+  try{
+    const r = await fetch('/api/groupbuild/groups/'+en+'/fdesign'); const j = await r.json();
+    if(j.status!=='ok'){ el.textContent = '加载失败'; return; }
+    if(!j.data.items.length){
+      el.innerHTML = j.data.has_contracts
+        ? '<span class="muted">（尚未生成，可点上方按钮）</span>'
+        : '<span class="muted">（需先冻结契约 ⑧）</span>';
+      return;
+    }
+    el.innerHTML = j.data.items.map(it=>`
+      <div class="fileline">
+        <span class="mono">📄 ${esc(it.app)} <span class="muted">前端详设.md · ${fmtSize(it.size)}</span></span>
+        <span>
+          <a class="btnlink" href="/api/groupbuild/groups/${escA(en)}/fdesign/${encodeURIComponent(it.app)}" download="前端详设.md">下载</a>
+          <span class="del" onclick="delFdesign('${escA(en)}','${escA(it.app)}')">删除</span>
+        </span>
+      </div>`).join('');
+  }catch(e){ el.textContent = '加载出错'; }
+}
+
+async function genFdesign(en, fdCount){
+  const msg = document.getElementById('gfm-'+en);
+  const ask = fdCount>0
+    ? '将为该组全部应用重新生成前端详设（+ 组级 dashboard）。\n⚠️ 注意：会覆盖已有的 '+fdCount+' 个应用的前端详设.md（手工精修过的文档会丢失），确认继续？'
+    : '将为该组全部应用生成前端详设（+ 组级 dashboard），耗时数分钟（逐应用并发 + 门禁重生成），确认开始？';
+  if(!confirm(ask)) return;
+  msg.textContent = '提交中…';
+  try{
+    const r = await fetch('/api/groupbuild/groups/'+en+'/fdesign',
+      {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({app_names: []})});
+    const j = await r.json();
+    if(j.status==='ok'){ msg.textContent = '已创建前端详设任务 #'+j.id+'（'+j.count+' 个应用），后台运行中，稍后点「刷新」查看'; loadTasks(en); }
+    else { msg.textContent = j.message || '创建失败'; }
+  }catch(e){ msg.textContent = '提交出错'; }
+}
+
+async function delFdesign(en, app){
+  const label = app==='dashboard' ? '前端详设/dashboard.md（组级看板）' : 'app/'+en+'/'+app+'/前端详设.md';
+  if(!confirm('删除 '+label+' ？删除后可重新生成。')) return;
+  const r = await fetch('/api/groupbuild/groups/'+en+'/fdesign/'+encodeURIComponent(app), {method:'DELETE'});
+  const j = await r.json();
+  if(j.status!=='ok'){ alert(j.message || '删除失败'); return; }
+  loadFdesign(en); loadGroups();
+}
+
+async function loadFcode(en){
+  const el = document.getElementById('fcode-'+en); if(!el) return;
+  try{
+    const r = await fetch('/api/groupbuild/groups/'+en+'/fcode'); const j = await r.json();
+    if(j.status!=='ok'){ el.textContent = '加载失败'; return; }
+    if(!j.data.items.length){
+      el.innerHTML = j.data.fdesign_count>0
+        ? '<span class="muted">（尚未生成，可点上方按钮）</span>'
+        : '<span class="muted">（需先生成前端详设 ⑨）</span>';
+      return;
+    }
+    el.innerHTML = j.data.items.map(it=>`
+      <div class="fileline">
+        <span class="mono">📄 ${esc(it.app)} <span class="muted">view.js + view.html · ${fmtSize(it.size)}</span></span>
+        <span>
+          <a class="btnlink" href="/api/groupbuild/groups/${escA(en)}/fcode/${encodeURIComponent(it.app)}" download="${escA(it.app)}_view.zip">下载</a>
+          <span class="del" onclick="delFcode('${escA(en)}','${escA(it.app)}')">删除</span>
+        </span>
+      </div>`).join('');
+  }catch(e){ el.textContent = '加载出错'; }
+}
+
+async function genFcode(en, fcCount){
+  const msg = document.getElementById('gfc-'+en);
+  const ask = fcCount>0
+    ? '将为该组全部应用重新生成前端代码（+ 组级 dashboard）。\n⚠️ 注意：会覆盖已有的 '+fcCount+' 个应用的 view.{js,html}（手工精修过的页面会丢失），确认继续？'
+    : '将为该组全部应用生成前端代码（+ 组级 dashboard），耗时数分钟（单元 js→html 两阶段并发 + 门禁），确认开始？';
+  if(!confirm(ask)) return;
+  msg.textContent = '提交中…';
+  try{
+    const r = await fetch('/api/groupbuild/groups/'+en+'/fcode',
+      {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({app_names: []})});
+    const j = await r.json();
+    if(j.status==='ok'){ msg.textContent = '已创建前端编码任务 #'+j.id+'（'+j.count+' 个应用），后台运行中，稍后点「刷新」查看'; loadTasks(en); }
+    else { msg.textContent = j.message || '创建失败'; }
+  }catch(e){ msg.textContent = '提交出错'; }
+}
+
+async function delFcode(en, app){
+  const label = app==='dashboard' ? 'view/'+en+'/dashboard.{js,html}（组级看板）' : 'app/'+en+'/'+app+'/view.{js,html}';
+  if(!confirm('删除 '+label+' ？删除后可重新生成。')) return;
+  const r = await fetch('/api/groupbuild/groups/'+en+'/fcode/'+encodeURIComponent(app), {method:'DELETE'});
+  const j = await r.json();
+  if(j.status!=='ok'){ alert(j.message || '删除失败'); return; }
+  loadFcode(en); loadGroups();
+}
+
+async function loadFtest(en){
+  const el = document.getElementById('ftest-'+en); if(!el) return;
+  try{
+    const r = await fetch('/api/groupbuild/groups/'+en+'/ftest'); const j = await r.json();
+    if(j.status!=='ok'){ el.textContent = '加载失败'; return; }
+    if(!j.data.items.length){
+      el.innerHTML = j.data.fdesign_count>0
+        ? '<span class="muted">（尚未生成，可点上方按钮）</span>'
+        : '<span class="muted">（需先生成前端详设 ⑨）</span>';
+      return;
+    }
+    el.innerHTML = j.data.items.map(it=>`
+      <div class="fileline">
+        <span class="mono">📄 ${esc(it.app)} <span class="muted">前端测试用例.md · ${fmtSize(it.size)}</span></span>
+        <span>
+          <a class="btnlink" href="/api/groupbuild/groups/${escA(en)}/ftest/${encodeURIComponent(it.app)}" download="前端测试用例.md">下载</a>
+          <span class="del" onclick="delFtest('${escA(en)}','${escA(it.app)}')">删除</span>
+        </span>
+      </div>`).join('');
+  }catch(e){ el.textContent = '加载出错'; }
+}
+
+async function genFtest(en, ftCount){
+  const msg = document.getElementById('gft-'+en);
+  const ask = ftCount>0
+    ? '将为该组全部应用重新生成前端测试用例（+ 组级补充）。\n⚠️ 注意：会覆盖已有的 '+ftCount+' 个应用的前端测试用例.md（手工精修/回填过的用例会丢失），确认继续？'
+    : '将为该组全部应用生成前端测试用例（+ 组级补充），耗时数分钟（逐应用并发 + 门禁重生成），确认开始？';
+  if(!confirm(ask)) return;
+  msg.textContent = '提交中…';
+  try{
+    const r = await fetch('/api/groupbuild/groups/'+en+'/ftest',
+      {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({app_names: []})});
+    const j = await r.json();
+    if(j.status==='ok'){ msg.textContent = '已创建前端测试任务 #'+j.id+'（'+j.count+' 个应用），后台运行中，稍后点「刷新」查看'; loadTasks(en); }
+    else { msg.textContent = j.message || '创建失败'; }
+  }catch(e){ msg.textContent = '提交出错'; }
+}
+
+async function delFtest(en, app){
+  const label = app==='_group' ? 'app/'+en+'/前端测试用例.md（组级补充）' : 'app/'+en+'/'+app+'/前端测试用例.md';
+  if(!confirm('删除 '+label+' ？删除后可重新生成。')) return;
+  const r = await fetch('/api/groupbuild/groups/'+en+'/ftest/'+encodeURIComponent(app), {method:'DELETE'});
+  const j = await r.json();
+  if(j.status!=='ok'){ alert(j.message || '删除失败'); return; }
+  loadFtest(en); loadGroups();
+}
+
+async function loadFverify(en){
+  const el = document.getElementById('fverify-'+en); if(!el) return;
+  try{
+    const r = await fetch('/api/groupbuild/groups/'+en+'/fverify'); const j = await r.json();
+    if(j.status!=='ok'){ el.textContent = '加载失败'; return; }
+    if(!j.data.items.length && !j.data.has_group){
+      el.innerHTML = (j.data.ftest_count>0)
+        ? '<span class="muted">（尚未执行，可点上方按钮）</span>'
+        : '<span class="muted">（需先生成前端测试用例 ⑪）</span>';
+      return;
+    }
+    const rows = j.data.items.map(it=>`
+      <div class="fileline">
+        <span class="mono">🐍 verify_view_${escA(en)}_${esc(it.app)}.py <span class="muted">${fmtSize(it.size)}</span></span>
+      </div>`).join('');
+    const groupRow = j.data.has_group ? `
+      <div class="fileline">
+        <span class="mono">🐍 verify_view_${escA(en)}.py <span class="muted">组级（壳/菜单/受限/dashboard）</span></span>
+      </div>` : '';
+    el.innerHTML = groupRow + rows;
+  }catch(e){ el.textContent = '加载出错'; }
+}
+
+async function genFverify(en, fvCount){
+  const msg = document.getElementById('gfv-'+en);
+  const ask = fvCount>0
+    ? '将为该组重新生成并串行运行全部前端验收脚本（逐应用 + 组级）。\n⚠️ 注意：会覆盖已有的 verify_view_'+en+'_*.py 脚本（手工调优过的脚本会丢失，应先回填用例）；运行期间（数十分钟级）请避免在平台对该组做业务操作（dbguard 移库窗口）。确认继续？'
+    : '将为该组生成并串行运行前端验收脚本（逐应用 + 组级，playwright 无头浏览器；dbguard 隔离零污染），耗时数十分钟级，确认开始？';
+  if(!confirm(ask)) return;
+  msg.textContent = '提交中…';
+  try{
+    const r = await fetch('/api/groupbuild/groups/'+en+'/fverify',
+      {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({app_names: []})});
+    const j = await r.json();
+    if(j.status==='ok'){ msg.textContent = '已创建前端测试执行任务 #'+j.id+'（'+j.count+' 个应用），后台串行运行中，稍后点「刷新」查看'; loadTasks(en); }
+    else { msg.textContent = j.message || '创建失败'; }
+  }catch(e){ msg.textContent = '提交出错'; }
+}
+
+async function delFverify(en){
+  if(!confirm('删除 app/'+en+'/tests/verify_view_'+en+'*.py 全部脚本与 app/'+en+'/tests/前端测试报告.md ？删除后可重新执行。')) return;
+  const r = await fetch('/api/groupbuild/groups/'+en+'/fverify', {method:'DELETE'});
+  const j = await r.json();
+  if(j.status!=='ok'){ alert(j.message || '删除失败'); return; }
+  loadFverify(en); loadGroups();
+}
+
+document.getElementById('g-create').addEventListener('click', async ()=>{
+  const msg = document.getElementById('g-msg'); msg.textContent = '创建中…';
+  const body = {name_cn: document.getElementById('g-cn').value.trim(),
+                name_en: document.getElementById('g-en').value.trim()};
+  try{
+    const r = await fetch('/api/groupbuild/groups',
+      {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json();
+    if(j.status==='ok'){
+      msg.textContent = '已创建 '+j.data.name_en;
+      document.getElementById('g-cn').value=''; document.getElementById('g-en').value='';
+      loadGroups();
+    } else { msg.textContent = j.message || '创建失败'; }
+  }catch(e){ msg.textContent = '创建出错'; }
+});
+
+loadGroups();   // 仅页面加载时取一次；之后只在上传/生成/删除等动作后刷新
+</script>
+{% endblock %}

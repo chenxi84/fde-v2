@@ -1,0 +1,57 @@
+<div>
+  <div class="card">
+    <div class="hd"><h3>通用服务台</h3>
+      <span class="hint">按 <span class="mono">/api/apps/&lt;名&gt;/services</span> 契约自动建表 —— 新增服务零前端改动</span></div>
+    <div class="bd">
+      <div class="chips">
+        <span class="fchip" :class="{on: group === ''}" @click="group = ''">全部组</span>
+        <template x-for="g in groups" :key="g">
+          <span class="fchip" :class="{on: group === g}" @click="group = g" x-text="g"></span>
+        </template>
+      </div>
+      <div class="chips mt8">
+        <template x-for="a in appsShown" :key="a.name">
+          <span class="fchip" :class="{on: app === a.name}" @click="pickApp(a.name)">
+            <span x-text="a.name"></span> <span class="muted" x-text="'· ' + a.service_count"></span>
+          </span>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <template x-if="!app">
+    <div class="card"><div class="bd empty">先选择一个应用，查看其全部对外服务。</div></div>
+  </template>
+
+  <template x-for="s in services" :key="s.name">
+    <div class="card rv">
+      <div class="hd">
+        <h3 class="mono" x-text="app + '.' + s.name"></h3>
+        <span class="hint" x-text="s.description || '（无说明）'"></span>
+        <button class="b-pri right" :disabled="busy === s.name" @click="run(s)">
+          <span class="spin" x-show="busy === s.name">◌</span> 调用
+        </button>
+      </div>
+      <div class="bd">
+        <template x-if="!s.parameters.length">
+          <div class="muted">该服务无入参。</div>
+        </template>
+        <div class="frow">
+          <template x-for="p in s.parameters" :key="p.name">
+            <div>
+              <label class="f"><span class="mono" x-text="p.name"></span>
+                <span class="req" x-show="p.required">*</span>
+                <span class="muted" x-text="'· ' + p.json_type"></span></label>
+              <input :type="p.json_type === 'integer' || p.json_type === 'number' ? 'number' : 'text'"
+                     x-model="formFor(s)[p.name]"
+                     :placeholder="p.required ? '必填' : ('默认 ' + JSON.stringify(p.default))">
+            </div>
+          </template>
+        </div>
+        <template x-if="results[s.name] !== undefined">
+          <pre class="json mt12" x-text="pretty(results[s.name])"></pre>
+        </template>
+      </div>
+    </div>
+  </template>
+</div>

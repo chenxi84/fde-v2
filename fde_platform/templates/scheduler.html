@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}定时任务 · FDE 平台{% endblock %}
+{% block content %}
+  <p><a href="/">← 应用清单</a></p>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for cat, msg in messages %}<div class="flash {{ cat }}">{{ msg }}</div>{% endfor %}
+  {% endwith %}
+
+  {% if not has_apscheduler %}
+    <div class="flash error">未安装 APScheduler：自动（后台）调度不可用，仅支持「立即运行」。安装：pip install apscheduler</div>
+  {% endif %}
+
+  <!-- 新建任务 -->
+  <div class="card">
+    <h3>新建定时任务</h3>
+    <form method="post" action="/scheduler/jobs">
+      <div class="row">
+        <div><label>应用</label>
+          <select name="app_name" id="app-select" required>
+            {% for app in apps_services %}<option value="{{ app }}">{{ app }}</option>{% endfor %}
+          </select>
+        </div>
+        <div><label>服务（公共方法）</label>
+          <select name="service" id="service-select" required></select>
+        </div>
+      </div>
+      <div class="muted" id="svc-hint" style="min-height:18px"></div>
+      <div class="row">
+        <div><label>cron 表达式（分 时 日 月 周）</label>
+          <input type="text" name="cron_expr" list="cron-presets" placeholder="0 8 * * *" required>
+          <datalist id="cron-presets">
+            {% for label, expr in cron_presets %}<option value="{{ expr }}">{{ label }}</option>{% endfor %}
+          </datalist>
+        </div>
+        <div><label>运行身份（可选）</label>
+          <select name="run_as_user">
+            <option value="">平台默认身份</option>
+            {% for u in user_options %}<option value="{{ u }}">{{ u }}</option>{% endfor %}
+          </select>
+        </div>
+      </div>
+      <label>参数（JSON 对象，如 {"department_no": ""}）</label>
+      <input type="text" name="params" value="{}">
+      <label>说明（可选）</label>
+      <input type="text" name="description">
+      <button>创建任务</button>
+    </form>
+  </div>
+
+  <!-- 任务列表 -->
+  <div class="section-title">现有任务（{{ jobs|length }}）</div>
+  {% for j in jobs %}
+    <div class="card">
+      <h3>#{{ j.id }} <span class="mono">{{ j.app_name }}.{{ j.service }}</span>
+        {% if j.enabled %}<span class="ok">启用</span>{% else %}<span class="muted">停用</span>{% endif %}
+      </h3>
+      <div class="muted">
+        cron <code>{{ j.cron_expr }}</code> · 身份 {{ j.run_as_user or '默认' }}
+        {% if j.description %} · {{ j.description }}{% endif %} · 参数 <code>{{ j.params }}</code>
+      </div>
+      <div class="muted">上次运行：
+        {% if j.last_run %}
+          <span class="{{ 'ok' if j.last_run.status == 'ok' else 'err' }}">{{ j.last_run.status }}</span>
+          @ {{ j.last_run.started_at }}（{{ j.last_run.duration_ms }} ms）
+          {% if j.last_run.error_message %} · <span class="err">{{ j.last_run.error_message }}</span>{% endif %}
+        {% else %}从未运行{% endif %}
+      </div>
+
+      <div class="inline" style="margin-top:8px">
+        <form method="post" action="/scheduler/jobs/{{ j.id }}/run" class="inline"><button>立即运行</button></form>
+        <form method="post" action="/scheduler/jobs/{{ j.id }}/toggle" class="inline">
+          <button class="ghost" type="submit">{% if j.enabled %}停用{% else %}启用{% endif %}</button>
+        </form>
+        <form method="post" action="/scheduler/jobs/{{ j.id }}/delete" class="inline"
+              onsubmit="return confirm('确认删除任务 #{{ j.id }}？')">
+          <button class="btn-danger" type="submit">删除</button>
+        </form>
+      </div>
+
+      <details style="margin-top:8px">
+        <summary class="muted">编辑 / 最近运行</summary>
+        <form method="post" action="/scheduler/jobs/{{ j.id }}/edit" style="margin-top:8px">
+          <div class="row">
+            <div><label>cron</label><input type="text" name="cron_expr" value="{{ j.cron_expr }}" list="cron-presets"></div>
+            <div><label>运行身份</label>
+              <select name="run_as_user">
+                <option value="">平台默认身份</option>
+                {% for u in user_options %}<option value="{{ u }}" {% if u == j.run_as_user %}selected{% endif %}>{{ u }}</option>{% endfor %}
+              </select>
+            </div>
+            <div><label>状态</label>
+              <select name="enabled">
+                <option value="1" {% if j.enabled %}selected{% endif %}>启用</option>
+                <option value="0" {% if not j.enabled %}selected{% endif %}>停用</option>
+              </select>
+            </div>
+          </div>
+          <label>参数（JSON 对象）</label>
+          <input type="text" name="params" value='{{ j.params_json }}'>
+          <label>说明</label>
+          <input type="text" name="description" value="{{ j.description or '' }}">
+          <button>保存修改</button>
+        </form>
+        <table class="tbl" style="margin-top:8px">
+          <tr><th>#</th><th>状态</th><th>开始</th><th>耗时</th><th>错误</th></tr>
+          {% for r in j.recent_runs %}
+            <tr><td>{{ r.id }}</td>
+                <td class="{{ 'ok' if r.status == 'ok' else 'err' }}">{{ r.status }}</td>
+                <td>{{ r.started_at }}</td><td>{{ r.duration_ms }} ms</td>
+                <td class="err">{{ r.error_message or '' }}</td></tr>
+          {% else %}
+            <tr><td colspan="5" class="muted">（无运行记录）</td></tr>
+          {% endfor %}
+        </table>
+      </details>
+    </div>
+  {% else %}
+    <div class="card muted">尚无定时任务。</div>
+  {% endfor %}
+
+<script>
+const APPS_SERVICES = {{ apps_services|tojson }};
+const appSel = document.getElementById("app-select");
+const svcSel = document.getElementById("service-select");
+const svcHint = document.getElementById("svc-hint");
+function updateHint() {
+  const svcs = APPS_SERVICES[appSel.value] || [];
+  const s = svcs.find(x => x.name === svcSel.value);
+  svcHint.textContent = s
+    ? "参数：" + (s.params.join(", ") || "无") + (s.description ? " · " + s.description : "")
+    : "";
+}
+function refreshServices() {
+  const svcs = APPS_SERVICES[appSel.value] || [];
+  svcSel.innerHTML = "";
+  svcs.forEach(s => {
+    const o = document.createElement("option");
+    o.value = s.name; o.textContent = s.name;
+    svcSel.appendChild(o);
+  });
+  updateHint();
+}
+if (appSel) {
+  appSel.addEventListener("change", refreshServices);
+  svcSel.addEventListener("change", updateHint);
+  refreshServices();
+}
+</script>
+{% endblock %}

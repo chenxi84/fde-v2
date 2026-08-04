@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}{{ app_name }} · FDE 平台{% endblock %}
+{% block content %}
+  <p>{% if group %}<a href="/group/{{ group }}">← 应用组「{{ group }}」</a> · {% endif %}<a href="/">应用组首页</a></p>
+  <div class="card reveal">
+    <h3>{{ app_name }} <span class="muted">聚合根 class {{ class_name }}</span></h3>
+    <div class="muted">公共服务即对外服务（<code>_</code> 前缀方法不暴露）。调用由平台注入身份与连接、托管事务。</div>
+  </div>
+
+  {% if readme and readme.strip() %}
+  <div class="section-title">应用说明（README）</div>
+  <div class="card reveal">
+    {% if readme_html %}
+      <div class="readme">{{ readme_html|safe }}</div>
+    {% else %}
+      <pre class="readme-pre">{{ readme }}</pre>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <!-- ── 服务清单 + 手工调用 ── -->
+  <div class="section-title">服务（{{ services|length }}）· 手工调用</div>
+  {% for svc in services %}
+    <div class="svc reveal">
+      <div class="name">{{ app_name }}.{{ svc.name }}</div>
+      <div class="muted">{{ svc.description or '（无说明）' }}</div>
+      <form class="svc-form" data-service="{{ svc.name }}">
+        {% for p in svc.parameters %}
+          <label>{{ p.name }}
+            {%- if p.required %} <span class="err">*</span>{% endif %}
+            {%- if p.description %} · {{ p.description }}{% endif %}
+            <span class="muted">（{{ p.type }}{% if not p.required %}，默认 {{ p.default }}{% endif %}）</span>
+          </label>
+          <input type="text" name="{{ p.name }}"
+                 placeholder="{{ p.json_type }}{% if not p.required %} · 可留空{% endif %}">
+        {% endfor %}
+        <button type="submit">调用</button>
+      </form>
+      <pre id="res-{{ svc.name }}" style="display:none;margin-top:10px"></pre>
+    </div>
+  {% else %}
+    <div class="card muted">该应用没有对外服务。</div>
+  {% endfor %}
+
+  <!-- ── Agent 入口（含会话历史）── -->
+  <div class="section-title">Agent · 对话式操作本应用</div>
+  {% with chat_base="/api/apps/" + app_name + "/agent", chat_scope=app_name,
+          chat_greeting="你好，我是「" + app_name + "」应用的操作助手。告诉我要做什么，我来调用服务。",
+          chat_placeholder="例如：新建一个用户张三，男，30 岁，再给 ta 随机维护一个部门" %}
+    {% include "chat_widget.html" %}
+  {% endwith %}
+  <div class="muted" style="margin-top:6px">Agent 通过本应用的 MCP 工具（LLM function calling）完成多步操作。</div>
+
+  <!-- ── 数据文件（导入/导出）── -->
+  <div class="section-title">数据文件 · 导入与导出</div>
+  <div class="card reveal">
+    <div class="muted">上传数据文件到 <code>import-file</code>，再让 Agent 读取解析并导入；Agent / 服务的产出落在 <code>export-file</code>。</div>
+
+    <h4 style="margin:12px 0 4px">导入文件（import-file · 人工上传）</h4>
+    <form id="upload-form" class="inline" style="margin-bottom:8px">
+      <input type="file" name="files" id="upload-input" multiple style="width:auto">
+      <button type="submit">上传</button>
+    </form>
+    <table class="tbl">
+      <tr><th>文件名</th><th>大小(字节)</th><th>操作</th></tr>
+      {% for f in import_files %}
+      <tr>
+        <td class="mono">{{ f.name }}</td>
+        <td>{{ f.size }}</td>
+        <td>
+          <a href="/api/apps/{{ app_name }}/files/import-file/{{ f.name }}">下载</a>
+          <a href="#" onclick="delFile('import-file','{{ f.name }}');return false;" class="err">删除</a>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="3" class="muted">（空）</td></tr>
+      {% endfor %}
+    </table>
+
+    <h4 style="margin:12px 0 4px">导出文件（export-file · Agent / 服务产出）</h4>
+    <table class="tbl">
+      <tr><th>文件名</th><th>大小(字节)</th><th>操作</th></tr>
+      {% for f in export_files %}
+      <tr>
+        <td class="mono">{{ f.name }}</td>
+        <td>{{ f.size }}</td>
+        <td>
+          <a href="/api/apps/{{ app_name }}/files/export-file/{{ f.name }}">下载</a>
+          <a href="#" onclick="delFile('export-file','{{ f.name }}');return false;" class="err">删除</a>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="3" class="muted">（空）</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <!-- ── MCP 服务 ── -->
+  <div class="section-title">MCP 服务 · 本应用已封装的工具</div>
+  <div class="card reveal">
+    <div class="muted">启动 MCP 服务（stdio，供 MCP 客户端接入）：</div>
+    <pre>{{ mcp_command }}</pre>
+    <div class="chips">
+      {% for t in tools %}<span class="chip">{{ t.name }}</span>{% endfor %}
+    </div>
+    <div class="muted" style="margin-top:8px">
+      全部工具定义：<a href="/api/mcp/tools" target="_blank">/api/mcp/tools</a>
+    </div>
+  </div>
+
+<script>
+const APP = {{ app_name|tojson }};
+
+/* ── 手工调用服务 ── */
+document.querySelectorAll("form.svc-form").forEach(form => {
+  form.addEventListener("submit", async e => {
+    e.preventDefault();
+    const svc = form.dataset.service;
+    const out = document.getElementById("res-" + svc);
+    const params = {};
+    new FormData(form).forEach((v, k) => { params[k] = v; });
+    out.style.display = "block";
+    out.textContent = "调用中…";
+    try {
+      const res = await fetch(`/api/apps/${APP}/call/${svc}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(params),
+      });
+      const j = await res.json();
+      if (j.status === "ok") {
+        out.className = "ok";
+        out.textContent = "✓ " + JSON.stringify(j.data, null, 2);
+      } else {
+        out.className = "err";
+        out.textContent = "✗ [" + (j.kind || "error") + "] " + j.message;
+      }
+    } catch (err) {
+      out.className = "err";
+      out.textContent = "✗ 请求失败：" + err;
+    }
+  });
+});
+
+/* ── 数据文件：上传 / 删除 ── */
+document.getElementById("upload-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const input = document.getElementById("upload-input");
+  if (!input.files.length) return;
+  const fd = new FormData();
+  for (const f of input.files) fd.append("files", f);
+  const res = await fetch(`/api/apps/${APP}/files`, { method: "POST", body: fd });
+  const j = await res.json();
+  if (j.status === "ok") location.reload();
+  else alert("上传失败：" + j.message);
+});
+async function delFile(dir, name) {
+  if (!confirm(`确认删除 ${dir}/${name}？`)) return;
+  const res = await fetch(
+    `/api/apps/${APP}/files/${dir}/${encodeURIComponent(name)}`, { method: "DELETE" }
+  );
+  const j = await res.json();
+  if (j.status === "ok") location.reload();
+  else alert("删除失败：" + j.message);
+}
+</script>
+{% endblock %}

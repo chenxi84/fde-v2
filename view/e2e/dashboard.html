@@ -1,0 +1,27 @@
+<div>
+  <!-- KPI 指标带 -->
+  <div class="kpis">
+    <div class="kpi rv" style="--kc:#175e54"><div class="v" x-text="kpi.members"></div><div class="k">成员总数</div></div>
+    <div class="kpi rv" style="--kc:#0e7490; animation-delay:.05s"><div class="v" x-text="kpi.tasks"></div><div class="k">任务总数</div></div>
+    <div class="kpi rv" style="--kc:#b45309; animation-delay:.1s"><div class="v" x-text="kpi.doing"></div><div class="k">进行中任务</div></div>
+    <div class="kpi rv" style="--kc:#16a34a; animation-delay:.15s"><div class="v" x-text="kpi.done"></div><div class="k">已完成任务</div></div>
+  </div>
+
+  <!-- 任务状态分布 -->
+  <div class="overline">任务状态分布</div>
+  <div class="pipe">
+    <div class="pipe-col rv">
+      <h4><span class="idx">☑</span><span>任务 · 按状态</span>
+        <span class="right mono" x-text="kpi.tasks"></span></h4>
+      <template x-for="s in taskByOrder" :key="s">
+        <div class="sline"><span class="st" :class="'st-' + hue(s)" x-text="s"></span><b x-text="taskBy[s] || 0"></b></div>
+      </template>
+    </div>
+    <div class="pipe-col rv" style="animation-delay:.06s">
+      <h4><span class="idx">👥</span><span>成员主数据</span>
+        <span class="right mono" x-text="kpi.members"></span></h4>
+      <div class="sline"><span class="muted">创建后只读 · 供任务指派</span></div>
+      <div class="sline"><span class="muted">详见左侧菜单「成员管理」</span></div>
+    </div>
+  </div>
+</div>

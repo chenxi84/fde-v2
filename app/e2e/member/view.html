@@ -1,0 +1,150 @@
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>成员列表</b>
+    <span class="muted">主数据 · 创建后只读</span>
+    <div class="right tagline" style="gap:8px">
+      <div class="chips">
+        <template x-for="r in ['', 'admin', 'member']" :key="r || '全部'">
+          <span class="fchip" :class="{on: filter === r}"
+            @click="filter = r; list.load(1)"
+            x-text="r ? roleLabel(r) + '(' + r + ')' : '全部'"></span>
+        </template>
+      </div>
+      <input x-model="keyword" @keydown.enter="search()" placeholder="编号 / 姓名 / 邮箱" style="width:220px">
+      <button class="b-ghost b-sm" @click="search()">查询</button>
+      <button class="b-pri b-sm" @click="openCreate()">+ 新建成员</button>
+    </div>
+  </div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr><th>成员编号</th><th>姓名</th><th>邮箱</th><th>角色</th><th>创建时间</th></tr>
+      <template x-if="!list.items.length">
+        <tr><td colspan="5" class="empty"
+          x-text="(keyword || filter) ? '无符合条件的成员' : '暂无成员 —— 点「新建成员」创建'"></td></tr>
+      </template>
+      <template x-for="d in list.items" :key="d.member_no">
+        <tr class="data">
+          <td><button class="b-link mono" @click="viewMember(d)" x-text="d.member_no"></button></td>
+          <td x-text="dash(d.name)"></td>
+          <td x-text="dash(d.email)"></td>
+          <td><span class="st" :class="'st-' + hue(d.role)" x-text="roleLabel(d.role)"></span></td>
+          <td class="mono" x-text="fmtTime(d.created_at)"></td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:10px 16px">
+    <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+    <div class="right tagline" style="gap:8px">
+      <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+      <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+      <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- 详情模态：点成员编号 → member.get 全量字段 -->
+<div class="modal-mask" x-show="modalX.open" @click.self="closeModal()"
+     @keydown.escape.window="closeModal()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div>
+        <div class="docno" x-text="modalX.d ? '成员详情 · ' + modalX.d.member_no : '成员详情'"></div>
+        <div class="sub">成员主数据 · MEMBER PROFILE</div>
+      </div>
+      <template x-if="modalX.d">
+        <span class="st" :class="'st-' + hue(modalX.d.role)" x-text="roleLabel(modalX.d.role)"></span>
+      </template>
+      <button class="x" @click="closeModal()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <template x-if="modalX.loading">
+        <div class="loadbox"><span class="spin">◌</span><br>载入成员明细…</div>
+      </template>
+      <template x-if="!modalX.loading && modalX.d">
+        <div>
+          <div class="sec">基本信息</div>
+          <div class="kv">
+            <div><div class="k">成员编号</div><div class="v mono" x-text="dash(modalX.d.member_no)"></div></div>
+            <div><div class="k">姓名</div><div class="v" x-text="dash(modalX.d.name)"></div></div>
+          </div>
+          <div class="sec">联系方式</div>
+          <div class="kv">
+            <div style="grid-column: span 2"><div class="k">邮箱</div><div class="v mono" x-text="dash(modalX.d.email)"></div></div>
+          </div>
+          <div class="sec">角色权限</div>
+          <div class="kv">
+            <div><div class="k">角色</div><div class="v"><span class="st" :class="'st-' + hue(modalX.d.role)" x-text="roleLabel(modalX.d.role)"></span></div></div>
+            <div><div class="k">角色代码</div><div class="v mono" x-text="dash(modalX.d.role)"></div></div>
+          </div>
+          <div class="sec">审计信息</div>
+          <div class="kv">
+            <div><div class="k">创建时间</div><div class="v mono" x-text="fmtTime(modalX.d.created_at)"></div></div>
+          </div>
+          <details class="raw"><summary>原始数据</summary>
+            <pre class="json" x-text="JSON.stringify(modalX.d, null, 2)"></pre>
+          </details>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft" x-show="modalX.d">
+      <template x-if="modalX.d">
+        <div class="tagline" style="gap:8px">
+          <span class="muted">创建后只读 · 不开放修改 / 删除 / 停用</span>
+          <button class="b-ghost right" @click="closeModal()">关闭</button>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<!-- 创建模态：member.create 四参数全必填（无编辑态 —— BR-11） -->
+<div class="modal-mask" x-show="form.open" @click.self="closeCreate()"
+     @keydown.escape.window="closeCreate()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div>
+        <div class="docno">新建成员</div>
+        <div class="sub">成员主数据 · 创建后只读 · NEW MEMBER</div>
+      </div>
+      <button class="x" @click="closeCreate()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="frow">
+        <div>
+          <label class="f">成员编号 <span class="req">*</span></label>
+          <input x-model="form.member_no" placeholder="如 M001">
+          <div class="muted" style="font-size:11px;margin-top:4px">创建后不可变更 · 全局唯一</div>
+        </div>
+        <div>
+          <label class="f">姓名 <span class="req">*</span></label>
+          <input x-model="form.name" placeholder="成员姓名">
+        </div>
+      </div>
+      <div class="frow">
+        <div>
+          <label class="f">邮箱 <span class="req">*</span></label>
+          <input type="email" x-model="form.email" placeholder="name@example.com">
+          <div class="muted" style="font-size:11px;margin-top:4px">全局唯一 · 格式由后端校验</div>
+        </div>
+        <div>
+          <label class="f">角色 <span class="req">*</span></label>
+          <select x-model="form.role">
+            <option value="member">成员</option>
+            <option value="admin">管理员</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="modal-ft">
+      <div class="tagline" style="gap:8px">
+        <span class="muted">四项均为必填 · 编号 / 邮箱唯一性由后端校验</span>
+        <div class="right tagline" style="gap:8px">
+          <button class="b-ghost" @click="closeCreate()">取消</button>
+          <button class="b-pri" :disabled="form.busy" @click="save()"
+            x-text="form.busy ? '创建中…' : '创建'"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

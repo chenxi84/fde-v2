@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}应用组 · FDE 平台{% endblock %}
+{% block bodyclass %}home-bleed{% endblock %}
+{% block content %}
+  <div class="col">
+    <!-- ── KPI 指标带 ── -->
+    <div class="kpis reveal" style="margin-top:26px">
+      <div class="kpi"><div class="v">{{ groups|length }}</div><div class="k">应用组</div></div>
+      <div class="kpi"><div class="v">{{ total_apps }}</div><div class="k">应用</div></div>
+      {% if scan is defined and scan %}
+        <div class="kpi"><div class="v">{{ scan.total_calls }}</div><div class="k">跨应用调用</div></div>
+        <div class="kpi"><div class="v">{{ scan.apps_scanned }}</div><div class="k">已扫描应用</div></div>
+      {% endif %}
+    </div>
+
+    <!-- ── 兜底可达清单（搜索 + 分组芯片：视图 + 详情 双入口）── -->
+    <div class="section-title">全部应用 · 可达清单</div>
+    <div class="wiring-list reveal">
+      <input class="wiring-search" type="search" id="wsearch" placeholder="搜索应用（名称或键名）…">
+      {% for g in groups %}
+        <div class="wl-group" data-group="{{ g.key }}">
+          <b>{{ g.name }}</b> <span class="muted">{{ g.app_count }} 个应用</span>
+          <div class="wl-chips">
+            {% for a in g.apps %}
+              {% set short = a.split('/')|last %}
+              <span class="wl-chip" data-key="{{ short }}" data-name="{{ app_names.get(short, a) }}">
+                <a class="chip" href="/view/{{ g.key }}/#/{{ short }}">{{ app_names.get(short, a) }} <span class="muted">{{ a }}</span></a>
+                <a class="chip-det" href="/app/{{ a }}" title="应用详情 · README / 服务调试 / MCP">详情</a>
+              </span>
+            {% endfor %}
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+
+    <!-- ── 平台级 Agent（跨应用，含会话历史）── -->
+    <div class="section-title">平台 Agent · 跨应用对话式操作</div>
+    {% with chat_base="/api/agent", chat_scope="platform",
+            chat_greeting="你好，我是平台级操作助手，可跨应用调用服务。告诉我要做什么。",
+            chat_placeholder="例如：同步客户和产品主数据，然后给 C001 创建一张 10000kg 的销售订单" %}
+      {% include "chat_widget.html" %}
+    {% endwith %}
+    <div class="muted" style="margin-top:6px">
+      平台级 Agent 可编排<b>所有应用</b>的服务（按你的服务级授权过滤）；单应用精细操作请用各应用详情页的 Agent。
+    </div>
+
+    {% if scan is defined and scan and scan.sites %}
+    <details class="scan-detail">
+      <summary>静态调用扫描明细 · 跨应用 self.fde.call（§10.8 · {{ scan.total_calls }} 处）</summary>
+      <div class="card">
+        <table class="tbl">
+          <tr><th>调用方</th><th>位置</th><th>目标（应用.服务）</th><th>状态</th></tr>
+          {% for s in scan.sites %}
+          <tr>
+            <td>{{ s.app }}</td>
+            <td class="mono">{{ s.file }}:{{ s.line }}</td>
+            <td class="mono">{{ s.target_app }}.{{ s.target_service }}</td>
+            <td>
+              {% if s.status == 'ok' %}<span class="ok">✓ 正常</span>
+              {% elif s.status == 'dynamic' %}<span class="muted">△ 动态 · 需人工确认</span>
+              {% else %}<span class="err">✗ {{ s.message }}</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
+    </details>
+    {% endif %}
+  </div>
+{% endblock %}

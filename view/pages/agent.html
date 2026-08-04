@@ -1,0 +1,61 @@
+<div>
+  <div class="card">
+    <div class="hd">
+      <h3>平台级 Agent · 跨应用编排</h3>
+      <span class="hint">工具目录按你的服务级授权过滤 · 架构设计文档已注入编排依据</span>
+      <button class="b-pri right" @click="newSession()">＋ 新会话</button>
+    </div>
+    <div class="bd" style="display:flex; gap:14px; padding:12px 16px">
+      <!-- 会话列表 -->
+      <div style="width:210px; flex:none; border-right:1px solid var(--line); padding-right:12px">
+        <div class="overline" style="margin-top:0">历史会话</div>
+        <template x-if="!sessions.length">
+          <div class="muted" style="font-size:12px">暂无历史会话<br>直接发送即开启新会话</div>
+        </template>
+        <template x-for="s in sessions" :key="s.session_id">
+          <div class="nav-item" style="color:var(--fg); border-left-color:transparent; padding:6px 10px"
+               :class="{on: sid === s.session_id}" @click="pickSession(s)">
+            <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap"
+                  x-text="s.title || '新对话'"></span>
+            <button class="b-dng b-sm" style="padding:1px 7px" title="删除会话"
+                    @click="delSession(s, $event)">×</button>
+          </div>
+        </template>
+      </div>
+      <!-- 对话区 -->
+      <div style="flex:1; min-width:0">
+        <div class="chatbox" style="border:1px solid var(--line); border-radius:10px">
+          <template x-if="!msgs.length">
+            <div class="empty" style="padding:60px 0 !important">
+              你好，我是平台级操作助手。<span class="muted" x-show="!sid">未选择会话 —— 直接发送将自动创建新会话。</span><br>
+              例如：<span class="mono">同步客户和产品主数据，然后给 C001 创建一张 10000kg 的销售订单并走完审批</span>
+            </div>
+          </template>
+          <template x-for="(m, i) in msgs.filter(visible)" :key="i">
+            <div class="msg" :class="m.role === 'user' ? 'me' : 'ai'">
+              <div class="who" x-text="m.role === 'user' ? '你' : 'Agent'"></div>
+              <div class="b" x-text="m.content"></div>
+              <template x-if="m.tool_calls && m.tool_calls.length">
+                <div>
+                  <template x-for="(t, ti) in m.tool_calls" :key="ti">
+                    <span class="tcall" x-text="'⚙ ' + t"></span>
+                  </template>
+                </div>
+              </template>
+            </div>
+          </template>
+          <template x-if="sending">
+            <div class="msg ai"><div class="who">Agent</div>
+              <div class="b typing muted">思考 / 调用工具中</div></div>
+          </template>
+        </div>
+        <div class="tagline mt12">
+          <input x-model="input" @keydown.enter="send()"
+                 placeholder="告诉 Agent 要做什么（回车发送）…" style="flex:1">
+          <button class="b-pri" :disabled="sending || !input.trim()" @click="send()">发送</button>
+        </div>
+        <div class="muted mt8">多轮工具调用上限 25 轮；超限时回复「继续」可接着执行（历史已持久化）。</div>
+      </div>
+    </div>
+  </div>
+</div>

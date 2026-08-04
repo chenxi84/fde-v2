@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}{{ group_name }} · 应用组 · FDE 平台{% endblock %}
+{% block content %}
+  <p class="crumb-line"><a href="/">← 应用组</a></p>
+  <div class="section-title">应用组「{{ group_name }}」（{{ apps|length }} 个应用）</div>
+  {% for a in apps %}
+    <div class="card reveal" style="margin-bottom:14px">
+      <h3 style="font-size:16px"><a href="/app/{{ a.name }}">{{ a.name }}</a>
+        <span class="muted" style="font-weight:400">聚合根 class {{ a.class }}</span></h3>
+      <div class="muted">{{ a.service_count }} 个对外服务</div>
+      <div class="chips" style="margin-top:6px">
+        {% for s in a.services %}<span class="chip">{{ s }}</span>{% endfor %}
+      </div>
+    </div>
+  {% else %}
+    <div class="card muted">该组下没有你有权限访问的应用。</div>
+  {% endfor %}
+{% endblock %}

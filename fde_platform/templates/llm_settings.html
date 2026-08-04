@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}大模型配置 · FDE 平台{% endblock %}
+{% block content %}
+  <p><a href="/">← 应用清单</a></p>
+  <div class="section-title">Agent 大模型配置</div>
+  <p class="muted">两个 Agent <b>各自独立</b>配置大模型。API Key <b>加密保存、绝不回显</b>；保存即生效（无需重启）。
+     未在此配置时回退环境变量 <code>LLM_BASE_URL / LLM_API_KEY / LLM_MODEL</code>。</p>
+
+  {% for p in profiles %}
+  <div class="card">
+    <h3>{{ p.label }} <span class="mono">（{{ p.role }}）</span>
+      {% if p.source == 'db' %}<span class="ok">已配置</span>
+      {% elif p.source == 'env' %}<span class="muted">回退环境变量</span>
+      {% else %}<span class="err">未配置</span>{% endif %}
+    </h3>
+    <div class="muted">{{ p.desc }}</div>
+    <form class="llm-form" data-role="{{ p.role }}" style="margin-top:8px">
+      <div class="row">
+        <div><label>厂商 / 协议</label>
+          <select name="provider">
+            {% for key, label in providers %}
+              <option value="{{ key }}" {% if key == p.provider %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="baseurl-cell"><label>Base URL</label>
+          <input type="text" name="base_url" value="{{ p.base_url }}"
+                 placeholder="OpenAI 兼容/网关地址；Anthropic 直连留空、经网关填网关地址">
+        </div>
+        <div><label>模型名</label>
+          <input type="text" name="model" value="{{ p.model }}" placeholder="deepseek-chat / claude-...">
+        </div>
+      </div>
+      <div class="row">
+        <div><label>temperature</label>
+          <input type="number" step="0.1" min="0" max="2" name="temperature"
+                 value="{{ p.temperature if p.temperature is not none else '' }}"></div>
+        <div><label>max_tokens</label>
+          <input type="number" min="1" name="max_tokens" value="{{ p.max_tokens or '' }}"></div>
+        <div><label>超时（秒）</label>
+          <input type="number" min="1" name="timeout_s" value="{{ p.timeout_s or '' }}"></div>
+        <div><label>状态</label>
+          <select name="enabled">
+            <option value="1" {% if p.enabled %}selected{% endif %}>启用</option>
+            <option value="0" {% if not p.enabled %}selected{% endif %}>停用</option>
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div style="flex:2"><label>API Key（加密保存，留空 = 用已保存密钥）</label>
+          <input type="password" name="api_key" autocomplete="new-password" readonly
+                 onfocus="this.removeAttribute('readonly')"
+                 placeholder="{{ '已设置（留空 = 测试已保存密钥）' if p.has_key else 'sk-...（填新密钥）' }}">
+        </div>
+        <div><label>或引用环境变量（可选）</label>
+          <input type="text" name="env_key" placeholder="env:LLM_BUILDER_API_KEY">
+        </div>
+        <div><label>清空密钥</label>
+          <select name="clear_key"><option value="0">否</option><option value="1">是</option></select>
+        </div>
+      </div>
+      {% if p.updated_at %}<div class="muted">最近更新：{{ p.updated_at }}</div>{% endif %}
+      <div class="inline" style="margin-top:8px">
+        <button type="button" class="save-btn">保存</button>
+        <button type="button" class="ghost test-btn">测试连接</button>
+      </div>
+      <div class="status muted" style="min-height:18px;margin-top:6px"></div>
+    </form>
+  </div>
+  {% endfor %}
+
+<script>
+function collect(form) {
+  const get = n => form.querySelector('[name="' + n + '"]');
+  let apiKey = get('api_key').value.trim();
+  const envKey = get('env_key').value.trim();
+  if (!apiKey && envKey) apiKey = envKey.startsWith('env:') ? envKey : ('env:' + envKey);
+  const num = n => get(n).value === '' ? null : Number(get(n).value);
+  return {
+    role: form.dataset.role,
+    provider: get('provider').value,
+    base_url: get('base_url').value.trim(),
+    model: get('model').value.trim(),
+    temperature: num('temperature'), max_tokens: num('max_tokens'), timeout_s: num('timeout_s'),
+    enabled: get('enabled').value === '1',
+    api_key: apiKey, clear_key: get('clear_key').value === '1',
+  };
+}
+function toggleBaseUrl(form) {
+  /* base_url 对两类 provider 都可能用到：OpenAI 兼容必填；Anthropic 经网关填网关地址、直连留空 */
+  form.querySelector('.baseurl-cell').style.display = '';
+}
+document.querySelectorAll('.llm-form').forEach(form => {
+  const status = form.querySelector('.status');
+  toggleBaseUrl(form);
+  form.querySelector('[name="provider"]').addEventListener('change', () => toggleBaseUrl(form));
+  form.querySelector('.save-btn').addEventListener('click', async () => {
+    status.textContent = '保存中…';
+    const r = await fetch('/llm/save', {method:'POST', headers:{'Content-Type':'application/json'},
+                                        body: JSON.stringify(collect(form))});
+    const j = await r.json();
+    if (j.status === 'ok') { status.innerHTML = '<span class="ok">已保存（即生效）</span>'; setTimeout(() => location.reload(), 600); }
+    else { status.innerHTML = '<span class="err">' + (j.message || '保存失败') + '</span>'; }
+  });
+  form.querySelector('.test-btn').addEventListener('click', async () => {
+    status.textContent = '测试中…';
+    const r = await fetch('/llm/test', {method:'POST', headers:{'Content-Type':'application/json'},
+                                        body: JSON.stringify(collect(form))});
+    const j = await r.json();
+    status.innerHTML = j.ok
+      ? '<span class="ok">连接成功（' + j.latency_ms + ' ms）</span> 回复：' + (j.reply || '')
+      : '<span class="err">' + (j.error || '连接失败') + '</span>';
+  });
+});
+/* 防浏览器把登录密码误填进 API Key：readonly 已阻挡大部分自动填充，加载再强制清空兜底 */
+document.querySelectorAll('[name="api_key"]').forEach(function (i) { i.value = ''; });
+</script>
+{% endblock %}

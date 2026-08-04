@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+{# FDE 平台通用视图壳（全模块共用，平台所有，业务生成不碰）。
+   由 web.py view_module 在 /view/<组>/ 根渲染，组名经 module 参数注入。
+   启动：bootShell(组名) → 拉 /api/view_boot 页面清单 → 动态 import() 各页工厂 →
+   注册 Alpine 组件 → Alpine.start()。模块内无任何框架文件（无 index.html / app.js）。 #}
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ module|upper }} · FDE 平台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230e1b2a'/%3E%3Cpath d='M9 22V10h6.5a5 5 0 0 1 3.2 8.9L23 22h-3.4l-4-2.8H12V22Zm3-5.4h3.2a2.3 2.3 0 0 0 0-4.6H12Z' fill='%23f5b04c'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../lib/styles.css">
+  <!-- Alpine 以 ES Module 加载；bootShell 完成组件注册后显式启动（时序确定，勿改） -->
+  <script type="module">
+    import Alpine from "../lib/alpine.esm.js";
+    import { bootShell } from "../lib/shell.js";
+    window.Alpine = Alpine;          // 先置全局：页面工厂体内用到 Alpine.reactive
+    bootShell("{{ module }}");       // 拉清单 → 动态 import 各页 → 装配菜单 → start
+  </script>
+</head>
+<body x-data="shell">
+
+  <!-- ── 侧栏（菜单即应用 · 按页面授权过滤 · 平台页自动追加）── -->
+  <aside class="rail">
+    <div class="brand">
+      <div class="name" x-html="brand.name"></div>
+      <div class="sub" x-text="brand.sub"></div>
+    </div>
+    <template x-for="p in menu" :key="p.key">
+      <div class="nav-item" :class="{ on: route === p.key }" @click="go(p.key)">
+        <span class="ic" x-text="p.ic"></span><span x-text="p.name"></span>
+      </div>
+    </template>
+    <div class="foot">
+      <div><span class="livedot"></span><b x-text="brand.foot"></b></div>
+      <div>平台 127.0.0.1 · 同源托管</div>
+    </div>
+  </aside>
+
+  <!-- ── 主区（单一挂载点：按 route 查注册表实例化）── -->
+  <div class="stage">
+    <header class="top">
+      <h1 x-text="page.title"></h1>
+      <span class="crumb" x-text="page.crumb"></span>
+      <div class="uchip" x-show="me">
+        <span class="ava" x-text="me ? me.username.slice(0, 1).toUpperCase() : ''"></span>
+        <span><b x-text="me ? me.username : ''"></b>
+          <span class="muted" x-text="me ? '· ' + me.role_label : ''"></span></span>
+        <a href="/logout">退出</a>
+      </div>
+    </header>
+
+    <main>
+      <!-- x-for 单元素数组 + :key=route：route 变化即销毁旧页、重建新实例。
+           （x-if 不随 :key 重建——条件恒真时子树永不刷新，勿改回。） -->
+      <template x-for="r in [route]" :key="r">
+        <div class="page-in" x-data="mount()" x-html="tpl"></div>
+      </template>
+    </main>
+  </div>
+
+  <!-- ── Toast ── -->
+  <div class="toasts">
+    <template x-for="t in toasts" :key="t.id">
+      <div class="toast" :class="{ err: t.kind === 'err', warn: t.kind === 'warn' }" x-text="t.message"></div>
+    </template>
+  </div>
+</body>
+</html>

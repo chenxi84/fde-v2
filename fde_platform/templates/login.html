@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}登录 · FDE 平台{% endblock %}
+{% block content %}
+<div class="login-wrap">
+  <aside class="brand-wall">
+    <div class="bw-logo">FDE<em>·</em>PLATFORM</div>
+    <div class="bw-sub">FORWARD&nbsp;DEPLOYED&nbsp;ENGINEERING</div>
+    <p class="bw-desc">约定优于配置的应用平台：一个文件夹 = 一个聚合根应用，平台注入身份与连接、托管事务；服务级 + 页面级授权，MCP / Agent / 定时任务同源一体。</p>
+    {% if stats %}
+    <div class="bw-stats">
+      <div class="bw-stat"><div class="n">{{ stats.apps }}</div><div class="l">应用</div></div>
+      <div class="bw-stat"><div class="n">{{ stats.groups }}</div><div class="l">应用组</div></div>
+      <div class="bw-stat"><div class="n">{{ stats.services }}</div><div class="l">开放服务</div></div>
+    </div>
+    <div class="bw-live"><span class="dot-live"></span>127.0.0.1:{{ stats.port }} · 在线</div>
+    {% endif %}
+  </aside>
+  <div class="card login-card">
+    <h3>登录 FDE 平台</h3>
+    <div class="muted" style="margin-bottom:6px">会话 Cookie · 角色授权 · 页面级菜单</div>
+    {% if error %}<p class="err" style="margin:6px 0">{{ error }}</p>{% endif %}
+    <form method="post" action="/login">
+      <input type="hidden" name="next" value="{{ next }}">
+      <label>用户名</label>
+      <input type="text" name="username" autofocus required>
+      <label>密码</label>
+      <input type="password" name="password" required>
+      <button type="submit">登录</button>
+    </form>
+    <p class="muted" style="margin-top:14px">首次启动默认管理员 <code>admin/admin</code>，登录后请尽快修改密码。</p>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}FDE 平台{% endblock %}</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/static/fde.css?v=20260731">
+</head>
+<body class="pf {% block bodyclass %}{% endblock %}">
+  <header class="ptop">
+    <div class="inner">
+      <span class="logo">FDE<em>·</em>PLATFORM</span>
+      <span class="ver">v2</span>
+      <span class="tag">约定优于配置 · 一个文件夹 = 一个聚合根应用</span>
+      <nav>
+        <a href="/"
+           class="{{ 'on' if request.path == '/' or request.path.startswith('/group') or request.path.startswith('/app') else '' }}">应用组</a>
+        <a href="/scheduler"
+           class="{{ 'on' if request.path.startswith('/scheduler') else '' }}">定时任务</a>
+        <a href="/llm"
+           class="{{ 'on' if request.path.startswith('/llm') else '' }}">大模型</a>
+        <a href="/groupbuild"
+           class="{{ 'on' if request.path.startswith('/groupbuild') else '' }}">应用组构建</a>
+      </nav>
+    </div>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <script>
+    /* 滚动渐显：给 .reveal 元素进场补 .in；无 IntersectionObserver 的环境直接全显 */
+    (function () {
+      var els = document.querySelectorAll(".reveal");
+      if (!("IntersectionObserver" in window)) {
+        els.forEach(function (el) { el.classList.add("in"); });
+        return;
+      }
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
+        });
+      }, { threshold: 0.06 });
+      els.forEach(function (el) { io.observe(el); });
+    })();
+  </script>
+</body>
+</html>

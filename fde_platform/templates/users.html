@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+{% block title %}用户与角色管理 · FDE 平台{% endblock %}
+
+{# 服务授权勾选块（用户个人特授 / 角色授权共用）#}
+{% macro grant_checks(checked) %}
+  {% for app, svcs in apps_services.items() %}
+    <div class="muted" style="margin-top:6px"><b>{{ app }}</b></div>
+    <div class="checks">
+      {% for svc in svcs %}
+        <label><input type="checkbox" name="grants" value="{{ app }}.{{ svc }}"
+            {% if (app ~ '.' ~ svc) in checked %}checked{% endif %}> {{ svc }}</label>
+      {% endfor %}
+    </div>
+  {% endfor %}
+{% endmacro %}
+
+{% block content %}
+<style>
+  /* 管理列表：紧凑表格 + 可展开明细行 */
+  table.mgr { margin:0; }
+  table.mgr th, table.mgr td { white-space:nowrap; vertical-align:middle; }
+  table.mgr tr.row:hover { background:#f8fafc; }
+  table.mgr tr.row > td:last-child { text-align:right; }
+  tr.detail > td { white-space:normal; background:#fafbfc; padding:14px 18px 16px;
+                   border-bottom:2px solid var(--line); }
+  tr.detail .muted-h { font-size:11px; text-transform:uppercase; letter-spacing:.05em;
+                       color:var(--muted); margin:12px 0 4px; }
+  .badge { display:inline-block; border-radius:12px; padding:1px 10px; font-size:11px;
+           vertical-align:1px; }
+  .badge-admin { background:#fef3c7; color:#92400e; }
+  .btn-mini { margin:0; padding:3px 10px; font-size:12px; border-radius:5px; }
+  .btn-mini.ghost { background:#e5e7eb; color:#1f2430; }
+  .btn-mini.ghost:hover { background:#d1d5db; filter:none; }
+  .btn-mini.danger { background:#fff; color:#b91c1c; border:1px solid #fecaca; }
+  .btn-mini.danger:hover { background:#fef2f2; filter:none; }
+  .subname { font-size:11px; color:var(--muted); }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:10px;
+           overflow:hidden; margin-bottom:16px; }
+  .panel > form { padding:12px 18px; }
+  .effline { margin-top:10px; padding:6px 10px; background:var(--prime-soft); color:var(--prime-deep);
+             border-radius:6px; font-size:12px; display:inline-block; }
+  details.grant-box > summary { cursor:pointer; color:var(--accent); font-size:13px;
+                                margin-top:10px; user-select:none; }
+  .scroll-x { overflow-x:auto; }
+</style>
+
+<p><a href="/">← 应用组</a></p>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}<div class="flash {{ cat }}">{{ msg }}</div>{% endfor %}
+{% endwith %}
+
+<p class="muted">有效授权 = <b>角色授权</b> ∪ <b>个人特授</b>；带「管理员」标志的角色全通。
+  点行内「授权 ▸」展开编辑明细。</p>
+
+<!-- ══ 角色 ══ -->
+<div class="section-title">角色（{{ roles|length }}）</div>
+<div class="panel scroll-x">
+  <table class="tbl mgr">
+    <tr><th>角色</th><th>类型</th><th>角色授权</th><th>绑定用户</th><th>操作</th></tr>
+    {% for r in roles %}
+      <tr class="row">
+        <td><b class="mono">{{ r.name }}</b> <span class="muted">{{ r.label }}</span></td>
+        <td>{% if r.is_admin %}<span class="badge badge-admin">管理员 · 全通</span>
+            {% else %}<span class="muted">普通</span>{% endif %}</td>
+        <td><button type="button" class="btn-mini ghost" data-target="role-d-{{ loop.index }}"
+              onclick="toggleDetail(this)">{{ r.grant_count }} 项 ▸</button></td>
+        <td>{{ r.user_count }}</td>
+        <td>
+          <form style="margin:0" method="post" action="/auth/roles/{{ r.name }}/delete"
+                onsubmit="return confirm('确认删除角色 {{ r.name }}？')">
+            <button class="btn-mini danger">删除</button>
+          </form>
+        </td>
+      </tr>
+      <tr class="detail" id="role-d-{{ loop.index }}" hidden><td colspan="5">
+        <form class="inline" method="post" action="/auth/roles/{{ r.name }}/admin" style="margin:0">
+          <label><input type="checkbox" name="is_admin" style="width:auto"
+              {% if r.is_admin %}checked{% endif %}>
+            管理员角色（is_admin，绕过授权检查）</label>
+          <button class="btn-mini">设置</button>
+        </form>
+        <div class="muted-h">角色授权 · 绑定该角色的用户自动获得</div>
+        <form method="post" action="/auth/roles/{{ r.name }}/grants">
+          {{ grant_checks(r.grants) }}
+          <button>保存授权</button>
+        </form>
+        <div class="muted-h">前端页面授权 · 决定菜单可见性；页面调用的服务随页面隐式放行
+          （悬停选项查看各页隐式放行的服务；管理员角色全通，无需勾选）</div>
+        <form method="post" action="/auth/roles/{{ r.name }}/pages">
+          {% for m in view_registry.modules %}
+            <div class="muted" style="margin-top:6px"><b>{{ m.module }} 模块</b></div>
+            <div class="checks">
+              {% for p in m.pages %}
+                <label title="隐式放行：{{ view_registry.services[p.id]|join('、') or '无服务调用' }}">
+                  <input type="checkbox" name="pages" value="{{ p.id }}"
+                      {% if p.id in r.pages %}checked{% endif %}> {{ p.name }}</label>
+              {% endfor %}
+            </div>
+          {% endfor %}
+          <div class="muted" style="margin-top:6px"><b>平台公共页</b>
+            <span class="subname">（服务台仅管理员可见，不可授权）</span></div>
+          <div class="checks">
+            {% for p in view_registry.platform_pages %}
+              <label><input type="checkbox" name="pages" value="{{ p.id }}"
+                  {% if p.id in r.pages %}checked{% endif %}> {{ p.name }}</label>
+            {% endfor %}
+          </div>
+          <button>保存页面授权</button>
+          <span class="subname">清单由扫描 view/ 动态生成 ·
+            <a href="#" onclick="return rescanRegistry()">重新扫描</a></span>
+        </form>
+      </td></tr>
+    {% endfor %}
+  </table>
+  <form method="post" action="/auth/roles">
+    <div class="row">
+      <div><label>新建角色名（小写蛇形）</label><input type="text" name="name" required
+             placeholder="如 sales_op"></div>
+      <div><label>显示名</label><input type="text" name="label" placeholder="如 销售运营"></div>
+      <div><label>类型</label>
+        <label class="inline"><input type="checkbox" name="is_admin" style="width:auto">
+          管理员角色</label></div>
+      <div><label>&nbsp;</label><button>创建角色</button></div>
+    </div>
+    <div class="muted" style="margin-top:6px">创建后在角色行的「授权 ▸」里勾选服务。</div>
+  </form>
+</div>
+
+<!-- ══ 用户 ══ -->
+<div class="section-title">用户（{{ users_list|length }}）</div>
+<div class="panel scroll-x">
+  <table class="tbl mgr">
+    <tr><th>用户</th><th>角色</th><th>编号</th><th>部门</th><th>个人特授</th><th>操作</th></tr>
+    {% for u in users_list %}
+      <tr class="row">
+        <td>
+          <b>{{ u.username }}</b>
+          {% if u.is_admin %}<span class="badge badge-admin">管理员</span>{% endif %}
+          <div class="subname">{{ u.created_at }}</div>
+        </td>
+        <td>
+          <form class="inline" style="margin:0" method="post"
+                action="/auth/users/{{ u.username }}/role">
+            <select name="role">
+              {% for r in roles %}
+                <option value="{{ r.name }}" {% if u.role == r.name %}selected{% endif %}>
+                  {{ r.label }}{% if r.is_admin %} · 管理员{% endif %}</option>
+              {% endfor %}
+            </select>
+            <button class="btn-mini">设置</button>
+          </form>
+        </td>
+        <td class="mono">{{ u.user_no or '—' }}</td>
+        <td class="mono">{{ u.department_no or '—' }}</td>
+        <td><button type="button" class="btn-mini ghost" data-target="user-d-{{ loop.index }}"
+              onclick="toggleDetail(this)">{{ u.grants|length }} 项 ▸</button></td>
+        <td>
+          <form style="margin:0" method="post" action="/auth/users/{{ u.username }}/delete"
+                onsubmit="return confirm('确认删除用户 {{ u.username }}？')">
+            <button class="btn-mini danger">删除</button>
+          </form>
+        </td>
+      </tr>
+      <tr class="detail" id="user-d-{{ loop.index }}" hidden><td colspan="6">
+        <div class="effline">生效授权 {{ u.effective_count }} 项
+          = 角色「{{ u.role }}」{{ u.role_grants|length }} 项
+          ∪ 个人特授 {{ u.grants|length }} 项{% if u.is_admin %}（管理员角色实际全通）{% endif %}</div>
+        <form class="inline" method="post" action="/auth/users/{{ u.username }}/reset"
+              style="margin:10px 0 0">
+          <label style="margin:0">重置密码</label>
+          <input type="password" name="password" placeholder="新密码（≥4 位）" style="width:180px">
+          <button class="btn-mini">重置</button>
+        </form>
+        <div class="muted-h">个人特授 · 与角色授权取并集</div>
+        <form method="post" action="/auth/users/{{ u.username }}/grants">
+          {{ grant_checks(u.grants) }}
+          <button>保存授权</button>
+        </form>
+      </td></tr>
+    {% endfor %}
+  </table>
+  <form method="post" action="/auth/users">
+    <div class="row">
+      <div><label>新建用户名</label><input type="text" name="username" required></div>
+      <div><label>密码（≥4 位）</label><input type="password" name="password" required></div>
+      <div><label>角色</label>
+        <select name="role">
+          {% for r in roles %}
+            <option value="{{ r.name }}" {% if r.name == 'user' %}selected{% endif %}>
+              {{ r.label }}{% if r.is_admin %} · 管理员{% endif %}</option>
+          {% endfor %}
+        </select></div>
+      <div><label>用户编号（→ ctx.userno）</label><input type="text" name="user_no"></div>
+      <div><label>部门编号（→ ctx.departmentno）</label><input type="text" name="department_no"></div>
+      <div><label>&nbsp;</label><button>创建用户</button></div>
+    </div>
+    <details class="grant-box">
+      <summary>个人特授（可选 · 与角色授权取并集；管理员角色无需勾选）</summary>
+      {{ grant_checks([]) }}
+    </details>
+  </form>
+</div>
+
+<script>
+  // 明细行展开/收起（一个按钮对一行 detail <tr>）
+  function toggleDetail(btn) {
+    const row = document.getElementById(btn.dataset.target);
+    const open = row.hidden;
+    row.hidden = !open;
+    btn.textContent = btn.textContent.replace(open ? '▸' : '▾', open ? '▾' : '▸');
+  }
+  // 重新扫描视图注册表（新增页面文件后刷新授权清单）
+  async function rescanRegistry() {
+    const r = await fetch('/api/view_registry/rescan', { method: 'POST' });
+    const j = await r.json().catch(() => ({}));
+    alert(j.status === 'ok' ? '扫描完成，页面即将刷新' : ('扫描失败：' + (j.message || r.status)));
+    if (j.status === 'ok') location.reload();
+    return false;
+  }
+</script>
+{% endblock %}

@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}出错 · FDE 平台{% endblock %}
+{% block content %}
+  <div class="card reveal" style="max-width:560px;margin:70px auto;text-align:center;padding:46px 34px">
+    <div class="mono" style="font-size:46px;font-weight:800;color:var(--amber-deep);letter-spacing:.12em">ERR</div>
+    <h3 style="margin:12px 0 6px">出错了</h3>
+    <p class="muted">{{ message }}</p>
+    <p style="margin-top:20px"><a href="/">← 返回应用清单</a></p>
+  </div>
+{% endblock %}

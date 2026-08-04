@@ -1,0 +1,11 @@
+__pycache__
+*.pyc
+*.db
+*.db-shm
+*.db-wal
+*.egg-info
+.env
+.git
+Dockerfile
+.dockerignore
+spike_out
