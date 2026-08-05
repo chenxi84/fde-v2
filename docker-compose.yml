@@ -17,7 +17,7 @@ services:
       retries: 3
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:15
     environment:
       - POSTGRES_USER=fde
       - POSTGRES_PASSWORD=fde
