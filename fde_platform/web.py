@@ -781,6 +781,15 @@ def api_integration_discover():
     return jsonify({"status": "ok", "data": {"external": external, "cross_group": cross}})
 
 
+@app.route("/api/integration/endpoints/<int:eid>")
+def api_integration_get(eid):
+    all_eps = integration.list_endpoints()
+    ep = [e for e in all_eps if e["id"] == eid]
+    if not ep:
+        return jsonify({"status": "error", "message": "端点不存在"}), 404
+    return jsonify({"status": "ok", "data": ep[0]})
+
+
 @app.route("/api/integration/endpoints", methods=["POST"])
 def api_integration_save():
     d = request.get_json(silent=True) or {}

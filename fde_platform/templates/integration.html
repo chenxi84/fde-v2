@@ -63,7 +63,7 @@
       {% if ep.url %}{{ ep.http_method or 'POST' }} {{ ep.url }} · {{ ep.timeout_s }}s{% endif %}
     </div>
   </div>
-  <button class="btn-xs" onclick="editEp({{ ep|tojson }})">编辑</button>
+  <button class="btn-xs" onclick="editEp('{{ ep.id }}')">编辑</button>
   <button class="btn-xs" onclick="testEp({{ ep.id }})">测试</button>
   <button class="btn-xs" style="color:#dc2626" onclick="delEp({{ ep.id }})">删除</button>
 </div>
@@ -146,11 +146,12 @@ function addEp(ep) {
   f.content_type.value = ep.content_type || 'application/json';
   f.auth_type.value = ep.auth_type || 'none';
   f.auth_param_name.value = ep.auth_param_name || '';
+  f.auth_credential.placeholder = ep.auth_credential_masked ? '当前: ' + ep.auth_credential_masked : '留空不修改';
   f.auth_credential.value = '';
-  f.extra_headers.value = ep.extra_headers ? JSON.stringify(ep.extra_headers) : '';
+  f.extra_headers.value = (ep.extra_headers && typeof ep.extra_headers === 'object') ? JSON.stringify(ep.extra_headers) : '{}';
   f.timeout_s.value = ep.timeout_s || 30;
   f.retries.value = ep.retries || 1;
-  f.mock_enabled.checked = ep.mock_enabled;
+  f.mock_enabled.checked = !!ep.mock_enabled;
   f.mock_data.value = ep.mock_data || '';
   toggleAuth(ep.auth_type || 'none');
   document.getElementById('edit-modal').style.display = 'block';
@@ -162,7 +163,13 @@ async function testEp(id) {
   alert(JSON.stringify(d, null, 2));
 }
 
-function editEp(ep) { addEp(ep); }
+async function editEp(id) {
+  const r = await fetch('/api/integration/endpoints');
+  const d = await r.json();
+  const ep = d.data.find(e => e.id === id);
+  if (!ep) return alert('端点不存在');
+  addEp(ep);
+}
 
 async function delEp(id) {
   if (!confirm('确认删除？')) return;
