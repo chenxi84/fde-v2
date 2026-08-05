@@ -217,6 +217,7 @@ class FdePlatform:
         # 加载时建表：造临时实例 → 注入连接 → _init_db → commit → 关连接。
         # 仅加载时执行一次，不计入单次服务调用开销（§6）。
         conn = db.get_connection(qn, db_path)
+        conn._fde_ctx = dict(self.default_ctx)
         try:
             inst = cls()
             inst.ctx = dict(self.default_ctx)
@@ -322,6 +323,7 @@ class FdePlatform:
 
         ctx = dict(ctx or self.default_ctx)
         conn = db.get_connection(handle.qualname, handle.db_path)
+        conn._fde_ctx = ctx
         inst = handle.cls()
         inst.ctx = ctx
         inst.db = conn

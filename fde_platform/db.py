@@ -7,6 +7,7 @@ Docker 部署配 DATABASE_URL=postgresql://... → 自动切 PostgreSQL。
 """
 import logging
 import os
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -36,8 +37,7 @@ def db_mode() -> str:
 # ── DDL 翻译 ─────────────────────────────────────────────
 
 def _translate_ddl(sql: str) -> str:
-    """SQLite DDL → PostgreSQL DDL（仅必要转换）。"""
-    import re
+    """SQLite DDL → PostgreSQL DDL + 自动追审审计列。"""
     sql = re.sub(r'\bAUTOINCREMENT\b', '', sql, flags=re.IGNORECASE)
     sql = re.sub(
         r"INTEGER PRIMARY KEY\b(?!\s*GENERATED)",
@@ -46,19 +46,107 @@ def _translate_ddl(sql: str) -> str:
     sql = re.sub(r"\bdatetime\('now'\)\b", "NOW()", sql)
     sql = re.sub(r"\bdatetime\('now','localtime'\)\b", "NOW()", sql)
     sql = re.sub(r'\bDATETIME\b', 'TIMESTAMP', sql, flags=re.IGNORECASE)
+    # 仅在含主表的 CREATE TABLE 语句追加审计列（跳过 CREATE INDEX / 辅助表等）
+    if re.search(r'CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS', sql, re.IGNORECASE):
+        if 'created_at' not in sql.lower():
+            sql = re.sub(
+                r'\)\s*$',  # 匹配最后一个 )
+                ', created_at TEXT, updated_at TEXT, created_by TEXT, updated_by TEXT)',
+                sql, flags=re.IGNORECASE)
     return sql
+
+
+# ── 审计值注入 ──────────────────────────────────────────
+
+def _inject_audit(sql: str, params, ctx: dict) -> tuple:
+    """在 INSERT/UPDATE 语句中自动注入审计字段值。
+
+    INSERT → 追加 created_at / updated_at / created_by / updated_by
+    UPDATE → 追加 updated_at / updated_by（WHERE 除外的不动）
+    ctx 来自 self.ctx，由 runtime 层注入到连接上。"""
+    user = (ctx or {}).get("userno", "") or ""
+    now_sqlite = "datetime('now','localtime')"
+    sql_upper = sql.strip().upper()
+
+    if sql_upper.startswith("INSERT INTO"):
+        # INSERT INTO t (a, b) VALUES (?, ?)
+        # → INSERT INTO t (a, b, created_at, updated_at, created_by, updated_by)
+        #   VALUES (?, ?, now, now, ?, ?)
+        audit_cols = ", created_at, updated_at, created_by, updated_by"
+        audit_vals = f", {now_sqlite}, {now_sqlite}, ?, ?"
+        audit_params = (user, user)
+
+        # 在 ) VALUES 之前插入列名
+        sql = re.sub(r'\)\s*VALUES\s*\(', audit_cols + ') VALUES (', sql, count=1,
+                     flags=re.IGNORECASE)
+        # 在最后一个 ) 之前插入值占位符
+        sql = re.sub(r'\)\s*$', audit_vals + ')', sql, count=1)
+        new_params = list(params or ()) + list(audit_params)
+        return sql, tuple(new_params) if params else tuple(audit_params)
+
+    if sql_upper.startswith("UPDATE"):
+        audit_set = f", updated_at = {now_sqlite}, updated_by = ?"
+        audit_params = (user,)
+        if " WHERE " in sql_upper:
+            idx = sql_upper.index(" WHERE ")
+            # 统计 SET 部分的 ? 个数
+            set_part = sql_upper[:idx]
+            set_q_count = set_part.count("?")
+            sql = sql[:idx] + audit_set + " " + sql[idx:]
+            # 审计参数插入到 SET 参数和 WHERE 参数之间
+            plist = list(params or ())
+            new_params = plist[:set_q_count] + list(audit_params) + plist[set_q_count:]
+        else:
+            sql = sql.rstrip() + audit_set
+            new_params = list(params or ()) + list(audit_params)
+        return sql, tuple(new_params) if params else tuple(audit_params)
+
+    return sql, params
 
 
 # ── SQLite 适配器（原有行为）────────────────────────────────
 
-def _open_sqlite(db_path: Path) -> sqlite3.Connection:
+class _SqliteAuditWrapper:
+    """包装 sqlite3 连接，在 execute() 时自动注入审计字段。"""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self._fde_ctx = {}       # runtime.py 在注入 inst.db 前设置
+
+    @property
+    def row_factory(self):
+        return self._conn.row_factory
+
+    @row_factory.setter
+    def row_factory(self, val):
+        self._conn.row_factory = val
+
+    def execute(self, sql, params=None):
+        ctx = getattr(self, "_fde_ctx", None) or {}
+        sql, params = _inject_audit(sql, params, ctx)
+        return self._conn.execute(sql, params or ())
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        self._conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def _open_sqlite(db_path: Path) -> _SqliteAuditWrapper:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+    return _SqliteAuditWrapper(conn)
 
 
 # ── PostgreSQL 适配器 ────────────────────────────────────────
@@ -172,6 +260,26 @@ class _PgConnection:
 
     def execute(self, sql, params=None):
         sql = _translate_ddl(sql)
+        # 审计注入（PG 用 NOW() 替代 datetime('now','localtime')）
+        ctx = getattr(self, "_fde_ctx", None) or {}
+        user = (ctx or {}).get("userno", "") or ""
+        sql_upper = sql.strip().upper()
+        if sql_upper.startswith("INSERT INTO"):
+            audit_cols = ", created_at, updated_at, created_by, updated_by"
+            sql = re.sub(r'\)\s*VALUES\s*\(', audit_cols + ') VALUES (', sql, count=1,
+                         flags=re.IGNORECASE)
+            sql = re.sub(r'\)\s*$', ', NOW(), NOW(), %s, %s)', sql, count=1)
+            new_params = list(params or ()) + [user, user]
+            params = tuple(new_params) if params else (user, user)
+        elif sql_upper.startswith("UPDATE"):
+            audit_set = ", updated_at = NOW(), updated_by = %s"
+            if " WHERE " in sql_upper:
+                idx = sql_upper.index(" WHERE ")
+                sql = sql[:idx] + audit_set + " " + sql[idx:]
+            else:
+                sql = sql.rstrip() + audit_set
+            new_params = list(params or ()) + [user]
+            params = tuple(new_params) if params else (user,)
         self._cursor = self._conn.cursor()
         if params:
             sql = sql.replace("?", "%s")
