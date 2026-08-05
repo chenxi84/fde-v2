@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from fde import FdeError  # noqa: E402
-from fde_platform import builtin_tools, users  # noqa: E402
+from fde_platform import builtin_tools, platform_mcp_tools, users  # noqa: E402
 from fde_platform.runtime import FdePlatform  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -42,7 +42,7 @@ class McpServer:
         self.platform = FdePlatform()
         self.platform.load_all()
         users.migrate_grant_app_names(self.platform)  # 历史授权短名 → qualname（幂等）
-        self._tools = self.platform.all_mcp_tools()
+        self._tools = self.platform.all_mcp_tools() + platform_mcp_tools.tools()
         self._by_name = {t["name"]: t for t in self._tools}
 
         # 身份：--user / FDE_MCP_USER 指定则绑定该用户（fail-closed）；否则平台默认身份
@@ -114,6 +114,23 @@ class McpServer:
 
         app = tool["_meta"]["app"]
         service = tool["_meta"]["service"]
+
+        # 平台管理工具：直接路由到 handler（需 admin 身份）
+        if app == "_platform":
+            if self.user and not self.user.get("is_admin"):
+                return self._result(
+                    msg_id,
+                    {"content": [{"type": "text", "text": "平台管理工具仅限管理员"}], "isError": True},
+                )
+            try:
+                result = platform_mcp_tools.handle_tool(name, args, self.ctx or {})
+                text = json.dumps(result, ensure_ascii=False)
+                return self._result(msg_id, {"content": [{"type": "text", "text": text}]})
+            except Exception as e:
+                return self._result(
+                    msg_id,
+                    {"content": [{"type": "text", "text": f"平台工具异常：{e}"}], "isError": True},
+                )
 
         # 授权检查（与 Web 闸门对齐）：聚合服务须被授权；内置文件工具须有应用可见性
         if self.user and not self.user.get("is_admin"):
