@@ -835,7 +835,7 @@ def api_integration_test(eid):
         import urllib.request
         import base64
 
-        body_data = d.get("test_body") or None
+        body_data = request.get_json(silent=True) or {}
         req = urllib.request.Request(full["url"], method=full.get("http_method", "POST"))
         req.add_header("Content-Type", full.get("content_type", "application/json"))
 
