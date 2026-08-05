@@ -64,34 +64,30 @@ def _get_conn() -> sqlite3.Connection:
 
 # ── 发现 ──────────────────────────────────────────────────
 
-# 常见的内部辅助方法前缀（非外部系统适配器）
-_INTERNAL_HELPER_PREFIXES = {
-    "_clean", "_now", "_row", "_to_", "_get_", "_set_", "_check_",
-    "_validate_", "_generate_", "_change_", "_split_", "_fix_",
-    "_process_", "_extract_", "_build_", "_read_", "_write_",
-    "_ensure_", "_format_", "_parse_", "_make_", "_create_",
-    "_update_", "_delete_", "_find_", "_sort_", "_filter_",
-    "_normalize_", "_convert_", "_seal_", "_locate_",
-    "_gen_", "_upsert_", "_dedup_", "_translate_",
-    "_exists", "_size", "_count", "_is_", "_has_", "_can_",
+# 已知外部系统前缀（大写，供 _is_external_adapter 白名单匹配）
+_KNOWN_SYSTEM_PREFIXES = {
+    "sap", "mom", "wms", "mdm", "erp", "crm", "scm",
+    "api", "http", "rest", "rpc", "soap", "grpc",
+    "sms", "mail", "push", "msg", "mqs", "kfk", "mq",
+    "oauth", "sso", "ldap", "ftp", "sftp", "s3",
 }
 
 
 def _is_external_adapter(method_name: str) -> bool:
     """判定 `_` 前缀方法是否为外部系统适配器。
-    排除 Python 魔术方法、平台约定方法、内部辅助方法。
-    外部适配器命名模式：`_<system>_<operation>`，如 _sap_sync_order。
+
+    规则：
+    1. 排除 Python 魔术方法（__xxx__）和平台约定方法（_init_db）
+    2. 方法名须为 `_<系统>_<操作>` 格式，且 <系统> 必须在已知外部系统白名单中
+    3. 方法名不能匹配常见内部辅助方法前缀（二次确认）
     """
     if method_name.startswith("__") or method_name in ("_init_db",):
         return False
-    for prefix in _INTERNAL_HELPER_PREFIXES:
-        if method_name.startswith(prefix):
-            return False
-    # 方法名形如 _<短标识>_<操作> → 外部适配器
     parts = method_name[1:].split("_", 1)
-    if len(parts) >= 2 and len(parts[0]) >= 2:
-        return True
-    return False
+    if len(parts) < 2:
+        return False
+    system = parts[0].lower()
+    return system in _KNOWN_SYSTEM_PREFIXES
 
 
 def _is_gateway_app(cls, app_name: str) -> tuple:
