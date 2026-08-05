@@ -45,6 +45,7 @@ def _translate_ddl(sql: str) -> str:
         sql, flags=re.IGNORECASE)
     sql = re.sub(r"\bdatetime\('now'\)\b", "NOW()", sql)
     sql = re.sub(r"\bdatetime\('now','localtime'\)\b", "NOW()", sql)
+    sql = re.sub(r'\bDATETIME\b', 'TIMESTAMP', sql, flags=re.IGNORECASE)
     return sql
 
 
