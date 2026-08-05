@@ -108,6 +108,29 @@ def _pg_pool():
     return None
 
 
+class _PgCursorWrapper:
+    """包装 psycopg2 cursor，返回 DictRow 并暴露 lastrowid。"""
+
+    def __init__(self, cursor):
+        self._cur = cursor
+        self.lastrowid = cursor.lastrowid
+        self.description = cursor.description
+        self.rowcount = cursor.rowcount
+        self._cols = [d[0] for d in cursor.description] if cursor.description else []
+
+    def fetchone(self):
+        row = self._cur.fetchone()
+        if row is None:
+            return None
+        return {self._cols[i]: row[i] for i in range(len(row))}
+
+    def fetchall(self):
+        return [{self._cols[i]: r[i] for i in range(len(r))} for r in self._cur.fetchall()]
+
+    def close(self):
+        self._cur.close()
+
+
 class _PgConnection:
     """包装 psycopg2 连接，对外暴露与 sqlite3 兼容的接口。"""
 
@@ -122,20 +145,7 @@ class _PgConnection:
             self._cursor.execute(sql, params)
         else:
             self._cursor.execute(sql)
-        if self._cursor.description:
-            cols = [d[0] for d in self._cursor.description]
-
-            def _dict_row(values):
-                return {cols[i]: values[i] for i in range(len(values))}
-
-            orig_fetchone = self._cursor.fetchone
-            self._cursor.fetchone = lambda: (
-                _dict_row(row) if (row := orig_fetchone()) else None)
-
-            orig_fetchall = self._cursor.fetchall
-            self._cursor.fetchall = lambda: [_dict_row(r) for r in orig_fetchall()]
-
-        return self._cursor
+        return _PgCursorWrapper(self._cursor)
 
     def commit(self):
         self._conn.commit()
