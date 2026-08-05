@@ -23,6 +23,7 @@
 users.html 一起删除，平台自动回落无认证模式。自带 CLI：`python -m fde_platform.users --help`。
 """
 import argparse
+import logging
 import re
 import sqlite3
 from pathlib import Path
@@ -42,6 +43,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = PROJECT_ROOT / "config" / "auth.db"
+_logger = logging.getLogger(__name__)
 
 MIN_PASSWORD_LEN = 4
 
@@ -61,13 +63,14 @@ CREATE TABLE IF NOT EXISTS roles (
 );
 
 CREATE TABLE IF NOT EXISTS users (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    username      TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    role          TEXT NOT NULL DEFAULT 'user' REFERENCES roles(name),
-    user_no       TEXT,
-    department_no TEXT,
-    created_at    TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    username         TEXT NOT NULL UNIQUE,
+    password_hash    TEXT NOT NULL,
+    role             TEXT NOT NULL DEFAULT 'user' REFERENCES roles(name),
+    user_no          TEXT,
+    department_no    TEXT,
+    password_changed INTEGER NOT NULL DEFAULT 0,
+    created_at       TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_user_no
     ON users(user_no) WHERE user_no IS NOT NULL;
@@ -98,7 +101,8 @@ CREATE TABLE IF NOT EXISTS role_page_grants (
 
 # users 行统一投影：LEFT JOIN roles 带出 is_admin / role_label（角色被删等异常时兜底）
 _USER_SELECT = (
-    "u.id, u.username, u.password_hash, u.role, u.user_no, u.department_no, u.created_at,"
+    "u.id, u.username, u.password_hash, u.role, u.user_no, u.department_no,"
+    " COALESCE(u.password_changed, 0) AS password_changed, u.created_at,"
     " COALESCE(r.is_admin, 0) AS is_admin, COALESCE(r.label, u.role) AS role_label"
 )
 
@@ -114,18 +118,31 @@ def get_conn() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(_SCHEMA)   # 幂等建表（新库 / 旧库补表两相宜）
     _migrate_legacy_users(conn)   # 旧库：users.role 上的硬编码 CHECK 约束需重建表去除
+    _migrate_add_column(conn, "users", "password_changed", "INTEGER NOT NULL DEFAULT 0")
     _seed_roles(conn)             # 保证默认角色存在（并补全旧库里的自定义角色值）
     if fresh:
         # OR IGNORE：多进程并发首启（如 MCP 子进程与父进程同时播种）时保证幂等，
         # 先到者落库、后到者静默跳过，而不是抛 UNIQUE 冲突。
         conn.execute(
-            "INSERT OR IGNORE INTO users (username, password_hash, role)"
-            " VALUES (?, ?, 'admin')",
+            "INSERT OR IGNORE INTO users (username, password_hash, role, password_changed)"
+            " VALUES (?, ?, 'admin', 0)",
             ("admin", generate_password_hash("admin")),
         )
-        print("[用户管理] 用户库缺失或为空：已重建并播种 admin/admin（内置角色 admin/user）")
+        _logger.info("用户库缺失或为空：已重建并播种 admin/admin")
+    # 确保 admin 始终标记为未改密（防止旧库 admin 无该字段记录）
+    conn.execute(
+        "UPDATE users SET password_changed = 0 WHERE username = 'admin' AND password_changed IS NULL"
+    )
     conn.commit()
     return conn
+
+
+def _migrate_add_column(conn, table: str, column: str, col_def: str) -> None:
+    """幂等加列：尝试 ALTER TABLE ADD COLUMN，列已存在则忽略。"""
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
+    except sqlite3.OperationalError:
+        pass  # 列已存在
 
 
 def _migrate_legacy_users(conn) -> None:
@@ -193,8 +210,8 @@ def seed_admin() -> bool:
         conn.close()
         return False
     conn.execute(
-        "INSERT OR IGNORE INTO users (username, password_hash, role)"
-        " VALUES (?, ?, 'admin')",
+        "INSERT OR IGNORE INTO users (username, password_hash, role, password_changed)"
+        " VALUES (?, ?, 'admin', 0)",
         ("admin", generate_password_hash("admin")),
     )
     conn.commit()

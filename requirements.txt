@@ -9,6 +9,9 @@ cryptography>=3.0
 # 可选：配置管理（.env 文件支持）
 python-dotenv>=1.0
 
+# 可选：PostgreSQL（Docker 部署用，不装则默认 SQLite）
+psycopg2-binary>=2.9
+
 # 可选：AI Agent 对话（兼容 OpenAI 接口的模型，如 DeepSeek / 通义千问 / 智谱）
 openai>=1.0
 

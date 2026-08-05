@@ -15,6 +15,19 @@ __pycache__/
 
 # 密钥
 config/llm_master.key
+config/.secret_key
+
+# 平台运行时锁文件
+fde_platform/.dbguard.lock
+
+# 运行日志
+config/logs/
+
+# PostgreSQL 数据目录
+pgdata/
+
+# TLS 证书（本地生成，不提交）
+certs/
 
 # 测试临时文件
 config/.testexec/

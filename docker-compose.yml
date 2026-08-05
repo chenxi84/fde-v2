@@ -1,0 +1,48 @@
+services:
+  fde-v2:
+    build: .
+    environment:
+      - PLATFORM_HOST=0.0.0.0
+      - DATABASE_URL=postgresql://fde:fde@postgres:5432/fdev2
+    volumes:
+      - ./config:/app/config
+      - ./app:/app/app
+    depends_on:
+      - postgres
+    restart: always
+    healthcheck:
+      test: ["CMD", "python", "-c", "import http.client; c = http.client.HTTPConnection('127.0.0.1', 4000); c.request('GET', '/'); c.getresponse()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=fde
+      - POSTGRES_PASSWORD=fde
+      - POSTGRES_DB=fdev2
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fde -d fdev2"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      - fde-v2
+    restart: always
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

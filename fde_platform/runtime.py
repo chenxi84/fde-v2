@@ -11,6 +11,7 @@
 """
 import importlib.util
 import sqlite3
+from fde_platform import db
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -214,7 +215,7 @@ class FdePlatform:
 
         # 加载时建表：造临时实例 → 注入连接 → _init_db → commit → 关连接。
         # 仅加载时执行一次，不计入单次服务调用开销（§6）。
-        conn = _open_db(db_path)
+        conn = db.get_connection(qn, db_path)
         try:
             inst = cls()
             inst.ctx = dict(self.default_ctx)
@@ -319,19 +320,18 @@ class FdePlatform:
             raise FdeError(f"应用 {handle.qualname} 无此服务：{service}")
 
         ctx = dict(ctx or self.default_ctx)
-        conn = _open_db(handle.db_path)
+        conn = db.get_connection(handle.qualname, handle.db_path)
         inst = handle.cls()
         inst.ctx = ctx
         inst.db = conn
         inst.fde = BoundFde(self, ctx, handle.group)
         try:
-            # 自愈：库文件被外部删除/清空（SQLite 会自动重建空库 → 无表 →
-            # OperationalError）时，用幂等的 _init_db 重建表结构（CONVENTION §6
-            # 保证 _init_db 幂等安全）。仅一次轻量元数据查询，开销可忽略。
-            if conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1"
-            ).fetchone() is None:
-                inst._init_db()
+            # SQLite 自愈：库文件被外部删除/清空时用幂等的 _init_db 重建（§6）
+            if not db.using_postgresql():
+                if conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1"
+                ).fetchone() is None:
+                    inst._init_db()
             result = method(inst, **params)  # 平台管理事务：成功 commit
             conn.commit()
             return result

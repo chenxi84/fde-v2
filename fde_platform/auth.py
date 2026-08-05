@@ -29,7 +29,7 @@ from fde_platform import users
 
 # ── 常量 ────────────────────────────────────────────────
 
-OPEN_PATHS = {"/login", "/logout", "/favicon.ico"}
+OPEN_PATHS = {"/login", "/logout", "/favicon.ico", "/change-password"}
 WHITELIST_PREFIXES = ("/static/",)
 
 # 这些端点的请求体会被改写 session_id（见 gate 末段，做 Agent 会话按用户隔离）
@@ -112,6 +112,12 @@ def gate():
         if path.startswith("/api/"):
             return jsonify({"status": "error", "message": "未登录"}), 401
         return redirect(url_for("auth.login", next=path))
+
+    # ②.5 首次登录强制改密（password_changed=0）
+    if not user.get("password_changed") and path != "/change-password":
+        if path.startswith("/api/"):
+            return jsonify({"status": "error", "message": "请先修改默认密码"}), 403
+        return redirect(url_for("auth.change_password", next=path))
 
     # ③ 管理区仅管理员角色（is_admin 标志，见 users._is_admin_user 口径）
     if path.startswith("/auth/") and not user.get("is_admin"):
@@ -241,24 +247,55 @@ def logout():
     return redirect(url_for("auth.login"))
 
 
+@auth_bp.route("/change-password", methods=["GET", "POST"])
+def change_password():
+    user = current_user()
+    if user is None:
+        return redirect(url_for("auth.login"))
+    error = None
+    if request.method == "POST":
+        old_pw = request.form.get("old_password") or ""
+        new_pw = request.form.get("new_password") or ""
+        new_pw2 = request.form.get("new_password2") or ""
+        if not users.verify_password(user, old_pw):
+            error = "当前密码错误"
+        elif len(new_pw) < 6:
+            error = "新密码至少 6 位"
+        elif new_pw != new_pw2:
+            error = "两次输入的新密码不一致"
+        elif old_pw == new_pw:
+            error = "新密码不能与当前密码相同"
+        else:
+            users.reset_password(user["username"], new_pw)
+            # 标记已改密
+            conn = users.get_conn()
+            conn.execute("UPDATE users SET password_changed = 1 WHERE id = ?", (user["id"],))
+            conn.commit()
+            conn.close()
+            nxt = _safe_next(request.form.get("next", "/"))
+            return redirect(nxt)
+    return render_template("change_password.html", error=error,
+                           next=_safe_next(request.args.get("next", "/")),
+                           username=user["username"])
+
+
 # ── 插件入口 ────────────────────────────────────────────
 
 
 def register(app):
     """把鉴权系统接入传入的 Flask app（唯一扩展点）。"""
+    import logging
+    logger = logging.getLogger(__name__)
     users.init_schema()
     if users.seed_admin():
-        print("\n" + "!" * 54)
-        print("!!  首次启动：已播种默认管理员 admin/admin")
-        print("!!  请立即登录后在「用户管理」中重置密码")
-        print("!" * 54 + "\n")
+        logger.warning("首次启动：已播种默认管理员 admin/admin，请尽快改密")
 
     app.register_blueprint(users.bp)
     app.register_blueprint(auth_bp)
     app.before_request(gate)
     app.after_request(inject_userbar)
 
-    print(f"[鉴权] 已启用 · 用户库 {users.DB_PATH}")
+    logger.info("鉴权已启用 · 用户库 %s", users.DB_PATH)
     return app
 
 

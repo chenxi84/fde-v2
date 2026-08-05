@@ -37,10 +37,13 @@ from flask import (
 
 from fde import FdeError
 from fde_platform import builtin_tools, scanner, users, view_registry
+from fde_platform.logging_config import init_logging
 from fde_platform.runtime import FdePlatform
 
+init_logging()
+
 _PKG_DIR = Path(__file__).parent
-VERSION = "v2.1.1-beta"
+VERSION = "v2.2.0-beta"
 HOST = os.environ.get("PLATFORM_HOST", "127.0.0.1")
 PORT = int(os.environ.get("PLATFORM_PORT", 4000))
 
@@ -50,7 +53,19 @@ platform.load_all()
 users.migrate_grant_app_names(platform)  # 历史授权短名 → 组限定名 qualname（幂等）
 
 app = Flask(__name__, template_folder=str(_PKG_DIR / "templates"))
-app.secret_key = os.environ.get("SECRET_KEY", "fde-v2-platform-secret")  # 会话签名
+
+# 会话签名密钥 —— 优先 env SECRET_KEY；否则从文件恢复；再否自动生成并持久化（防开源回退值泄露）
+_SECRET_PATH = _PKG_DIR.parent / "config" / ".secret_key"
+_secret = os.environ.get("SECRET_KEY", "").strip()
+if _secret:
+    app.secret_key = _secret
+elif _SECRET_PATH.is_file():
+    app.secret_key = _SECRET_PATH.read_text(encoding="utf-8").strip()
+else:
+    import secrets
+    app.secret_key = secrets.token_hex(32)
+    _SECRET_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _SECRET_PATH.write_text(app.secret_key, encoding="utf-8")
 
 # Agent 会话缓存 {键: AgentSession}（延迟创建；"__platform__" 为平台级跨应用 Agent）
 _agent_sessions: dict = {}

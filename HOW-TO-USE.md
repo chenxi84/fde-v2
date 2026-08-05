@@ -48,27 +48,32 @@ python main.py
 
 适合部署到 Linux 服务器，无需手动安装 Python 和依赖。
 
+### 内网 HTTP（简单）
+
 ```bash
-# 1. 构建镜像
 docker build -t fde-v2 .
-
-# 2. 启动（-d 后台运行，--restart=always 开机自启）
-docker run -d --restart=always \
-  -p 4000:4000 \
-  -v $(pwd)/app:/app/app \
-  -v $(pwd)/config:/app/config \
+docker run -d --restart=always -p 4000:4000 \
+  -v $(pwd)/app:/app/app -v $(pwd)/config:/app/config \
   --name fde-v2 fde-v2
-
-# 3. 查看日志
-docker logs -f fde-v2
 ```
 
-更新代码后重新部署：
+### 带 HTTPS（nginx 反向代理）
 
 ```bash
-docker stop fde-v2 && docker rm fde-v2
-docker build -t fde-v2 .
-# 再执行第 2 步的 docker run 命令
+# 1. 生成自签证书
+bash scripts/gen-cert.sh
+
+# 2. 启动（FDE + nginx 两个容器）
+docker compose up -d
+```
+
+访问 `https://<服务器IP>`。自签证书浏览器会提示不安全，点「继续访问」即可；有域名的话把真实证书放到 `certs/` 下替换。
+
+### 更新代码
+
+```bash
+docker compose down
+docker compose up -d --build
 ```
 
 > 如果服务器在国内且 Docker Hub 连接超时，需先配置镜像加速（见 Dockerfile 和 daemon.json）。

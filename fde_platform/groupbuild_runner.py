@@ -235,6 +235,32 @@ _CODE_PREAMBLE = (
     "- **只输出纯代码 / markdown 正文，不要 ``` 围栏、不要任何解释文字**。\n"
 )
 
+# 加载 e2e 黄金参考代码（注入 builder prompt 提升生成质量）
+def _load_golden_ref() -> str:
+    """读 e2e 参考应用代码，作为 builder 的黄金代码样例。"""
+    refs = []
+    for app_name in ("member", "task"):
+        p = PROJECT_ROOT / "app" / "e2e" / app_name / f"{app_name}.py"
+        if p.is_file():
+            try:
+                refs.append(p.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+    if not refs:
+        return ""
+    return ("\n\n===== 黄金参考范例（FDE v2 标准代码，严格模仿其风格/模式/质量）=====\n"
+            + "\n---\n".join(refs[:1])   # 只给一个范例（member.py 173行），避免 prompt 过长
+            + "\n----- 范例结束 -----\n"
+            + "上述代码展示了 FDE 应用的**唯一正确写法**：\n"
+            + "- 所有 import 在文件顶部（绝不在方法体内 import）\n"
+            + "- SQL 只用参数化 `?` 占位符（绝不用 f-string 拼接 SQL）\n"
+            + "- 私有辅助方法 `_clean()` / `_validate_*()` / `_to_dict()` 抽取公共逻辑\n"
+            + "- 类内方法定义行恰好缩进 4 空格，方法体 8 空格\n"
+            + "- 绝不出现重复方法定义\n"
+            + "**你的代码必须达到同样的质量标准。**\n")
+
+_GOLDEN_REF = _load_golden_ref()
+
 _CODE_SLOTS = [
     ("code0", "`<应用>.py` 前半部分（文件头 + 建表 + 核心公共方法）",
      "本次【只】输出 `<应用>.py` 的**前半部分**：从文件顶部开始——模块 docstring、必要 import"
@@ -1261,8 +1287,56 @@ def _join_code(part0: str, part1: str) -> str:
     if "无更多方法" in b:
         b = ""
     if not b.strip():
-        return a + "\n"
-    return a + "\n\n" + b.rstrip() + "\n"
+        result = a + "\n"
+    else:
+        result = a + "\n\n" + b.rstrip() + "\n"
+    # 去重：检测重复的方法定义，删除第二次出现的完整方法
+    result = _dedup_methods(result)
+    return result
+
+
+def _dedup_methods(py_text: str) -> str:
+    """移除文件中重复的方法定义（保留首次出现，删除后续同名方法）。
+    修复了 LLM 在两段生成中输出重复方法的常见问题。"""
+    import re as _re_dedup
+    method_re = _re_dedup.compile(r'^(\s{4}def )(\w+)(\(self)', _re_dedup.MULTILINE)
+    seen = set()
+    lines = py_text.split('\n')
+    to_remove = {}   # method_name -> (start_line, end_line)
+    # 找到所有方法定义位置
+    method_starts = {}  # line_idx -> method_name
+    for i, line in enumerate(lines):
+        m = method_re.match(line)
+        if m:
+            name = m.group(2)
+            if name in seen:
+                to_remove[name] = i
+            else:
+                seen.add(name)
+            method_starts[i] = name
+    if not to_remove:
+        return py_text
+    # 删除重复方法：找到它们的起止行
+    sorted_methods = sorted([(idx, name) for name, idx in to_remove.items()], key=lambda x: x[0])
+    sorted_all = sorted([(idx, name) for idx, name in method_starts.items()], key=lambda x: x[0])
+    # 为每个重复方法找到结束行（下一个方法定义前一行，或文件末尾）
+    remove_ranges = []
+    for dup_idx, dup_name in sorted_methods:
+        # 找到下一个方法定义的位置
+        end_idx = len(lines) - 1
+        for mi, mn in sorted_all:
+            if mi > dup_idx:
+                end_idx = mi - 1
+                break
+        # 向上回溯去除空行
+        while end_idx > dup_idx and lines[end_idx].strip() == '':
+            end_idx -= 1
+        remove_ranges.append((dup_idx, end_idx))
+    # 从后往前删除（避免索引偏移）
+    result_lines = list(lines)
+    for start, end in reversed(remove_ranges):
+        del result_lines[start:end + 1]
+    return '\n'.join(result_lines) + ('\n' if py_text.endswith('\n') else '')
 
 
 def _syntax_err(py_text: str):
@@ -1380,12 +1454,19 @@ def _verify_code(app: str, cls: str, py_text: str) -> list:
         problems.append("缺 `_init_db`")
     if "CREATE TABLE IF NOT EXISTS" not in py_text.upper():
         problems.append("缺 `CREATE TABLE IF NOT EXISTS`")
+    # SQL 安全检查：禁止 f-string 拼接 SQL（须用参数化 ? 占位符）
+    import re as _re_sql
+    if _re_sql.search(r"[fF][\"']\s*(SELECT|INSERT|UPDATE|DELETE|CREATE)\b", py_text):
+        problems.append("禁止 f-string 拼接 SQL（须用参数化 ? 占位符，防 SQL 注入）")
+
     cls_node = next((n for n in tree.body
                      if isinstance(n, ast.ClassDef) and n.name == cls), None)
     if cls_node is None:
         if not any(p.startswith("缺聚合根类") for p in problems):
             problems.append(f"未找到类 {cls} 定义")
     else:
+        # 方法去重检查：检测类内重复方法定义
+        seen_methods = set()
         for n in cls_node.body:
             if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -1393,6 +1474,9 @@ def _verify_code(app: str, cls: str, py_text: str) -> list:
                 problems.append("禁止定义 `__init__`（ctx/db/fde 由平台注入）")
             elif not n.name.startswith("_") and n.returns is not None:
                 problems.append(f"公共方法 `{n.name}` 禁写返回类型注解（§12.1）")
+            if n.name in seen_methods:
+                problems.append(f"重复方法定义 `{n.name}`（类内不可有同名方法）")
+            seen_methods.add(n.name)
     return problems
 
 
@@ -1425,7 +1509,7 @@ def node_code_apps(state: CodeState) -> dict:
         meta[app] = (cn, cls, idk)
         detail = detail_map.get(app) or "（缺应用详设）"
         for slot, label, instr in _CODE_SLOTS:
-            system = (_CODE_PREAMBLE + "【本次任务】" + instr +
+            system = (_CODE_PREAMBLE + _GOLDEN_REF + "【本次任务】" + instr +
                       "\n\n===== 编码规范正本（design/CONVENTION.md）=====\n" + convention)
             user = (f"应用组：{group}（{state.get('name_cn') or ''}）\n"
                     f"本次要编码的聚合根：应用名 `{app}` / 类名 `{cls}` / 标识 `{idk}` / 中文名 {cn}\n\n"

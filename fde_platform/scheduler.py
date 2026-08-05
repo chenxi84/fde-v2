@@ -16,6 +16,7 @@
 """
 import argparse
 import json
+import logging
 import sqlite3
 import time
 from datetime import datetime
@@ -38,6 +39,7 @@ except ImportError:  # pragma: no cover
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = PROJECT_ROOT / "config" / "scheduler.db"
+_logger = logging.getLogger(__name__)
 
 MAX_RUNS_PER_JOB = 200   # 每任务保留的运行日志上限
 RESULT_TRUNCATE = 20000  # 存入 result_json 的字符上限
@@ -398,14 +400,14 @@ def load_all_jobs() -> None:
 def start_engine() -> None:
     global _scheduler
     if not _HAS_APSCHEDULER:
-        print("[定时任务] 未安装 APScheduler：后台调度不可用（仅支持手动「立即运行」）")
+        _logger.warning("未安装 APScheduler：后台调度不可用（仅支持手动立即运行）")
         return
     if _scheduler and _scheduler.running:
         return
     _scheduler = BackgroundScheduler()
     _scheduler.start()
     load_all_jobs()
-    print(f"[定时任务] 后台调度引擎已启动 · 已载入 {len(list_jobs(enabled_only=True))} 个启用任务")
+    _logger.info("后台调度引擎已启动 · 已载入 %d 个启用任务", len(list_jobs(enabled_only=True)))
 
 
 def shutdown_engine() -> None:
@@ -629,7 +631,7 @@ def register(app, platform) -> None:
     import atexit
 
     atexit.register(shutdown_engine)
-    print(f"[定时任务] 已启用 · 任务库 {DB_PATH}")
+    _logger.info("定时任务已启用 · 任务库 %s", DB_PATH)
     return app
 
 
