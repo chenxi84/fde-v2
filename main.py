@@ -61,7 +61,9 @@ def main():
     print(f"\n{bar}")
     print(f"FDE 技术平台 {VERSION} 启动")
     print(bar)
+    from fde_platform.db import db_mode
     print(f"浏览器端 : http://{HOST}:{PORT}")
+    print(f"数据库   : {db_mode()}")
     print(f"鉴权     : {'开启（首次登录 admin/admin，请尽快改密）' if AUTH_ON else '关闭（无认证模式）'}")
     print(f"定时任务 : {'开启（/scheduler）' if SCHED_ON else '关闭'}")
     print(f"大模型配置: {'开启（/llm）' if LLM_ADMIN_ON else '关闭'}")

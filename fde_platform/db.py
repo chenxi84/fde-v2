@@ -3,11 +3,12 @@
 本地开发不配 DATABASE_URL → 默认 SQLite（行为不变）。
 Docker 部署配 DATABASE_URL=postgresql://... → 自动切 PostgreSQL。
 
-应用代码零改动：`self.db.execute() / fetchone() / fetchall()` 接口保持一致。
+应用代码零改动：``self.db.execute() / fetchone() / fetchall()`` 接口保持一致。
 """
 import logging
 import os
 import sqlite3
+import time
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -15,12 +16,24 @@ _logger = logging.getLogger(__name__)
 
 _PG_URL = os.environ.get("DATABASE_URL", "").strip()
 _PG_AVAILABLE = bool(_PG_URL and _PG_URL.startswith("postgresql"))
+_PG_FAIL_REASON = None   # 失败原因（供启动横幅展示）
 
 
 def using_postgresql() -> bool:
-    """当前是否使用 PostgreSQL。"""
-    return _PG_AVAILABLE
+    """当前是否使用 PostgreSQL（仅当连接池已成功建立时返回 True）。"""
+    return _PG_AVAILABLE and _PG_POOL is not None
 
+
+def db_mode() -> str:
+    """返回当前数据库模式，供启动横幅展示。"""
+    if _PG_AVAILABLE:
+        if _PG_POOL is not None:
+            return f"PostgreSQL ({_PG_URL.split('@')[-1] if '@' in _PG_URL else _PG_URL})"
+        return f"PostgreSQL 连接失败→回退 SQLite（{_PG_FAIL_REASON or '未知原因'}）"
+    return "SQLite"
+
+
+# ── DDL 翻译 ─────────────────────────────────────────────
 
 def _translate_ddl(sql: str) -> str:
     """SQLite DDL → PostgreSQL DDL（仅必要转换）。"""
@@ -38,6 +51,7 @@ def _translate_ddl(sql: str) -> str:
 # ── SQLite 适配器（原有行为）────────────────────────────────
 
 def _open_sqlite(db_path: Path) -> sqlite3.Connection:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
@@ -49,61 +63,64 @@ def _open_sqlite(db_path: Path) -> sqlite3.Connection:
 # ── PostgreSQL 适配器 ────────────────────────────────────────
 
 _PG_POOL = None
+_PG_RETRIES = 5        # 等待 PG 就绪的重试次数
+_PG_RETRY_DELAY = 3     # 每次重试间隔（秒）
 
 
 def _pg_pool():
-    """惰性创建 PostgreSQL 连接池（线程安全，最小 2 最大 10）。"""
-    global _PG_POOL
+    """惰性创建 PostgreSQL 连接池（带重试，应对容器启动时序）。"""
+    global _PG_POOL, _PG_FAIL_REASON
     if _PG_POOL is not None:
         return _PG_POOL
     try:
         from psycopg2 import pool as pg_pool_mod
-        from psycopg2 import extras as pg_extras
-        import urllib.parse
-
-        url = urllib.parse.urlparse(_PG_URL)
-        _PG_POOL = pg_pool_mod.ThreadedConnectionPool(
-            2, 10,
-            host=url.hostname,
-            port=url.port or 5432,
-            user=url.username,
-            password=url.password,
-            dbname=url.path.lstrip("/"),
-        )
-        _logger.info("PostgreSQL 连接池已创建：%s:%d/%s",
-                     url.hostname, url.port or 5432, url.path.lstrip("/"))
-        return _PG_POOL
     except ImportError:
-        _logger.warning("psycopg2 未安装，回退 SQLite")
+        _PG_FAIL_REASON = "psycopg2 未安装"
+        _logger.warning(_PG_FAIL_REASON)
         return None
-    except Exception as e:
-        _logger.error("PostgreSQL 连接失败：%s，回退 SQLite", e)
-        return None
+
+    import urllib.parse
+    url = urllib.parse.urlparse(_PG_URL)
+
+    for attempt in range(1, _PG_RETRIES + 1):
+        try:
+            _PG_POOL = pg_pool_mod.ThreadedConnectionPool(
+                2, 10,
+                host=url.hostname,
+                port=url.port or 5432,
+                user=url.username,
+                password=url.password,
+                dbname=url.path.lstrip("/"),
+            )
+            _logger.info("PostgreSQL 连接池已创建：%s:%d/%s（第 %d 次尝试）",
+                         url.hostname, url.port or 5432, url.path.lstrip("/"), attempt)
+            _PG_FAIL_REASON = None
+            return _PG_POOL
+        except Exception as e:
+            _PG_FAIL_REASON = str(e)[:200]
+            if attempt < _PG_RETRIES:
+                _logger.info("PostgreSQL 尚未就绪（%d/%d），%d 秒后重试…",
+                             attempt, _PG_RETRIES, _PG_RETRY_DELAY)
+                time.sleep(_PG_RETRY_DELAY)
+            else:
+                _logger.error("PostgreSQL 连接失败（已重试 %d 次）：%s", _PG_RETRIES, e)
+    return None
 
 
 class _PgConnection:
-    """包装 psycopg2 连接，对外暴露与 sqlite3 兼容的接口。
-
-    - execute(sql, params) → cursor（有 fetchone/fetchall/lastrowid）
-    - row_factory → 自动 DictRow
-    - commit / rollback / close
-    """
+    """包装 psycopg2 连接，对外暴露与 sqlite3 兼容的接口。"""
 
     def __init__(self, conn):
         self._conn = conn
-        self._cursor = None
 
     def execute(self, sql, params=None):
-        from psycopg2 import extras as pg_extras
         sql = _translate_ddl(sql)
         self._cursor = self._conn.cursor()
         if params:
-            # psycopg2 用 %s 而非 ?——把 ? 替换为 %s
             sql = sql.replace("?", "%s")
             self._cursor.execute(sql, params)
         else:
             self._cursor.execute(sql)
-        # 包装 fetchone/fetchall 返回 DictRow
         if self._cursor.description:
             cols = [d[0] for d in self._cursor.description]
 
@@ -144,19 +161,17 @@ def get_connection(app_name: str, db_path: Path = None) -> object:
     db_path: SQLite 模式下的 .db 文件路径。
     """
     if not _PG_AVAILABLE:
-        if db_path and db_path.is_file() is not None:
-            return _open_sqlite(db_path or Path(":memory:"))
         return _open_sqlite(db_path or Path(":memory:"))
 
     pool = _pg_pool()
     if pool is None:
+        _logger.warning("PG 连接池不可用，回退 SQLite：[%s]", _PG_FAIL_REASON or "未知")
         return _open_sqlite(db_path or Path(":memory:"))
 
     conn = pool.getconn()
     schema = app_name.replace("/", "_").replace("-", "_")
 
     try:
-        # 确保 schema 存在
         curs = conn.cursor()
         curs.execute(
             "SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = %s",
@@ -164,10 +179,9 @@ def get_connection(app_name: str, db_path: Path = None) -> object:
         if not curs.fetchone():
             curs.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
         conn.commit()
-        # 限定 search_path 到该 schema
         curs.execute(f"SET search_path TO {schema}")
         conn.commit()
     except Exception as e:
-        _logger.warning("Schema 初始化失败：%s", e)
+        _logger.warning("Schema 初始化失败 [%s]：%s", schema, e)
 
     return _PgConnection(conn)
