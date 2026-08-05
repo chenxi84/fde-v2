@@ -357,10 +357,14 @@ def _log_integration_call(handle, service, caller_group, params, status, dur_ms,
         from fde_platform import integration
         target_group = handle.group or "-"
         req = str({k: str(v)[:50] for k, v in (params or {}).items()})[:200]
-        # 判定类型：外部适配器 → external；跨组 → cross_group
+        # 判定类型：外部适配器 / 网关应用 → external；跨组 → cross_group
+        is_gw, gw_target = integration._is_gateway_app(handle.cls, handle.qualname)
         if integration._is_external_adapter(service):
             target_sys = service[1:].split("_")[0].upper()
             integration.log_call(handle.qualname, service, target_sys, req, status, dur_ms,
+                                 error_msg=error[:200])
+        elif is_gw and not service.startswith("_"):
+            integration.log_call(handle.qualname, service, gw_target, req, status, dur_ms,
                                  error_msg=error[:200])
         elif caller_group and target_group and caller_group != target_group:
             target = f"{target_group}/{service}"

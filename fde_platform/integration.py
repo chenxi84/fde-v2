@@ -94,29 +94,50 @@ def _is_external_adapter(method_name: str) -> bool:
     return False
 
 
+def _is_gateway_app(cls, app_name: str) -> tuple:
+    """判定是否为网关应用（封装外部系统调用）。返回 (是否网关, 目标系统名)。"""
+    # 1. 应用名含 gateway
+    if "gateway" in app_name.lower():
+        parts = app_name.split("/")[-1].replace("_gateway", "")
+        return True, parts.upper()
+    # 2. 类内有 _http_call 辅助方法
+    if hasattr(cls, "_http_call") and callable(getattr(cls, "_http_call", None)):
+        return True, app_name.split("/")[-1].upper()
+    return False, ""
+
+
 def discover(platform) -> list[dict]:
-    """扫描全部应用，发现外部适配器与跨组调用。返回 [{目标, 应用, 方法, 类型, 当前配置状态}]。"""
+    """扫描全部应用，发现外部适配器与跨组调用。
+    识别两类：1) `_` 前缀外部适配器方法  2) 网关应用的全部公共服务。
+    """
     results = []
     for qn in platform.app_names():
         h = platform.handle(qn)
+        is_gw, gw_target = _is_gateway_app(h.cls, qn)
+
         for name in dir(h.cls):
-            if not name.startswith("_") or not callable(getattr(h.cls, name, None)):
+            if not callable(getattr(h.cls, name, None)):
                 continue
-            if not _is_external_adapter(name):
-                continue
-            parts = name[1:].split("_", 1)  # _sap_sync_order → sap
-            target_system = parts[0].upper() if parts else "UNKNOWN"
-            results.append({
-                "app_name": qn,
-                "method_name": name,
-                "target": target_system,
-                "kind": "external",
-                "url": None,
-                "timeout_s": 30,
-                "retries": 1,
-                "mock_enabled": False,
-                "configured": _is_configured(qn, name),
-            })
+
+            # 类别 1：`_` 前缀外部适配器
+            if name.startswith("_") and _is_external_adapter(name):
+                parts = name[1:].split("_", 1)
+                target = parts[0].upper() if parts else "UNKNOWN"
+                results.append({
+                    "app_name": qn, "method_name": name, "target": target,
+                    "kind": "external", "url": None, "timeout_s": 30,
+                    "retries": 1, "mock_enabled": False,
+                    "configured": _is_configured(qn, name),
+                })
+
+            # 类别 2：网关应用的公共服务
+            elif is_gw and not name.startswith("_"):
+                results.append({
+                    "app_name": qn, "method_name": name, "target": gw_target,
+                    "kind": "external", "url": None, "timeout_s": 30,
+                    "retries": 1, "mock_enabled": False,
+                    "configured": _is_configured(qn, name),
+                })
     return results
 
 
