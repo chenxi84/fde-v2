@@ -27,19 +27,25 @@ def _get_conn() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS endpoints (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            app_name    TEXT NOT NULL,           -- 所属应用 qualname
-            method_name TEXT NOT NULL,           -- 方法名（_sap_xxx 或跨组服务名）
-            target      TEXT NOT NULL,           -- 目标系统/应用组标识
-            kind        TEXT NOT NULL DEFAULT 'external',  -- external / cross_group
-            url         TEXT,                    -- 外部系统 URL
-            timeout_s   INTEGER DEFAULT 30,
-            retries     INTEGER DEFAULT 1,
-            mock_enabled INTEGER DEFAULT 0,      -- 0=真实调用 1=Mock
-            mock_data   TEXT,                    -- Mock 返回的 JSON
-            enabled     INTEGER DEFAULT 1,
-            created_at  TEXT DEFAULT (datetime('now','localtime')),
-            updated_at  TEXT DEFAULT (datetime('now','localtime'))
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            app_name       TEXT NOT NULL,
+            method_name    TEXT NOT NULL,
+            target         TEXT NOT NULL,
+            kind           TEXT NOT NULL DEFAULT 'external',
+            url            TEXT,
+            http_method    TEXT DEFAULT 'POST',
+            content_type   TEXT DEFAULT 'application/json',
+            auth_type      TEXT DEFAULT 'none',
+            auth_param_name TEXT,
+            auth_credential TEXT,
+            extra_headers  TEXT,
+            timeout_s      INTEGER DEFAULT 30,
+            retries        INTEGER DEFAULT 1,
+            mock_enabled   INTEGER DEFAULT 0,
+            mock_data      TEXT,
+            enabled        INTEGER DEFAULT 1,
+            created_at     TEXT DEFAULT (datetime('now','localtime')),
+            updated_at     TEXT DEFAULT (datetime('now','localtime'))
         );
 
         CREATE TABLE IF NOT EXISTS call_logs (
@@ -59,7 +65,53 @@ def _get_conn() -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_call_logs_created ON call_logs(created_at);
     """)
     conn.commit()
+    # 迁移旧表：补列
+    for col, col_def in [("http_method", "TEXT DEFAULT 'POST'"),
+                          ("content_type", "TEXT DEFAULT 'application/json'"),
+                          ("auth_type", "TEXT DEFAULT 'none'"),
+                          ("auth_param_name", "TEXT"),
+                          ("auth_credential", "TEXT"),
+                          ("extra_headers", "TEXT")]:
+        try:
+            conn.execute(f"ALTER TABLE endpoints ADD COLUMN {col} {col_def}")
+        except sqlite3.OperationalError:
+            pass
+    conn.commit()
     return conn
+
+
+# ── 凭证加密（共用 llm_master.key）─────────────────────────
+
+def _fernet():
+    try:
+        from cryptography.fernet import Fernet
+    except ImportError:
+        return None
+    key_path = PROJECT_ROOT / "config" / "llm_master.key"
+    if not key_path.exists():
+        return None
+    return Fernet(key_path.read_bytes().strip())
+
+
+def _encrypt(text: str) -> str:
+    if not text:
+        return ""
+    f = _fernet()
+    if f is None:
+        return text  # 密钥不存在时明文存储（开发环境）
+    return f.encrypt(text.encode()).decode()
+
+
+def _decrypt(data: str) -> str:
+    if not data:
+        return ""
+    f = _fernet()
+    if f is None:
+        return data
+    try:
+        return f.decrypt(data.encode()).decode()
+    except Exception:
+        return data  # 解密失败返回原文
 
 
 # ── 发现 ──────────────────────────────────────────────────
@@ -174,30 +226,56 @@ def list_endpoints() -> list[dict]:
         "SELECT * FROM endpoints ORDER BY kind, target, app_name"
     ).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    result = []
+    for r in rows:
+        d = dict(r)
+        cred = _decrypt(d.get("auth_credential") or "")
+        if cred:
+            d["auth_credential_masked"] = "****" + cred[-4:] if len(cred) > 4 else "****"
+        else:
+            d["auth_credential_masked"] = ""
+        d.pop("auth_credential", None)
+        try:
+            d["extra_headers"] = json.loads(d.get("extra_headers") or "{}")
+        except json.JSONDecodeError:
+            d["extra_headers"] = {}
+        result.append(d)
+    return result
 
 
 def save_endpoint(app_name: str, method_name: str, target: str, kind: str = "external",
-                  url: str = None, timeout_s: int = 30, retries: int = 1,
+                  url: str = None, http_method: str = "POST", content_type: str = "application/json",
+                  auth_type: str = "none", auth_param_name: str = None,
+                  auth_credential: str = None, extra_headers: dict = None,
+                  timeout_s: int = 30, retries: int = 1,
                   mock_enabled: bool = False, mock_data: str = None) -> int:
     conn = _get_conn()
+    extra_json = json.dumps(extra_headers or {}, ensure_ascii=False)
+    encrypted = _encrypt(auth_credential) if auth_credential else None
     existing = conn.execute(
         "SELECT id FROM endpoints WHERE app_name=? AND method_name=?",
         (app_name, method_name)
     ).fetchone()
     if existing:
         conn.execute(
-            """UPDATE endpoints SET target=?, kind=?, url=?, timeout_s=?, retries=?,
-               mock_enabled=?, mock_data=?, updated_at=datetime('now','localtime')
-               WHERE id=?""",
-            (target, kind, url, timeout_s, retries, 1 if mock_enabled else 0, mock_data, existing["id"])
+            """UPDATE endpoints SET target=?, kind=?, url=?, http_method=?, content_type=?,
+               auth_type=?, auth_param_name=?, auth_credential=?, extra_headers=?,
+               timeout_s=?, retries=?, mock_enabled=?, mock_data=?,
+               updated_at=datetime('now','localtime') WHERE id=?""",
+            (target, kind, url, http_method, content_type, auth_type, auth_param_name,
+             encrypted, extra_json, timeout_s, retries,
+             1 if mock_enabled else 0, mock_data, existing["id"])
         )
         eid = existing["id"]
     else:
         cur = conn.execute(
-            """INSERT INTO endpoints (app_name, method_name, target, kind, url, timeout_s,
-               retries, mock_enabled, mock_data) VALUES (?,?,?,?,?,?,?,?,?)""",
-            (app_name, method_name, target, kind, url, timeout_s, retries, 1 if mock_enabled else 0, mock_data)
+            """INSERT INTO endpoints (app_name, method_name, target, kind, url,
+               http_method, content_type, auth_type, auth_param_name, auth_credential,
+               extra_headers, timeout_s, retries, mock_enabled, mock_data)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (app_name, method_name, target, kind, url, http_method, content_type,
+             auth_type, auth_param_name, encrypted, extra_json,
+             timeout_s, retries, 1 if mock_enabled else 0, mock_data)
         )
         eid = cur.lastrowid
     conn.commit()
@@ -213,6 +291,22 @@ def delete_endpoint(endpoint_id: int):
 
 
 def get_endpoint(app_name: str, method_name: str) -> dict | None:
+    """取端点完整配置（含解密后的凭证，供真实调用使用）。"""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT * FROM endpoints WHERE app_name=? AND method_name=?",
+        (app_name, method_name)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    d = dict(row)
+    d["auth_credential"] = _decrypt(d.get("auth_credential") or "")
+    try:
+        d["extra_headers"] = json.loads(d.get("extra_headers") or "{}")
+    except json.JSONDecodeError:
+        d["extra_headers"] = {}
+    return d
     conn = _get_conn()
     row = conn.execute(
         "SELECT * FROM endpoints WHERE app_name=? AND method_name=?",

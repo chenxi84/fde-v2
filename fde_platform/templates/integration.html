@@ -57,9 +57,10 @@
     <span class="badge-e {{ 'cross' if ep.kind == 'cross_group' else 'ext' }}">{{ '跨组' if ep.kind == 'cross_group' else '外部' }}</span>
     <b>{{ ep.app_name }}</b> · <code>{{ ep.method_name }}</code>
     → {{ ep.target }}
+    {% if ep.auth_type and ep.auth_type != 'none' %}<span style="font-size:10px;color:var(--accent)">{{ ep.auth_type }}</span>{% endif %}
     {% if ep.mock_enabled %}<span class="badge-e mock">Mock</span>{% endif %}
     <div style="font-size:11px;color:var(--muted)">
-      {% if ep.url %}{{ ep.url }} · {{ ep.timeout_s }}s · 重试{{ ep.retries }}{% endif %}
+      {% if ep.url %}{{ ep.http_method or 'POST' }} {{ ep.url }} · {{ ep.timeout_s }}s{% endif %}
     </div>
   </div>
   <button class="btn-xs" onclick="editEp({{ ep|tojson }})">编辑</button>
@@ -80,6 +81,21 @@
       <input type="hidden" name="kind">
       <label>目标系统</label><input type="text" name="target" required>
       <label>URL</label><input type="text" name="url" placeholder="https://">
+      <div class="row">
+        <div><label>HTTP 方法</label><select name="http_method"><option>POST</option><option>GET</option><option>PUT</option><option>DELETE</option></select></div>
+        <div><label>Content-Type</label><select name="content_type"><option>application/json</option><option>application/xml</option><option>text/xml</option><option>application/x-www-form-urlencoded</option></select></div>
+      </div>
+      <label>鉴权方式</label><select name="auth_type" onchange="toggleAuth(this.value)">
+        <option value="none">无鉴权</option><option value="basic">Basic Auth</option><option value="bearer">Bearer Token</option>
+        <option value="apikey_header">API Key (Header)</option><option value="apikey_query">API Key (Query)</option>
+      </select>
+      <div id="auth-params" style="display:none">
+        <label>凭证参数名（Header 名 / Query 参数名 / 用户名:密码）</label>
+        <input type="text" name="auth_param_name" placeholder="Authorization 或 api_key">
+        <label>凭证值（Token / API Key / 密码，保存即加密）</label>
+        <input type="password" name="auth_credential" placeholder="sk-xxx 或 密码">
+      </div>
+      <label>额外 Headers（JSON）</label><textarea name="extra_headers" rows="2" placeholder='{"X-Tenant-Id":"123"}'></textarea>
       <div class="row">
         <div><label>超时（秒）</label><input type="number" name="timeout_s" value="30"></div>
         <div><label>重试次数</label><input type="number" name="retries" value="1"></div>
@@ -116,17 +132,27 @@ async function scan() {
   ).join('');
 }
 
+function toggleAuth(v) {
+  document.getElementById('auth-params').style.display = v === 'none' ? 'none' : 'block';
+}
 function addEp(ep) {
   const f = document.getElementById('ep-form');
-  f.app_name.value = ep.app_name;
-  f.method_name.value = ep.method_name;
+  f.app_name.value = ep.app_name || '';
+  f.method_name.value = ep.method_name || '';
   f.kind.value = ep.kind || 'external';
   f.target.value = ep.target || '';
   f.url.value = ep.url || '';
+  f.http_method.value = ep.http_method || 'POST';
+  f.content_type.value = ep.content_type || 'application/json';
+  f.auth_type.value = ep.auth_type || 'none';
+  f.auth_param_name.value = ep.auth_param_name || '';
+  f.auth_credential.value = '';
+  f.extra_headers.value = ep.extra_headers ? JSON.stringify(ep.extra_headers) : '';
   f.timeout_s.value = ep.timeout_s || 30;
   f.retries.value = ep.retries || 1;
   f.mock_enabled.checked = ep.mock_enabled;
   f.mock_data.value = ep.mock_data || '';
+  toggleAuth(ep.auth_type || 'none');
   document.getElementById('edit-modal').style.display = 'block';
 }
 
@@ -151,11 +177,17 @@ function closeModal() {
 document.getElementById('ep-form').onsubmit = async function(e) {
   e.preventDefault();
   const f = e.target;
+  let extra = {};
+  try { extra = JSON.parse(f.extra_headers.value || '{}'); } catch(_) {}
   const data = {
     app_name: f.app_name.value, method_name: f.method_name.value,
     target: f.target.value, kind: f.kind.value,
-    url: f.url.value || null, timeout_s: parseInt(f.timeout_s.value)||30,
-    retries: parseInt(f.retries.value)||1,
+    url: f.url.value || null,
+    http_method: f.http_method.value, content_type: f.content_type.value,
+    auth_type: f.auth_type.value, auth_param_name: f.auth_param_name.value || null,
+    auth_credential: f.auth_credential.value || null,
+    extra_headers: extra,
+    timeout_s: parseInt(f.timeout_s.value)||30, retries: parseInt(f.retries.value)||1,
     mock_enabled: f.mock_enabled.checked, mock_data: f.mock_data.value||null,
   };
   await fetch('/api/integration/endpoints', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});

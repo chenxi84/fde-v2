@@ -41,3 +41,5 @@ spike_out/
 *.swp
 *.swo
 *~
+app/crm/
+view/crm/

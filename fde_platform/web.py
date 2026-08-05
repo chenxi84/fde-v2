@@ -790,6 +790,12 @@ def api_integration_save():
         target=d.get("target", ""),
         kind=d.get("kind", "external"),
         url=d.get("url") or None,
+        http_method=d.get("http_method", "POST"),
+        content_type=d.get("content_type", "application/json"),
+        auth_type=d.get("auth_type", "none"),
+        auth_param_name=d.get("auth_param_name") or None,
+        auth_credential=d.get("auth_credential") or None,
+        extra_headers=d.get("extra_headers") or None,
         timeout_s=int(d.get("timeout_s", 30)),
         retries=int(d.get("retries", 1)),
         mock_enabled=bool(d.get("mock_enabled")),
@@ -806,31 +812,72 @@ def api_integration_delete(eid):
 
 @app.route("/api/integration/test/<int:eid>", methods=["POST"])
 def api_integration_test(eid):
-    ep = [e for e in integration.list_endpoints() if e["id"] == eid]
-    if not ep:
+    # 用 get_endpoint 获取含已解密凭证的完整配置
+    eps = integration.list_endpoints()
+    ep_list = [e for e in eps if e["id"] == eid]
+    if not ep_list:
         return jsonify({"status": "error", "message": "端点不存在"}), 404
-    ep = ep[0]
+    summary = ep_list[0]
+    full = integration.get_endpoint(summary["app_name"], summary["method_name"])
+    if not full:
+        return jsonify({"status": "error", "message": "端点不存在"}), 404
+
     t0 = time.time()
     try:
-        if ep["mock_enabled"]:
-            integration.log_call(ep["app_name"], ep["method_name"], ep["target"],
-                                 "连通测试", "mock", 0, response_summary=ep.get("mock_data") or "{}")
-            return jsonify({"status": "ok", "result": "mock", "data": json.loads(ep["mock_data"] or "{}")})
-        if ep["url"]:
-            import urllib.request
-            req = urllib.request.Request(ep["url"], method="GET")
-            resp = urllib.request.urlopen(req, timeout=ep["timeout_s"])
-            body = resp.read().decode()[:1000]
-            dur = int((time.time() - t0) * 1000)
-            integration.log_call(ep["app_name"], ep["method_name"], ep["target"],
-                                 "连通测试", "success", dur, response_summary=body[:200])
-            return jsonify({"status": "ok", "result": "success", "code": resp.status, "duration_ms": dur})
-        return jsonify({"status": "error", "message": "未配置 URL 且未开启 Mock"}), 400
+        if full["mock_enabled"]:
+            integration.log_call(full["app_name"], full["method_name"], full["target"],
+                                 "Mock 测试", "mock", 0, response_summary=full.get("mock_data") or "{}")
+            return jsonify({"status": "ok", "result": "mock"})
+
+        if not full.get("url"):
+            return jsonify({"status": "error", "message": "未配置 URL 且未开启 Mock"}), 400
+
+        import urllib.request
+        import base64
+
+        body_data = d.get("test_body") or None
+        req = urllib.request.Request(full["url"], method=full.get("http_method", "POST"))
+        req.add_header("Content-Type", full.get("content_type", "application/json"))
+
+        # 额外自定义 header
+        for k, v in (full.get("extra_headers") or {}).items():
+            req.add_header(k, v)
+
+        # 鉴权
+        auth_type = full.get("auth_type", "none")
+        cred = full.get("auth_credential") or ""
+        param_name = full.get("auth_param_name") or ""
+        if auth_type == "basic" and cred:
+            encoded = base64.b64encode(cred.encode()).decode()
+            req.add_header("Authorization", f"Basic {encoded}")
+        elif auth_type == "bearer" and cred:
+            req.add_header("Authorization", f"Bearer {cred}")
+        elif auth_type == "apikey_header" and param_name and cred:
+            req.add_header(param_name, cred)
+        elif auth_type == "apikey_query":
+            sep = "&" if "?" in full["url"] else "?"
+            req.full_url = full["url"] + f"{sep}{param_name}={cred}"
+
+        if body_data and full.get("http_method", "POST") in ("POST", "PUT", "PATCH"):
+            data_bytes = json.dumps(body_data).encode() if isinstance(body_data, dict) else str(body_data).encode()
+            resp = urllib.request.urlopen(req, data=data_bytes, timeout=full.get("timeout_s", 30))
+        else:
+            resp = urllib.request.urlopen(req, timeout=full.get("timeout_s", 30))
+
+        resp_body = resp.read().decode(errors="replace")[:2000]
+        dur = int((time.time() - t0) * 1000)
+        integration.log_call(full["app_name"], full["method_name"], full["target"],
+                             f"{full.get('http_method','POST')} {full['url']}", "success", dur,
+                             response_summary=resp_body[:500])
+        return jsonify({"status": "ok", "code": resp.status, "duration_ms": dur,
+                        "body_preview": resp_body[:500]})
+
     except Exception as e:
         dur = int((time.time() - t0) * 1000)
-        integration.log_call(ep["app_name"], ep["method_name"], ep["target"],
-                             "连通测试", "error", dur, error_msg=str(e)[:200])
-        return jsonify({"status": "error", "message": str(e)[:200], "duration_ms": dur})
+        integration.log_call(full["app_name"], full["method_name"], full["target"],
+                             f"{full.get('http_method','POST')} {full['url']}", "error", dur,
+                             error_msg=str(e)[:500])
+        return jsonify({"status": "error", "message": str(e)[:500], "duration_ms": dur})
 
 
 @app.route("/api/integration/logs")
