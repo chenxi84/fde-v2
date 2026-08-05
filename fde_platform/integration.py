@@ -215,7 +215,7 @@ def stats_by_target() -> list[dict]:
     """按目标系统统计调用情况。"""
     conn = _get_conn()
     rows = conn.execute("""
-        SELECT target, kind,
+        SELECT target,
                COUNT(*) AS total,
                SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS success_count,
                SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) AS error_count,
@@ -224,7 +224,7 @@ def stats_by_target() -> list[dict]:
                MAX(duration_ms) AS max_duration_ms,
                COUNT(DISTINCT app_name) AS app_count
         FROM call_logs
-        GROUP BY target, kind
+        GROUP BY target
         ORDER BY total DESC
     """).fetchall()
     conn.close()
