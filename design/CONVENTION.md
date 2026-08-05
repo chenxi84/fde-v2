@@ -182,7 +182,7 @@ class Todo:
     def _init_db(self):
         self.db.execute("""
             CREATE TABLE IF NOT EXISTS todo (
-                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,  -- SQLite；PG 部署时平台自动转为 IDENTITY
                 title     TEXT    NOT NULL,
                 owner_no  TEXT    NOT NULL,
                 done      INTEGER NOT NULL DEFAULT 0

@@ -108,10 +108,28 @@ def _pg_pool():
     return None
 
 
+class _PgDictRow(dict):
+    """兼容 sqlite3.Row 的字典行：支持 row['name'] 和 row[0] 两种访问。"""
+
+    def __init__(self, cols, values):
+        super().__init__({cols[i]: values[i] for i in range(len(cols))})
+        self._keys = list(cols)
+        self._values = list(values)
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._values[key]
+        return super().__getitem__(key)
+
+    def keys(self):
+        return self._keys
+
+    def __iter__(self):
+        return iter(self._keys)
+
+
 class _PgCursorWrapper:
-    """包装 psycopg2 cursor，返回 DictRow 并暴露 lastrowid。
-    同时将 PG 返回的 datetime/Decimal 等类型转为 JSON 可序列化的值。
-    """
+    """包装 psycopg2 cursor，返回 _PgDictRow 并暴露 lastrowid。"""
 
     def __init__(self, cursor):
         from datetime import datetime, date
@@ -130,14 +148,17 @@ class _PgCursorWrapper:
             return str(value)
         return value
 
+    def _make_row(self, values):
+        return _PgDictRow(self._cols, [self._to_jsonable(v) for v in values])
+
     def fetchone(self):
         row = self._cur.fetchone()
         if row is None:
             return None
-        return {self._cols[i]: self._to_jsonable(row[i]) for i in range(len(row))}
+        return self._make_row(row)
 
     def fetchall(self):
-        return [{self._cols[i]: self._to_jsonable(r[i]) for i in range(len(r))} for r in self._cur.fetchall()]
+        return [self._make_row(r) for r in self._cur.fetchall()]
 
     def close(self):
         self._cur.close()

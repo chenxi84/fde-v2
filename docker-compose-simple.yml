@@ -1,0 +1,12 @@
+# 内网简化部署：仅 FDE 容器，SQLite + Waitress，不依赖外部镜像
+services:
+  fde-v2:
+    build: .
+    environment:
+      - PLATFORM_HOST=0.0.0.0
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./config:/app/config
+      - ./app:/app/app
+    restart: always
