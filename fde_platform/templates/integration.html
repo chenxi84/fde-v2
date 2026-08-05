@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}集成接口 · FDE 平台{% endblock %}
+{% block content %}
+<style>
+  .stat-row { display:flex; gap:16px; margin:12px 0; }
+  .stat-card { flex:1; min-width:140px; background:var(--card); border:1px solid var(--line);
+               border-radius:10px; padding:16px; text-align:center; }
+  .stat-card .n { font-size:28px; font-weight:700; }
+  .stat-card .l { font-size:12px; color:var(--muted); margin-top:4px; }
+  .stat-card.ok .n { color:#16a34a; }
+  .stat-card.err .n { color:#dc2626; }
+  .stat-card.mock .n { color:var(--amber-deep); }
+  .endpoint-row { border-bottom:1px solid var(--line); padding:12px 0; }
+  .badge-e { display:inline-block; font-size:11px; padding:1px 8px; border-radius:8px; }
+  .badge-e.ext { background:#e0e7ff; color:#3730a3; }
+  .badge-e.cross { background:#fef3c7; color:#92400e; }
+  .badge-e.mock { background:#ecfdf5; color:#065f46; }
+  .btn-xs { font-size:11px; padding:2px 10px; margin-left:6px; }
+  .log-line { font-size:12px; padding:4px 8px; margin:2px 0; border-radius:4px; }
+  .log-line.ok { background:#f0fdf4; }
+  .log-line.err { background:#fef2f2; }
+  .log-line.mock { background:#fffbeb; }
+</style>
+
+<h3>集成接口管理</h3>
+
+<!-- 统计 -->
+<div class="stat-row">
+  {% for s in stats %}
+  <div class="stat-card {{ s.status }}">
+    <div class="n">{{ s.total }}</div>
+    <div class="l">{{ s.target }} · 成功{{ s.success_count }}/失败{{ s.error_count }}/Mock{{ s.mock_count }}</div>
+    <div class="l">平均 {{ '%.0f' % s.avg_duration_ms if s.avg_duration_ms else '-' }} ms</div>
+  </div>
+  {% endfor %}
+  {% if not stats %}
+  <div class="stat-card"><div class="l">暂无调用记录</div></div>
+  {% endif %}
+</div>
+
+<!-- 操作 -->
+<div style="display:flex; gap:12px; margin:12px 0">
+  <button onclick="discover()">扫描接口</button>
+  <button class="ghost" onclick="location.reload()">刷新</button>
+</div>
+
+<!-- 端点列表 -->
+<div class="section-title">已配置端点（{{ endpoints|length }}）</div>
+{% for ep in endpoints %}
+<div class="endpoint-row">
+  <div>
+    <span class="badge-e {{ 'cross' if ep.kind == 'cross_group' else 'ext' }}">{{ '跨组' if ep.kind == 'cross_group' else '外部' }}</span>
+    <b>{{ ep.app_name }}</b> · <code>{{ ep.method_name }}</code>
+    → <span style="color:var(--accent)">{{ ep.target }}</span>
+    {% if ep.mock_enabled %}<span class="badge-e mock">Mock</span>{% endif %}
+  </div>
+  <div style="margin-top:4px; font-size:12px; color:var(--muted)">
+    {% if ep.url %}URL: {{ ep.url }} · 超时: {{ ep.timeout_s }}s · 重试: {{ ep.retries }}{% endif %}
+    {% if ep.mock_data %}<div>Mock: <code>{{ ep.mock_data[:100] }}</code></div>{% endif %}
+  </div>
+  <div style="margin-top:4px">
+    <button class="btn-xs" onclick="editEndpoint({{ ep|tojson }})">编辑</button>
+    <button class="btn-xs" onclick="testEndpoint({{ ep.id }})">测试</button>
+    <button class="btn-xs" style="color:#dc2626" onclick="deleteEndpoint({{ ep.id }})">删除</button>
+  </div>
+</div>
+{% else %}
+<div class="muted">暂无配置。点击「扫描接口」发现可用端点。</div>
+{% endfor %}
+
+<!-- 编辑模态 -->
+<div id="edit-modal" style="display:none" class="card"
+     x-data="{open:false}">
+  <h4 id="modal-title">配置端点</h4>
+  <form id="ep-form">
+    <input type="hidden" name="app_name">
+    <input type="hidden" name="method_name">
+    <input type="hidden" name="kind">
+    <label>目标系统</label><input type="text" name="target" required>
+    <label>URL（外部系统必填）</label><input type="text" name="url">
+    <div class="row">
+      <div><label>超时（秒）</label><input type="number" name="timeout_s" value="30"></div>
+      <div><label>重试次数</label><input type="number" name="retries" value="1"></div>
+    </div>
+    <label><input type="checkbox" name="mock_enabled" style="width:auto"> 启用 Mock</label>
+    <label>Mock 数据（JSON）</label><textarea name="mock_data" rows="3" placeholder='{"status":"ok"}'></textarea>
+    <button type="submit">保存</button>
+    <button type="button" class="ghost" onclick="document.getElementById('edit-modal').style.display='none'">取消</button>
+  </form>
+</div>
+
+<!-- 日志 -->
+<div class="section-title" style="margin-top:20px">最近调用日志</div>
+<div id="logs-container">加载中...</div>
+
+<script>
+async function discover() {
+  const r = await fetch('/api/integration/discover');
+  const d = await r.json();
+  let msg = '发现外部适配器：' + d.data.external.length + ' 个\n';
+  msg += '发现跨组调用：' + d.data.cross_group.length + ' 个\n\n';
+  msg += '外部适配器：\n' + d.data.external.map(e => `  ${e.app_name}.${e.method_name} → ${e.target}`).join('\n');
+  alert(msg);
+}
+
+async function testEndpoint(id) {
+  const r = await fetch('/api/integration/test/' + id, {method:'POST'});
+  const d = await r.json();
+  alert(JSON.stringify(d, null, 2));
+}
+
+function editEndpoint(ep) {
+  const f = document.getElementById('ep-form');
+  f.app_name.value = ep.app_name || '';
+  f.method_name.value = ep.method_name || '';
+  f.kind.value = ep.kind || 'external';
+  f.target.value = ep.target || '';
+  f.url.value = ep.url || '';
+  f.timeout_s.value = ep.timeout_s || 30;
+  f.retries.value = ep.retries || 1;
+  f.mock_enabled.checked = ep.mock_enabled;
+  f.mock_data.value = ep.mock_data || '';
+  document.getElementById('edit-modal').style.display = 'block';
+}
+
+async function deleteEndpoint(id) {
+  if (!confirm('确认删除？')) return;
+  await fetch('/api/integration/endpoints/' + id, {method:'DELETE'});
+  location.reload();
+}
+
+document.getElementById('ep-form').onsubmit = async function(e) {
+  e.preventDefault();
+  const f = e.target;
+  const data = {
+    app_name: f.app_name.value,
+    method_name: f.method_name.value,
+    target: f.target.value,
+    kind: f.kind.value,
+    url: f.url.value || null,
+    timeout_s: parseInt(f.timeout_s.value) || 30,
+    retries: parseInt(f.retries.value) || 1,
+    mock_enabled: f.mock_enabled.checked,
+    mock_data: f.mock_data.value || null,
+  };
+  await fetch('/api/integration/endpoints', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+  location.reload();
+};
+
+// Load logs
+(async function() {
+  const r = await fetch('/api/integration/logs?limit=30');
+  const d = await r.json();
+  const c = document.getElementById('logs-container');
+  if (!d.data.length) { c.innerHTML = '<div class="muted">暂无调用日志</div>'; return; }
+  c.innerHTML = d.data.map(l =>
+    '<div class="log-line ' + l.status + '">' +
+    '<b>' + l.target + '</b> · ' + l.app_name + '.' + l.method_name +
+    ' <span style="color:' + (l.status==='error'?'#dc2626':'#16a34a') + '">' + l.status + '</span>' +
+    ' · ' + (l.duration_ms||0) + 'ms' +
+    ' · ' + (l.created_at||'') +
+    (l.error_msg ? '<div style="color:#dc2626">' + l.error_msg + '</div>' : '') +
+    '</div>'
+  ).join('');
+})();
+</script>
+{% endblock %}

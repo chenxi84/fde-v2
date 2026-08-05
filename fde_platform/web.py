@@ -36,7 +36,7 @@ from flask import (
 )
 
 from fde import FdeError
-from fde_platform import builtin_tools, scanner, users, view_registry
+from fde_platform import builtin_tools, integration, scanner, users, view_registry
 from fde_platform.logging_config import init_logging
 from fde_platform.runtime import FdePlatform
 
@@ -755,3 +755,91 @@ def api_agent_session_delete(app_name, sid):
 @app.errorhandler(404)
 def page_not_found(e):
     return render_template("error.html", message="页面不存在"), 404
+
+
+# ── 集成接口管理 ──────────────────────────────────────────
+
+@app.route("/integration")
+def integration_page():
+    ep_list = integration.list_endpoints()
+    stats = integration.stats_by_target()
+    return render_template("integration.html",
+                           endpoints=ep_list, stats=stats,
+                           apps=platform.app_names())
+
+
+@app.route("/api/integration/endpoints")
+def api_integration_list():
+    return jsonify({"status": "ok", "data": integration.list_endpoints()})
+
+
+@app.route("/api/integration/discover")
+def api_integration_discover():
+    report = scanner.scan_report(platform)
+    external = integration.discover(platform)
+    cross = integration.cross_group_calls(report)
+    return jsonify({"status": "ok", "data": {"external": external, "cross_group": cross}})
+
+
+@app.route("/api/integration/endpoints", methods=["POST"])
+def api_integration_save():
+    d = request.get_json(silent=True) or {}
+    eid = integration.save_endpoint(
+        app_name=d.get("app_name", ""),
+        method_name=d.get("method_name", ""),
+        target=d.get("target", ""),
+        kind=d.get("kind", "external"),
+        url=d.get("url") or None,
+        timeout_s=int(d.get("timeout_s", 30)),
+        retries=int(d.get("retries", 1)),
+        mock_enabled=bool(d.get("mock_enabled")),
+        mock_data=d.get("mock_data") or None,
+    )
+    return jsonify({"status": "ok", "id": eid})
+
+
+@app.route("/api/integration/endpoints/<int:eid>", methods=["DELETE"])
+def api_integration_delete(eid):
+    integration.delete_endpoint(eid)
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/integration/test/<int:eid>", methods=["POST"])
+def api_integration_test(eid):
+    ep = [e for e in integration.list_endpoints() if e["id"] == eid]
+    if not ep:
+        return jsonify({"status": "error", "message": "端点不存在"}), 404
+    ep = ep[0]
+    t0 = time.time()
+    try:
+        if ep["mock_enabled"]:
+            integration.log_call(ep["app_name"], ep["method_name"], ep["target"],
+                                 "连通测试", "mock", 0, response_summary=ep.get("mock_data") or "{}")
+            return jsonify({"status": "ok", "result": "mock", "data": json.loads(ep["mock_data"] or "{}")})
+        if ep["url"]:
+            import urllib.request
+            req = urllib.request.Request(ep["url"], method="GET")
+            resp = urllib.request.urlopen(req, timeout=ep["timeout_s"])
+            body = resp.read().decode()[:1000]
+            dur = int((time.time() - t0) * 1000)
+            integration.log_call(ep["app_name"], ep["method_name"], ep["target"],
+                                 "连通测试", "success", dur, response_summary=body[:200])
+            return jsonify({"status": "ok", "result": "success", "code": resp.status, "duration_ms": dur})
+        return jsonify({"status": "error", "message": "未配置 URL 且未开启 Mock"}), 400
+    except Exception as e:
+        dur = int((time.time() - t0) * 1000)
+        integration.log_call(ep["app_name"], ep["method_name"], ep["target"],
+                             "连通测试", "error", dur, error_msg=str(e)[:200])
+        return jsonify({"status": "error", "message": str(e)[:200], "duration_ms": dur})
+
+
+@app.route("/api/integration/logs")
+def api_integration_logs():
+    target = request.args.get("target")
+    limit = int(request.args.get("limit", 50))
+    return jsonify({"status": "ok", "data": integration.recent_logs(target, limit)})
+
+
+@app.route("/api/integration/stats")
+def api_integration_stats():
+    return jsonify({"status": "ok", "data": integration.stats_by_target()})

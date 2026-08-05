@@ -11,6 +11,7 @@
 """
 import importlib.util
 import sqlite3
+import time
 from fde_platform import db
 import sys
 from dataclasses import dataclass
@@ -332,14 +333,39 @@ class FdePlatform:
                     "SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1"
                 ).fetchone() is None:
                     inst._init_db()
-            result = method(inst, **params)  # 平台管理事务：成功 commit
+            t0 = time.time()
+            result = method(inst, **params)
+            dur_ms = int((time.time() - t0) * 1000)
             conn.commit()
+            _log_integration_call(handle, service, caller_group, params, "success", dur_ms)
             return result
-        except FdeError:
-            conn.rollback()  # 业务失败 → 干净回滚，原样传播
+        except FdeError as e:
+            dur_ms = int((time.time() - t0) * 1000) if 't0' in dir() else 0
+            conn.rollback()
+            _log_integration_call(handle, service, caller_group, params, "error", dur_ms, str(e))
             raise
         except Exception:
-            conn.rollback()  # 系统异常 → 回滚，由上层归一
+            conn.rollback()
             raise
         finally:
             conn.close()
+
+
+def _log_integration_call(handle, service, caller_group, params, status, dur_ms, error=""):
+    """记录集成调用日志（外部适配器 + 跨组调用 + Web/MCP 顶层调用）。"""
+    try:
+        from fde_platform import integration
+        target_group = handle.group or "-"
+        req = str({k: str(v)[:50] for k, v in (params or {}).items()})[:200]
+        # 判定类型：_ 前缀 → external；跨组 → cross_group；同组不上报
+        if service.startswith("_"):
+            kind = "external"
+            target_sys = service[1:].split("_")[0].upper()
+            integration.log_call(handle.qualname, service, target_sys, req, status, dur_ms,
+                                 error_msg=error[:200])
+        elif caller_group and target_group and caller_group != target_group:
+            target = f"{target_group}/{service}"
+            integration.log_call(handle.qualname, service, target, req, status, dur_ms,
+                                 error_msg=error[:200])
+    except Exception:
+        pass  # 日志记录失败不影响主流程
