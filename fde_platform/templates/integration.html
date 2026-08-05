@@ -164,11 +164,12 @@ async function testEp(id) {
 }
 
 async function editEp(id) {
-  const r = await fetch('/api/integration/endpoints');
-  const d = await r.json();
-  const ep = d.data.find(e => e.id === id);
-  if (!ep) return alert('端点不存在');
-  addEp(ep);
+  try {
+    const r = await fetch('/api/integration/endpoints/' + id);
+    const d = await r.json();
+    if (!d.data) { alert('加载失败: ' + JSON.stringify(d)); return; }
+    addEp(d.data);
+  } catch(e) { alert('编辑错误: ' + e.message); }
 }
 
 async function delEp(id) {
