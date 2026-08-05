@@ -109,23 +109,35 @@ def _pg_pool():
 
 
 class _PgCursorWrapper:
-    """包装 psycopg2 cursor，返回 DictRow 并暴露 lastrowid。"""
+    """包装 psycopg2 cursor，返回 DictRow 并暴露 lastrowid。
+    同时将 PG 返回的 datetime/Decimal 等类型转为 JSON 可序列化的值。
+    """
 
     def __init__(self, cursor):
+        from datetime import datetime, date
+        from decimal import Decimal
         self._cur = cursor
         self.lastrowid = cursor.lastrowid
         self.description = cursor.description
         self.rowcount = cursor.rowcount
         self._cols = [d[0] for d in cursor.description] if cursor.description else []
+        self._types = (datetime, date, Decimal)
+
+    def _to_jsonable(self, value):
+        if value is None:
+            return None
+        if isinstance(value, self._types):
+            return str(value)
+        return value
 
     def fetchone(self):
         row = self._cur.fetchone()
         if row is None:
             return None
-        return {self._cols[i]: row[i] for i in range(len(row))}
+        return {self._cols[i]: self._to_jsonable(row[i]) for i in range(len(row))}
 
     def fetchall(self):
-        return [{self._cols[i]: r[i] for i in range(len(r))} for r in self._cur.fetchall()]
+        return [{self._cols[i]: self._to_jsonable(r[i]) for i in range(len(r))} for r in self._cur.fetchall()]
 
     def close(self):
         self._cur.close()
