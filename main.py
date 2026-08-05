@@ -55,17 +55,6 @@ try:
 except ImportError:
     LLM_ADMIN_ON = False
 
-# FDE 应用组构建（可插拔）：五步法（架构 / 详设 / 编码 / 用例 / 测试执行）+ BUG 修复回路 + 契约冻结
-# + 前端段；独立 LangGraph 任务链，共用 llm.py 的 builder 模型配置
-try:
-    from fde_platform import groupbuild_admin
-
-    groupbuild_admin.register(app)
-    GROUPBUILD_ON = True
-except ImportError:
-    GROUPBUILD_ON = False
-
-
 def main():
     names = platform.app_names()
     bar = "=" * 54
@@ -75,8 +64,7 @@ def main():
     print(f"浏览器端 : http://{HOST}:{PORT}")
     print(f"鉴权     : {'开启（首次登录 admin/admin，请尽快改密）' if AUTH_ON else '关闭（无认证模式）'}")
     print(f"定时任务 : {'开启（/scheduler）' if SCHED_ON else '关闭'}")
-    print(f"大模型配置: {'开启（/llm，两个 Agent 独立配模型）' if LLM_ADMIN_ON else '关闭'}")
-    print(f"应用组构建: {'开启（/groupbuild，五步法：架构/详设/编码/用例/测试执行）' if GROUPBUILD_ON else '关闭'}")
+    print(f"大模型配置: {'开启（/llm）' if LLM_ADMIN_ON else '关闭'}")
     print(f"应用目录 : {platform.apps_dir}")
     print(f"发现应用 : {len(names)} 个")
     # 按应用组（app/ 一级目录）分组展示；未分组应用单列

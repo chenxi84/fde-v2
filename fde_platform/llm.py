@@ -28,11 +28,10 @@ DB_PATH = PROJECT_ROOT / "config" / "llm.db"
 MASTER_KEY_PATH = PROJECT_ROOT / "config" / "llm_master.key"
 
 # 系统内置的两个独立 Agent 角色
-ROLES = ("operator", "builder")
-ROLE_LABELS = {"operator": "操作助手", "builder": "构建器（应用组设计）"}
+ROLES = ("operator",)
+ROLE_LABELS = {"operator": "Agent 对话模型"}
 ROLE_DESC = {
-    "operator": "交互式调用应用服务、跨应用编排（建议：响应快、成本低的模型）",
-    "builder": "应用组构建（/groupbuild）生成架构/详设/代码/用例/测试脚本/提案（建议：能力强、长输出的模型）",
+    "operator": "交互式调用应用服务、跨应用编排",
 }
 
 PROVIDERS = ("openai_compat", "anthropic")

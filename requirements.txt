@@ -18,7 +18,7 @@ openai>=1.0
 # 可选：定时任务
 apscheduler>=3.10
 
-# 可选：构建流水线（/groupbuild 九步法）
-langgraph>=0.2,<0.3
-langgraph-checkpoint>=2.0,<3.0
-langgraph-checkpoint-sqlite>=2.0
+# （/groupbuild 已移除，langgraph 不再需要）
+# langgraph>=0.2,<0.3
+# langgraph-checkpoint>=2.0,<3.0
+# langgraph-checkpoint-sqlite>=2.0

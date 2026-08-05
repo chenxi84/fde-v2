@@ -3,7 +3,7 @@
 前端设计（九步法第⑥步）的硬依赖屏障：`_contracts.md` 冻结后才可开工前端详设。
 两个入口（共用一份实现）：
 
-  ① 平台 /groupbuild ⑧ 契约冻结任务：沙箱子进程内调 `dump(group, seed=True)`——
+  ① CLI 调用：`python -m fde_platform.contract_dump <组名>`——沙箱子进程内 dump 契约——
      沙箱复制排除一切 `*.db*`，应用在沙箱内建全新空库，造数链产出签名 + 真实 payload；
      **一次性副本即隔离，不 import dbguard、不依赖 tests/**。
   ② 手工 CLI（design 手工工具链路径）：`python -m fde_platform.contract_dump <组>`

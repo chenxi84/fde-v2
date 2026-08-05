@@ -1,6 +1,6 @@
 """FDE v2 平台 — 大模型配置页与 API（可插拔 Blueprint）。
 
-两个**独立** Agent（operator / builder）的模型配置管理面：密钥加密落库、掩码不回显、保存即生效。
+Agent 对话的模型配置管理面：密钥加密落库、掩码不回显、保存即生效。
 配置逻辑与 provider 实现在 ``fde_platform/llm.py``；本模块只是其 Web 界面。
 可插拔：删除本模块 + main.py 的 register 调用即无此页，agent 仍按库内配置 / 环境变量工作。
 仅 admin 可访问（无鉴权模式全通，与 scheduler 同口径）。
