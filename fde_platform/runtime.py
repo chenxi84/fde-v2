@@ -357,9 +357,8 @@ def _log_integration_call(handle, service, caller_group, params, status, dur_ms,
         from fde_platform import integration
         target_group = handle.group or "-"
         req = str({k: str(v)[:50] for k, v in (params or {}).items()})[:200]
-        # 判定类型：_ 前缀 → external；跨组 → cross_group；同组不上报
-        if service.startswith("_"):
-            kind = "external"
+        # 判定类型：外部适配器 → external；跨组 → cross_group
+        if integration._is_external_adapter(service):
             target_sys = service[1:].split("_")[0].upper()
             integration.log_call(handle.qualname, service, target_sys, req, status, dur_ms,
                                  error_msg=error[:200])

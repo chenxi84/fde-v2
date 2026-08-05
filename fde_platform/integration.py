@@ -64,32 +64,59 @@ def _get_conn() -> sqlite3.Connection:
 
 # ── 发现 ──────────────────────────────────────────────────
 
+# 常见的内部辅助方法前缀（非外部系统适配器）
+_INTERNAL_HELPER_PREFIXES = {
+    "_clean", "_now", "_row", "_to_", "_get_", "_set_", "_check_",
+    "_validate_", "_generate_", "_change_", "_split_", "_fix_",
+    "_process_", "_extract_", "_build_", "_read_", "_write_",
+    "_ensure_", "_format_", "_parse_", "_make_", "_create_",
+    "_update_", "_delete_", "_find_", "_sort_", "_filter_",
+    "_normalize_", "_convert_", "_seal_", "_locate_",
+    "_gen_", "_upsert_", "_dedup_", "_translate_",
+    "_exists", "_size", "_count", "_is_", "_has_", "_can_",
+}
+
+
+def _is_external_adapter(method_name: str) -> bool:
+    """判定 `_` 前缀方法是否为外部系统适配器。
+    排除 Python 魔术方法、平台约定方法、内部辅助方法。
+    外部适配器命名模式：`_<system>_<operation>`，如 _sap_sync_order。
+    """
+    if method_name.startswith("__") or method_name in ("_init_db",):
+        return False
+    for prefix in _INTERNAL_HELPER_PREFIXES:
+        if method_name.startswith(prefix):
+            return False
+    # 方法名形如 _<短标识>_<操作> → 外部适配器
+    parts = method_name[1:].split("_", 1)
+    if len(parts) >= 2 and len(parts[0]) >= 2:
+        return True
+    return False
+
+
 def discover(platform) -> list[dict]:
     """扫描全部应用，发现外部适配器与跨组调用。返回 [{目标, 应用, 方法, 类型, 当前配置状态}]。"""
     results = []
     for qn in platform.app_names():
         h = platform.handle(qn)
-        # 1. 外部系统适配器：`_` 前缀方法（不在 CONVENTION §3 公共服务之列）
         for name in dir(h.cls):
-            if name.startswith("_") and callable(getattr(h.cls, name, None)):
-                if name.startswith("__") or name in ("_init_db",):
-                    continue
-                # 从方法名推断目标系统
-                parts = name[1:].split("_", 1)  # _sap_sync_order → sap
-                target_system = parts[0].upper() if parts else "UNKNOWN"
-                results.append({
-                    "app_name": qn,
-                    "method_name": name,
-                    "target": target_system,
-                    "kind": "external",
-                    "url": None,
-                    "timeout_s": 30,
-                    "retries": 1,
-                    "mock_enabled": False,
-                    "configured": _is_configured(qn, name),
-                })
-        # 2. 跨组调用：通过 scanner 获取
-        # （scanner 已扫描 self.fde.call，这里复用）
+            if not name.startswith("_") or not callable(getattr(h.cls, name, None)):
+                continue
+            if not _is_external_adapter(name):
+                continue
+            parts = name[1:].split("_", 1)  # _sap_sync_order → sap
+            target_system = parts[0].upper() if parts else "UNKNOWN"
+            results.append({
+                "app_name": qn,
+                "method_name": name,
+                "target": target_system,
+                "kind": "external",
+                "url": None,
+                "timeout_s": 30,
+                "retries": 1,
+                "mock_enabled": False,
+                "configured": _is_configured(qn, name),
+            })
     return results
 
 
