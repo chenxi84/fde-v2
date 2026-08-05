@@ -134,7 +134,6 @@ class _PgConnection:
             orig_fetchall = self._cursor.fetchall
             self._cursor.fetchall = lambda: [_dict_row(r) for r in orig_fetchall()]
 
-        self._cursor.lastrowid = self._cursor.lastrowid
         return self._cursor
 
     def commit(self):
