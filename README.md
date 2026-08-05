@@ -140,9 +140,12 @@ Claude 会读规范、逐步推进，你只需在「第①步 应用划分」「
 | **资源目录** | 每个应用自动建 `resource/import-file`（上传）/ `export-file`（产出），配套内置文件工具供 Agent / MCP 做数据导入。 |
 | **定时任务** | APScheduler 按 cron 调度公共服务，管理页 `/scheduler`，日志落 `config/scheduler.db`。 |
 | **视图装配** | 扫描各应用 `view.{js,html}` 的自描述 `PAGE_META`，零接线装配进所属组菜单；仅经写死端点 `/app/<名>/view.{js,html}` serve。 |
-| **应用组设计器** | `/design`：后台 builder agent 按 `design/` 九步法规格逐步生成设计 / 代码（可插拔）。 |
+| **数据库双模** | 默认 SQLite，配置 `DATABASE_URL` 即可切换 PostgreSQL；建表语句、SQL 方言自动翻译，应用零改动。 |
+| **自动审计** | `CREATE TABLE` 自动追加 `created_at / updated_at / created_by / updated_by`；INSERT / UPDATE 自动注入当前用户与时间。 |
+| **集成接口管理** | `/integration`：扫描发现外部系统适配器与网关应用，支持 HTTP 方法 / 鉴权（Basic/Bearer/API Key）/ Mock / 连通测试 / 调用日志统计。 |
+| **平台 MCP 工具** | 用户管理、LLM 配置、集成接口等平台管理能力开放为 MCP tools，Agent 可对话式管理平台。 |
 
-**可插拔**：鉴权 / 调度 / 大模型配置 / 设计器均以「import 失败即回落」实现——删除对应模块文件，平台照常运行，其余代码无需改动。
+**可插拔**：鉴权 / 调度 / 大模型配置均以「import 失败即回落」实现——删除对应模块文件，平台照常运行，其余代码无需改动。
 
 ---
 
@@ -239,8 +242,10 @@ python design/前端验收样板/verify_view_e2e.py            # e2e 前端验�
 | 变量 | 说明 |
 |---|---|
 | `PLATFORM_PORT` | 平台浏览器端端口（默认 `4000`） |
+| `PLATFORM_HOST` | 监听地址（默认 `127.0.0.1`；Docker 部署设为 `0.0.0.0`） |
+| `DATABASE_URL` | PostgreSQL 连接串（留空 = SQLite；Docker 部署自动切换） |
 | `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | 运行期对话 Agent 用（兼容 OpenAI 接口）；留空则 Agent 降级，不影响应用清单 / 手工调用 / MCP |
-| `SECRET_KEY` | 会话签名密钥（生产请改为随机长串） |
+| `SECRET_KEY` | 会话签名密钥（留空则自动生成随机密钥，持久化到 `config/.secret_key`） |
 
 **构建流水线的设计 / 生成 / 验收步骤不需要 LLM 配置**，未配置也能跑完全流程。
 
@@ -256,4 +261,7 @@ python design/前端验收样板/verify_view_e2e.py            # e2e 前端验�
 | 应用详设模板（第②步） | `design/应用设计.md` |
 | 前端视图约定正本（第⑥–⑨步） | `design/VIEW_CONVENTION.md`（+ 参考 `design/view-convention/`） |
 | 上线后持续演进 | 修改详设 → AI 代理单步重执行 → 回归测试 |
+| 外部系统对接 | `/integration` 集成接口管理（扫描/配置/测试/跟踪） |
+| 平台 MCP 管理 | `python -m fde_platform.mcp_server --user admin` |
+| 部署指南 | `HOW-TO-USE.md`（本地开发 / Docker HTTP / Docker HTTPS+PG） |
 | 活的参考实现（只读） | `app/e2e/`（现行约定样板：架构 / 详设 / 前端详设 / view / 契约一应俱全） |
