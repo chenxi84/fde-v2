@@ -69,18 +69,16 @@ def _inject_audit(sql: str, params, ctx: dict) -> tuple:
     sql_upper = sql.strip().upper()
 
     if sql_upper.startswith("INSERT INTO"):
-        # 跳过应用已手写的列
+        # 跳过应用已手写的列（用 sql_upper 做大小写无关匹配）
         extra_cols, extra_vals, extra_params = [], [], []
-        if 'created_at' not in sql.lower():
-            extra_cols.append("created_at")
-            extra_vals.append(now_sqlite)
-        if 'updated_at' not in sql.lower():
-            extra_cols.append("updated_at")
-            extra_vals.append(now_sqlite)
-        if 'created_by' not in sql.lower():
+        if 'CREATED_AT' not in sql_upper:
+            extra_cols.append("created_at"); extra_vals.append(now_sqlite)
+        if 'UPDATED_AT' not in sql_upper:
+            extra_cols.append("updated_at"); extra_vals.append(now_sqlite)
+        if 'CREATED_BY' not in sql_upper:
             extra_cols.append("created_by"); extra_vals.append("?")
             extra_params.append(user)
-        if 'updated_by' not in sql.lower():
+        if 'UPDATED_BY' not in sql_upper:
             extra_cols.append("updated_by"); extra_vals.append("?")
             extra_params.append(user)
         if extra_cols:
@@ -100,9 +98,9 @@ def _inject_audit(sql: str, params, ctx: dict) -> tuple:
         set_part_sql = sql_upper
         if " WHERE " in sql_upper:
             set_part_sql = sql_upper[:sql_upper.index(" WHERE ")]
-        if 'updated_at' not in set_part_sql:
+        if 'UPDATED_AT' not in set_part_sql:
             set_parts.append(f"updated_at = {now_sqlite}")
-        if 'updated_by' not in set_part_sql:
+        if 'UPDATED_BY' not in set_part_sql:
             set_parts.append("updated_by = ?")
             set_params.append(user)
         if not set_parts:
@@ -286,14 +284,14 @@ class _PgConnection:
 
         if sql_upper.startswith("INSERT INTO"):
             extra_cols, extra_vals, extra_params = [], [], []
-            if 'created_at' not in sql.lower():
+            if 'created_at' not in sql_upper:
                 extra_cols.append("created_at"); extra_vals.append("NOW()")
-            if 'updated_at' not in sql.lower():
+            if 'updated_at' not in sql_upper:
                 extra_cols.append("updated_at"); extra_vals.append("NOW()")
-            if 'created_by' not in sql.lower():
+            if 'created_by' not in sql_upper:
                 extra_cols.append("created_by"); extra_vals.append("%s")
                 extra_params.append(user)
-            if 'updated_by' not in sql.lower():
+            if 'updated_by' not in sql_upper:
                 extra_cols.append("updated_by"); extra_vals.append("%s")
                 extra_params.append(user)
             if extra_cols:
@@ -309,9 +307,9 @@ class _PgConnection:
             if " WHERE " in sql_upper:
                 set_part = sql_upper[:sql_upper.index(" WHERE ")]
             set_parts, set_params = [], []
-            if 'updated_at' not in set_part:
+            if 'UPDATED_AT' not in set_part:
                 set_parts.append("updated_at = NOW()")
-            if 'updated_by' not in set_part:
+            if 'UPDATED_BY' not in set_part:
                 set_parts.append("updated_by = %s")
                 set_params.append(user)
             if set_parts:
