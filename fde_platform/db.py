@@ -334,7 +334,11 @@ class _PgConnection:
         self._cursor = self._conn.cursor()
         if params:
             sql = sql.replace("?", "%s")
-            self._cursor.execute(sql, tuple(params))
+            try:
+                self._cursor.execute(sql, tuple(params))
+            except Exception as e:
+                _logger.error("审计注入后 SQL 执行失败\nSQL: %s\nParams: %s", sql[:500], tuple(params))
+                raise
         else:
             self._cursor.execute(sql)
         return _PgCursorWrapper(self._cursor)
