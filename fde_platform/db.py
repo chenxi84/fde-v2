@@ -37,19 +37,35 @@ def db_mode() -> str:
 # ── DDL 翻译 ─────────────────────────────────────────────
 
 def _add_audit_columns(sql: str) -> str:
-    """在 CREATE TABLE 语句逐列追加缺失的审计列（SQLite / PG 通用）。"""
-    if re.search(r'CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS', sql, re.IGNORECASE):
-        missing = []
-        if 'created_at' not in sql.lower():
-            missing.append('created_at TEXT')
-        if 'updated_at' not in sql.lower():
-            missing.append('updated_at TEXT')
-        if 'created_by' not in sql.lower():
-            missing.append('created_by TEXT')
-        if 'updated_by' not in sql.lower():
-            missing.append('updated_by TEXT')
-        if missing:
-            sql = re.sub(r'\)\s*$', ', ' + ', '.join(missing) + ')', sql, flags=re.IGNORECASE)
+    """在 CREATE TABLE 语句逐列追加缺失的审计列。
+
+    列定义必须放在表约束（PRIMARY KEY / FOREIGN KEY / CHECK / UNIQUE / CONSTRAINT）之前，
+    否则 SQLite 报 syntax error。"""
+    if not re.search(r'CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS', sql, re.IGNORECASE):
+        return sql
+    missing = []
+    sql_lower = sql.lower()
+    if 'created_at' not in sql_lower:
+        missing.append('created_at TEXT')
+    if 'updated_at' not in sql_lower:
+        missing.append('updated_at TEXT')
+    if 'created_by' not in sql_lower:
+        missing.append('created_by TEXT')
+    if 'updated_by' not in sql_lower:
+        missing.append('updated_by TEXT')
+    if not missing:
+        return sql
+    audit_cols = ', ' + ', '.join(missing)
+    # 找到第一个表约束关键字的位置，在其前插入审计列
+    c_match = re.search(
+        r'(PRIMARY\s+KEY|FOREIGN\s+KEY|CONSTRAINT|CHECK)\b',
+        sql, re.IGNORECASE)
+    if c_match:
+        pos = c_match.start()
+        sql = sql[:pos].rstrip().rstrip(',') + audit_cols + ',\n' + sql[pos:]
+    else:
+        # 无表约束 → 追加到最后一个 ) 之前
+        sql = re.sub(r'\)\s*$', audit_cols + '\n)', sql, flags=re.IGNORECASE)
     return sql
 
 
