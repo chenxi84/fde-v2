@@ -56,15 +56,15 @@ def _add_audit_columns(sql: str) -> str:
     if not missing:
         return sql
     audit_cols = ', ' + ', '.join(missing)
-    # 找到第一个表级约束（后跟括号，表示是表级而非列级），在其前插入审计列
+    # 找到第一个表级约束（独立行，非列内约束），在其前插入审计列
     c_match = re.search(
-        r'(PRIMARY\s+KEY\s*\(|FOREIGN\s+KEY\s*\(|CONSTRAINT\s+\w+|CHECK\s*\()',
-        sql, re.IGNORECASE)
+        r'^\s*(PRIMARY\s+KEY\s*\(|FOREIGN\s+KEY\s*\(|CONSTRAINT\s+\w+|CHECK\s*\()',
+        sql, re.IGNORECASE | re.MULTILINE)
     if c_match:
         pos = c_match.start()
         sql = sql[:pos].rstrip().rstrip(',') + audit_cols + ',\n' + sql[pos:]
     else:
-        # 无表约束 → 追加到最后一个 ) 之前
+        # 无表级约束 → 追加到最后一个 ) 之前
         sql = re.sub(r'\)\s*$', audit_cols + '\n)', sql, flags=re.IGNORECASE)
     return sql
 
