@@ -334,12 +334,7 @@ class _PgConnection:
         self._cursor = self._conn.cursor()
         if params:
             sql = sql.replace("?", "%s")
-            try:
-                self._cursor.execute(sql, tuple(params))
-            except Exception:
-                print(f"[AUDIT-DEBUG] SQL: {sql[:400]}", flush=True)
-                print(f"[AUDIT-DEBUG] Params: {tuple(params)}", flush=True)
-                raise
+            self._cursor.execute(sql, tuple(params))
         else:
             self._cursor.execute(sql)
         return _PgCursorWrapper(self._cursor)
