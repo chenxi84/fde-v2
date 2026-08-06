@@ -46,13 +46,19 @@ def _translate_ddl(sql: str) -> str:
     sql = re.sub(r"\bdatetime\('now'\)\b", "NOW()", sql)
     sql = re.sub(r"\bdatetime\('now','localtime'\)\b", "NOW()", sql)
     sql = re.sub(r'\bDATETIME\b', 'TIMESTAMP', sql, flags=re.IGNORECASE)
-    # 仅在含主表的 CREATE TABLE 语句追加审计列（跳过 CREATE INDEX / 辅助表等）
+    # 在 CREATE TABLE 语句逐列追加缺失的审计列
     if re.search(r'CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS', sql, re.IGNORECASE):
+        missing = []
         if 'created_at' not in sql.lower():
-            sql = re.sub(
-                r'\)\s*$',  # 匹配最后一个 )
-                ', created_at TEXT, updated_at TEXT, created_by TEXT, updated_by TEXT)',
-                sql, flags=re.IGNORECASE)
+            missing.append('created_at TEXT')
+        if 'updated_at' not in sql.lower():
+            missing.append('updated_at TEXT')
+        if 'created_by' not in sql.lower():
+            missing.append('created_by TEXT')
+        if 'updated_by' not in sql.lower():
+            missing.append('updated_by TEXT')
+        if missing:
+            sql = re.sub(r'\)\s*$', ', ' + ', '.join(missing) + ')', sql, flags=re.IGNORECASE)
     return sql
 
 
