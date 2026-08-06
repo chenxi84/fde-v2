@@ -291,14 +291,14 @@ class _PgConnection:
 
         if sql_upper.startswith("INSERT INTO"):
             extra_cols, extra_vals, extra_params = [], [], []
-            if 'created_at' not in sql_upper:
+            if 'CREATED_AT' not in sql_upper:
                 extra_cols.append("created_at"); extra_vals.append("NOW()")
-            if 'updated_at' not in sql_upper:
+            if 'UPDATED_AT' not in sql_upper:
                 extra_cols.append("updated_at"); extra_vals.append("NOW()")
-            if 'created_by' not in sql_upper:
+            if 'CREATED_BY' not in sql_upper:
                 extra_cols.append("created_by"); extra_vals.append("%s")
                 extra_params.append(user)
-            if 'updated_by' not in sql_upper:
+            if 'UPDATED_BY' not in sql_upper:
                 extra_cols.append("updated_by"); extra_vals.append("%s")
                 extra_params.append(user)
             if extra_cols:
