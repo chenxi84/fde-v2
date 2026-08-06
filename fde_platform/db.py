@@ -59,6 +59,7 @@ def _translate_ddl(sql: str) -> str:
 # ── 审计值注入 ──────────────────────────────────────────
 
 def _inject_audit(sql: str, params, ctx: dict) -> tuple:
+    sql = sql.strip()  # 去首尾空白保证索引对齐
     """在 INSERT/UPDATE 语句中自动注入审计字段值（跳过应用已手写的列）。
 
     INSERT → 追加 created_at / updated_at / created_by / updated_by
@@ -277,10 +278,10 @@ class _PgConnection:
 
     def execute(self, sql, params=None):
         sql = _translate_ddl(sql)
-        # 审计注入（PG 用 NOW()；跳过应用已手写的列）
+        sql = sql.strip()  # 去首尾空白，保证和 sql_upper 索引对齐
         ctx = getattr(self, "_fde_ctx", None) or {}
         user = (ctx or {}).get("userno", "") or ""
-        sql_upper = sql.strip().upper()
+        sql_upper = sql.upper()
 
         if sql_upper.startswith("INSERT INTO"):
             extra_cols, extra_vals, extra_params = [], [], []
