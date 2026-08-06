@@ -336,8 +336,9 @@ class _PgConnection:
             sql = sql.replace("?", "%s")
             try:
                 self._cursor.execute(sql, tuple(params))
-            except Exception as e:
-                _logger.error("审计注入后 SQL 执行失败\nSQL: %s\nParams: %s", sql[:500], tuple(params))
+            except Exception:
+                print(f"[AUDIT-DEBUG] SQL: {sql[:400]}", flush=True)
+                print(f"[AUDIT-DEBUG] Params: {tuple(params)}", flush=True)
                 raise
         else:
             self._cursor.execute(sql)
