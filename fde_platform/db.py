@@ -36,17 +36,8 @@ def db_mode() -> str:
 
 # ── DDL 翻译 ─────────────────────────────────────────────
 
-def _translate_ddl(sql: str) -> str:
-    """SQLite DDL → PostgreSQL DDL + 自动追审审计列。"""
-    sql = re.sub(r'\bAUTOINCREMENT\b', '', sql, flags=re.IGNORECASE)
-    sql = re.sub(
-        r"INTEGER PRIMARY KEY\b(?!\s*GENERATED)",
-        "INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY",
-        sql, flags=re.IGNORECASE)
-    sql = re.sub(r"\bdatetime\('now'\)\b", "NOW()", sql)
-    sql = re.sub(r"\bdatetime\('now','localtime'\)\b", "NOW()", sql)
-    sql = re.sub(r'\bDATETIME\b', 'TIMESTAMP', sql, flags=re.IGNORECASE)
-    # 在 CREATE TABLE 语句逐列追加缺失的审计列
+def _add_audit_columns(sql: str) -> str:
+    """在 CREATE TABLE 语句逐列追加缺失的审计列（SQLite / PG 通用）。"""
     if re.search(r'CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS', sql, re.IGNORECASE):
         missing = []
         if 'created_at' not in sql.lower():
@@ -60,6 +51,19 @@ def _translate_ddl(sql: str) -> str:
         if missing:
             sql = re.sub(r'\)\s*$', ', ' + ', '.join(missing) + ')', sql, flags=re.IGNORECASE)
     return sql
+
+
+def _translate_ddl(sql: str) -> str:
+    """SQLite DDL → PostgreSQL DDL + 自动追加审计列。"""
+    sql = re.sub(r'\bAUTOINCREMENT\b', '', sql, flags=re.IGNORECASE)
+    sql = re.sub(
+        r"INTEGER PRIMARY KEY\b(?!\s*GENERATED)",
+        "INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY",
+        sql, flags=re.IGNORECASE)
+    sql = re.sub(r"\bdatetime\('now'\)\b", "NOW()", sql)
+    sql = re.sub(r"\bdatetime\('now','localtime'\)\b", "NOW()", sql)
+    sql = re.sub(r'\bDATETIME\b', 'TIMESTAMP', sql, flags=re.IGNORECASE)
+    return _add_audit_columns(sql)
 
 
 # ── 审计值注入 ──────────────────────────────────────────
@@ -146,6 +150,7 @@ class _SqliteAuditWrapper:
         self._conn.row_factory = val
 
     def execute(self, sql, params=None):
+        sql = _add_audit_columns(sql)  # 建表时加审计列（SQLite / PG 通用）
         ctx = getattr(self, "_fde_ctx", None) or {}
         sql, params = _inject_audit(sql, params, ctx)
         return self._conn.execute(sql, params or ())
