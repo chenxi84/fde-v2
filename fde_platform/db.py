@@ -59,47 +59,66 @@ def _translate_ddl(sql: str) -> str:
 # ── 审计值注入 ──────────────────────────────────────────
 
 def _inject_audit(sql: str, params, ctx: dict) -> tuple:
-    """在 INSERT/UPDATE 语句中自动注入审计字段值。
+    """在 INSERT/UPDATE 语句中自动注入审计字段值（跳过应用已手写的列）。
 
     INSERT → 追加 created_at / updated_at / created_by / updated_by
-    UPDATE → 追加 updated_at / updated_by（WHERE 除外的不动）
+    UPDATE → 追加 updated_at / updated_by
     ctx 来自 self.ctx，由 runtime 层注入到连接上。"""
     user = (ctx or {}).get("userno", "") or ""
     now_sqlite = "datetime('now','localtime')"
     sql_upper = sql.strip().upper()
 
     if sql_upper.startswith("INSERT INTO"):
-        # INSERT INTO t (a, b) VALUES (?, ?)
-        # → INSERT INTO t (a, b, created_at, updated_at, created_by, updated_by)
-        #   VALUES (?, ?, now, now, ?, ?)
-        audit_cols = ", created_at, updated_at, created_by, updated_by"
-        audit_vals = f", {now_sqlite}, {now_sqlite}, ?, ?"
-        audit_params = (user, user)
-
-        # 在 ) VALUES 之前插入列名
-        sql = re.sub(r'\)\s*VALUES\s*\(', audit_cols + ') VALUES (', sql, count=1,
-                     flags=re.IGNORECASE)
-        # 在最后一个 ) 之前插入值占位符
-        sql = re.sub(r'\)\s*$', audit_vals + ')', sql, count=1)
-        new_params = list(params or ()) + list(audit_params)
-        return sql, tuple(new_params) if params else tuple(audit_params)
+        # 跳过应用已手写的列
+        extra_cols, extra_vals, extra_params = [], [], []
+        if 'created_at' not in sql.lower():
+            extra_cols.append("created_at")
+            extra_vals.append(now_sqlite)
+        if 'updated_at' not in sql.lower():
+            extra_cols.append("updated_at")
+            extra_vals.append(now_sqlite)
+        if 'created_by' not in sql.lower():
+            extra_cols.append("created_by"); extra_vals.append("?")
+            extra_params.append(user)
+        if 'updated_by' not in sql.lower():
+            extra_cols.append("updated_by"); extra_vals.append("?")
+            extra_params.append(user)
+        if extra_cols:
+            sql = re.sub(r'\)\s*VALUES\s*\(',
+                         ', ' + ', '.join(extra_cols) + ') VALUES (',
+                         sql, count=1, flags=re.IGNORECASE)
+            sql = re.sub(r'\)\s*$',
+                         ', ' + ', '.join(extra_vals) + ')', sql, count=1)
+            new_params = list(params or ()) + extra_params
+            return sql, tuple(new_params) if params else tuple(extra_params)
+        return sql, params
 
     if sql_upper.startswith("UPDATE"):
-        audit_set = f", updated_at = {now_sqlite}, updated_by = ?"
-        audit_params = (user,)
+        # 只追加应用未手写的审计列
+        set_parts = []
+        set_params = []
+        set_part_sql = sql_upper
+        if " WHERE " in sql_upper:
+            set_part_sql = sql_upper[:sql_upper.index(" WHERE ")]
+        if 'updated_at' not in set_part_sql:
+            set_parts.append(f"updated_at = {now_sqlite}")
+        if 'updated_by' not in set_part_sql:
+            set_parts.append("updated_by = ?")
+            set_params.append(user)
+        if not set_parts:
+            return sql, params
+
+        audit_set = ", " + ", ".join(set_parts)
         if " WHERE " in sql_upper:
             idx = sql_upper.index(" WHERE ")
-            # 统计 SET 部分的 ? 个数
-            set_part = sql_upper[:idx]
-            set_q_count = set_part.count("?")
+            set_q_count = sql_upper[:idx].count("?")
             sql = sql[:idx] + audit_set + " " + sql[idx:]
-            # 审计参数插入到 SET 参数和 WHERE 参数之间
             plist = list(params or ())
-            new_params = plist[:set_q_count] + list(audit_params) + plist[set_q_count:]
+            new_params = plist[:set_q_count] + set_params + plist[set_q_count:]
         else:
             sql = sql.rstrip() + audit_set
-            new_params = list(params or ()) + list(audit_params)
-        return sql, tuple(new_params) if params else tuple(audit_params)
+            new_params = list(params or ()) + set_params
+        return sql, tuple(new_params) if params else tuple(set_params)
 
     return sql, params
 
@@ -260,30 +279,57 @@ class _PgConnection:
 
     def execute(self, sql, params=None):
         sql = _translate_ddl(sql)
-        # 审计注入（PG 用 NOW() 替代 datetime('now','localtime')）
+        # 审计注入（PG 用 NOW()；跳过应用已手写的列）
         ctx = getattr(self, "_fde_ctx", None) or {}
         user = (ctx or {}).get("userno", "") or ""
         sql_upper = sql.strip().upper()
+
         if sql_upper.startswith("INSERT INTO"):
-            audit_cols = ", created_at, updated_at, created_by, updated_by"
-            sql = re.sub(r'\)\s*VALUES\s*\(', audit_cols + ') VALUES (', sql, count=1,
-                         flags=re.IGNORECASE)
-            sql = re.sub(r'\)\s*$', ', NOW(), NOW(), %s, %s)', sql, count=1)
-            new_params = list(params or ()) + [user, user]
-            params = tuple(new_params) if params else (user, user)
+            extra_cols, extra_vals, extra_params = [], [], []
+            if 'created_at' not in sql.lower():
+                extra_cols.append("created_at"); extra_vals.append("NOW()")
+            if 'updated_at' not in sql.lower():
+                extra_cols.append("updated_at"); extra_vals.append("NOW()")
+            if 'created_by' not in sql.lower():
+                extra_cols.append("created_by"); extra_vals.append("%s")
+                extra_params.append(user)
+            if 'updated_by' not in sql.lower():
+                extra_cols.append("updated_by"); extra_vals.append("%s")
+                extra_params.append(user)
+            if extra_cols:
+                sql = re.sub(r'\)\s*VALUES\s*\(',
+                             ', ' + ', '.join(extra_cols) + ') VALUES (',
+                             sql, count=1, flags=re.IGNORECASE)
+                sql = re.sub(r'\)\s*$',
+                             ', ' + ', '.join(extra_vals) + ')', sql, count=1)
+                params = list(params or ()) + extra_params
+
         elif sql_upper.startswith("UPDATE"):
-            audit_set = ", updated_at = NOW(), updated_by = %s"
+            set_part = sql_upper
             if " WHERE " in sql_upper:
-                idx = sql_upper.index(" WHERE ")
-                sql = sql[:idx] + audit_set + " " + sql[idx:]
-            else:
-                sql = sql.rstrip() + audit_set
-            new_params = list(params or ()) + [user]
-            params = tuple(new_params) if params else (user,)
+                set_part = sql_upper[:sql_upper.index(" WHERE ")]
+            set_parts, set_params = [], []
+            if 'updated_at' not in set_part:
+                set_parts.append("updated_at = NOW()")
+            if 'updated_by' not in set_part:
+                set_parts.append("updated_by = %s")
+                set_params.append(user)
+            if set_parts:
+                audit_set = ", " + ", ".join(set_parts)
+                if " WHERE " in sql_upper:
+                    idx = sql_upper.index(" WHERE ")
+                    set_q = sql_upper[:idx].count("?")
+                    sql = sql[:idx] + audit_set + " " + sql[idx:]
+                    plist = list(params or ())
+                    params = plist[:set_q] + set_params + plist[set_q:]
+                else:
+                    sql = sql.rstrip() + audit_set
+                    params = list(params or ()) + set_params
+
         self._cursor = self._conn.cursor()
         if params:
             sql = sql.replace("?", "%s")
-            self._cursor.execute(sql, params)
+            self._cursor.execute(sql, tuple(params))
         else:
             self._cursor.execute(sql)
         return _PgCursorWrapper(self._cursor)
