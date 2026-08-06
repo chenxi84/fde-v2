@@ -56,9 +56,9 @@ def _add_audit_columns(sql: str) -> str:
     if not missing:
         return sql
     audit_cols = ', ' + ', '.join(missing)
-    # 找到第一个表约束关键字的位置，在其前插入审计列
+    # 找到第一个表级约束（后跟括号，表示是表级而非列级），在其前插入审计列
     c_match = re.search(
-        r'(PRIMARY\s+KEY|FOREIGN\s+KEY|CONSTRAINT|CHECK)\b',
+        r'(PRIMARY\s+KEY\s*\(|FOREIGN\s+KEY\s*\(|CONSTRAINT\s+\w+|CHECK\s*\()',
         sql, re.IGNORECASE)
     if c_match:
         pos = c_match.start()
