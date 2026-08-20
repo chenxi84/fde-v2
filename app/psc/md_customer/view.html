@@ -1,0 +1,236 @@
+<!-- 列表三段式：过滤条 / 表格 / 分页条 -->
+<div class="card mt12" @mouseleave="tipHide()"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>客户列表</b>
+    <span class="muted">主数据 · 结算模式 / 线边缓冲参数</span>
+    <div class="right tagline" style="gap:8px">
+      <input x-model="filterNo" @keydown.enter="search()" placeholder="客户编码" style="width:150px">
+      <input x-model="filterName" @keydown.enter="search()" placeholder="客户名称" style="width:150px">
+      <input x-model="filterCredit" @keydown.enter="search()" placeholder="统一社会信用代码" style="width:180px">
+      <button class="b-ghost b-sm" @click="search()">查询</button>
+      <button class="b-pri b-sm" @click="openCreate()">+ 新建客户</button>
+      <button class="b-pri b-sm" @click="openImport()">批量导入</button>
+    </div>
+  </div>
+  <!-- 表头「?」字段释义条：悬停显示 / 点击钉住 -->
+  <div x-show="tip.show" x-cloak class="muted" style="padding:8px 16px;font-size:12px;line-height:1.7;background:rgba(127,127,127,.08)">
+    <b x-text="tip.show === 'line_stock_days' ? '线边库存天数' : '调拨提前期'"></b>：
+    <span x-text="TIPS[tip.show]"></span>
+    <span x-show="tip.pin" style="margin-left:8px;cursor:pointer" @click="tip.pin=''; tip.show=''">✕ 收起</span>
+  </div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr><th>客户编码</th><th>客户名称</th><th>统一社会信用代码</th><th>结算模式</th>
+        <th>线边库存天数<span @mouseenter="tipShow('line_stock_days')" @click="tipToggle('line_stock_days')"
+          style="display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;border:1px solid var(--muted);color:var(--muted);font-size:10px;cursor:pointer;margin-left:4px;vertical-align:1px">?</span></th>
+        <th>调拨提前期<span @mouseenter="tipShow('transfer_lead_days')" @click="tipToggle('transfer_lead_days')"
+          style="display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;border:1px solid var(--muted);color:var(--muted);font-size:10px;cursor:pointer;margin-left:4px;vertical-align:1px">?</span></th>
+        <th class="right">操作</th></tr>
+      <template x-if="!list.items.length">
+        <tr><td colspan="7" class="empty"
+          x-text="(filterNo || filterName) ? '无符合条件的客户' : '暂无客户 —— 点「新建客户」创建'"></td></tr>
+      </template>
+      <template x-for="d in list.items" :key="d.customer_no">
+        <tr class="data">
+          <td><button class="b-link mono" @click="view(d)" x-text="d.customer_no"></button></td>
+          <td x-text="dash(d.customer_name)"></td>
+          <td class="mono" x-text="dash(d.credit_code)"></td>
+          <td x-text="dash(d.settle_mode)"></td>
+          <td class="mono" x-text="d.line_stock_days"></td>
+          <td class="mono" x-text="dash(d.transfer_lead_days)"></td>
+          <td class="right rowact"><button class="b-ghost b-sm" @click="edit(d)">编辑</button></td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:10px 16px">
+    <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+    <div class="right tagline" style="gap:8px">
+      <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+      <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+      <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- 详情模态：点客户编码 → md_customer.get 全量字段（无状态机 → 头带无状态徽章） -->
+<div class="modal-mask" x-show="modalX.open" @click.self="closeModal()"
+     @keydown.escape.window="closeModal()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div>
+        <div class="docno" x-text="modalX.d ? '客户详情 · ' + modalX.d.customer_no : '客户详情'"></div>
+        <div class="sub">客户主数据 · CUSTOMER MASTER</div>
+      </div>
+      <button class="x" @click="closeModal()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <template x-if="modalX.loading">
+        <div class="loadbox"><span class="spin">◌</span><br>载入客户明细…</div>
+      </template>
+      <template x-if="!modalX.loading && modalX.d">
+        <div>
+          <div class="sec">基本信息</div>
+          <div class="kv">
+            <div><div class="k">客户编码</div>
+              <div class="v mono"><span x-text="dash(modalX.d.customer_no)"></span>
+                <span class="muted" style="font-size:11px;margin-left:8px">单字段主键 · 全局唯一</span></div></div>
+            <div><div class="k">客户名称</div><div class="v" x-text="dash(modalX.d.customer_name)"></div></div>
+            <div><div class="k">统一社会信用代码</div>
+              <div class="v mono"><span x-text="dash(modalX.d.credit_code)"></span>
+                <span class="muted" style="font-size:11px;margin-left:8px">18 位 · GB 32100-2015（含校验位）</span></div></div>
+            <div><div class="k">结算模式</div>
+              <div class="v"><span x-text="dash(modalX.d.settle_mode)"></span>
+                <span class="muted" style="font-size:11px;margin-left:8px">字典值：现售 / 寄售</span></div></div>
+          </div>
+          <div class="sec">线边缓冲参数</div>
+          <div class="kv">
+            <div><div class="k">线边库存天数</div>
+              <div class="v mono"><span x-text="dash(modalX.d.line_stock_days)"></span>
+                <span class="muted" style="font-size:11px;margin-left:8px">客户线边已放置的缓冲库存天数（可用缓冲，缺省 0）· 最低库存 A = 日需求 × max(0, 生产+物流 − 线边天数)</span></div></div>
+            <div><div class="k">调拨提前期</div>
+              <div class="v mono"><span x-text="dash(modalX.d.transfer_lead_days)"></span>
+                <span class="muted" style="font-size:11px;margin-left:8px">从我方仓调拨到客户仓/线边所需天数 · 不设安全库存硬条件：生产+物流 ≤ 线边+调拨提前期 → 高价值件速度对冲</span></div></div>
+          </div>
+          <details class="raw"><summary>原始数据</summary>
+            <pre class="json" x-text="JSON.stringify(modalX.d, null, 2)"></pre></details>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft" x-show="modalX.d">
+      <template x-if="modalX.d">
+        <div class="tagline" style="gap:8px">
+          <button class="b-ghost" @click="closeModal()">关闭</button>
+          <button class="b-pri right" @click="edit(modalX.d)">编辑</button>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<!-- 创建 / 编辑表单（复用）：customer_no 主键编辑态只读锁定 -->
+<div class="modal-mask" x-show="form.open" @click.self="closeForm()"
+     @keydown.escape.window="closeForm()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div>
+        <div class="docno" x-text="form.mode === 'edit' ? ('编辑客户 · ' + form.customer_no) : '新建客户'"></div>
+        <div class="sub">客户主数据 · 创建后主键不可改</div>
+      </div>
+      <button class="x" @click="closeForm()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="frow">
+        <div>
+          <label class="f">客户编码 <span class="req">*</span></label>
+          <input x-model="form.customer_no" maxlength="50" :disabled="form.mode === 'edit'" placeholder="如 C1001">
+          <div class="muted" style="font-size:11px;margin-top:4px" x-show="form.mode === 'edit'">主键 · 创建后不可变更</div>
+        </div>
+      </div>
+      <div class="frow">
+        <div>
+          <label class="f">客户名称 <span class="req">*</span></label>
+          <input x-model="form.customer_name" maxlength="100" placeholder="客户名称">
+        </div>
+      </div>
+      <div class="frow">
+        <div>
+          <label class="f">统一社会信用代码</label>
+          <input x-model="form.credit_code" maxlength="18" placeholder="18位统一社会信用代码，如 91110000710931000M">
+          <div class="muted" style="font-size:11px;margin-top:4px">选填 · 18 位，含校验位校验（GB 32100-2015）</div>
+        </div>
+      </div>
+      <div class="frow">
+        <div>
+          <label class="f">结算模式</label>
+          <select x-model="form.settle_mode">
+            <option value="">（未设置）</option>
+            <option value="现售">现售</option>
+            <option value="寄售">寄售</option>
+          </select>
+          <div class="muted" style="font-size:11px;margin-top:4px">选填 · 字典值：现售 / 寄售</div>
+        </div>
+      </div>
+      <div class="frow">
+        <div>
+          <label class="f">线边库存天数</label>
+          <input type="number" min="0" step="1" x-model="form.line_stock_days" placeholder="缺省 0">
+          <div class="muted" style="font-size:11px;margin-top:4px">客户线边已放置的缓冲库存天数，可抵减需我方兜底的最低库存 · 非负整数 · 留空取默认 0</div>
+        </div>
+        <div>
+          <label class="f">调拨提前期</label>
+          <input type="number" min="0" step="1" x-model="form.transfer_lead_days" placeholder="非负整数">
+          <div class="muted" style="font-size:11px;margin-top:4px">从我方仓调拨到客户仓/线边所需天数，与线边天数共同决定高价值件可否速度对冲（不设安全库存）· 非负整数 · 选填</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-ft">
+      <div class="tagline" style="gap:8px">
+        <span class="muted">编码 / 名称必填 · 唯一性与非负整数由后端校验</span>
+        <div class="right tagline" style="gap:8px">
+          <button class="b-ghost" @click="closeForm()">取消</button>
+          <button class="b-pri" :disabled="form.busy" @click="save()"
+            x-text="form.busy ? '保存中…' : (form.mode === 'edit' ? '保存修改' : '创建')"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 批量导入（ERP 冗余同步）：逐行录入 / 文件读取 → import_batch upsert -->
+<div class="modal-mask" x-show="imp.open" @click.self="closeImport()"
+     @keydown.escape.window="closeImport()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div>
+        <div class="docno">批量导入客户</div>
+        <div class="sub">ERP 冗余同步 · 逐行校验 upsert</div>
+      </div>
+      <button class="x" @click="closeImport()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="muted" style="font-size:12px;line-height:1.6">
+        列顺序：customer_no, customer_name, credit_code, settle_mode, line_stock_days, transfer_lead_days（逗号 / Tab 分隔，首行表头可留）。
+        settle_mode 须为字典值「现售 / 寄售」或留空；credit_code 须为 18 位合法统一社会信用代码或留空。
+        已存在 customer_no 更新，新行新增；失败行不阻断其余行。
+      </div>
+      <div class="tagline" style="gap:8px;margin-top:8px">
+        <button class="b-ghost b-sm" @click="downloadTemplate()">下载 CSV 模板</button>
+        <label class="b-ghost b-sm" style="cursor:pointer">选择文件
+          <input type="file" accept=".csv,.txt" style="display:none" @change="onImportFile($event)">
+        </label>
+      </div>
+      <textarea x-model="imp.text" rows="10" style="width:100%;font-family:monospace;font-size:12px;margin-top:8px"
+        placeholder="逐行录入，逗号分隔，如：C1001,某客户,91110000710931000M,现售,3,2"></textarea>
+      <template x-if="imp.result">
+        <div class="mt12">
+          <div class="tagline" style="gap:8px">
+            <span class="st st-green" x-text="'成功 ' + imp.result.success + ' 条'"></span>
+            <span class="st st-red" x-text="'失败 ' + imp.result.fail + ' 条'"></span>
+            <span class="muted" x-text="'共 ' + imp.result.total + ' 条'"></span>
+          </div>
+          <template x-if="imp.result.errors && imp.result.errors.length">
+            <div class="scroll-x mt8">
+              <table class="tbl tight">
+                <tr><th>行号</th><th>字段</th><th>错误</th></tr>
+                <template x-for="e in imp.result.errors" :key="e.row + ':' + e.field">
+                  <tr><td class="mono" x-text="e.row"></td><td class="mono" x-text="dash(e.field)"></td><td x-text="e.message"></td></tr>
+                </template>
+              </table>
+            </div>
+          </template>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft">
+      <div class="tagline" style="gap:8px">
+        <span class="muted">导入完成后刷新列表</span>
+        <div class="right tagline" style="gap:8px">
+          <button class="b-ghost" @click="closeImport()">取消</button>
+          <button class="b-pri" :disabled="imp.busy" @click="submitImport()"
+            x-text="imp.busy ? '导入中…' : '批量导入'"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

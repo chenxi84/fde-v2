@@ -1,0 +1,265 @@
+<div>
+  <!-- 新建草稿表单 -->
+  <div class="collapse" :class="{open: draftForm.show}">
+    <div class="card mb0">
+      <div class="hd">
+        <h3>新建发布草稿</h3>
+        <span class="hint">汇总 D04/D06/D07/D08 结果生成发布草稿 · 加工链终点 · R版冻结唯一出口</span>
+        <button class="b-ghost b-sm right" @click="draftForm.show = false">收起</button>
+      </div>
+      <div class="bd">
+        <div class="frow">
+          <div><label class="f">基准期间 <span class="req">*</span></label>
+            <input x-model="draftForm.base_period" placeholder="YYYY-MM"></div>
+          <div style="display:flex; align-items:flex-end">
+            <button class="b-pri b-sm" :disabled="draftForm.busy" @click="submitDraft()"
+              x-text="draftForm.busy ? '处理中…' : '生成草稿'"></button></div>
+        </div>
+        <div class="muted mt8">系统自动汇总消耗量 + 事件量 = 发布量（rel_qty = cons_qty + Σ事件量）</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 列表 -->
+  <div class="card" :class="draftForm.show ? 'mt12' : ''"><div class="bd" style="padding:0">
+    <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+      <b>需求发布台账</b>
+      <button class="b-pri b-sm" @click="openDraft()">＋ 新建发布草稿</button>
+      <div class="right tagline" style="gap:8px; flex-wrap:wrap">
+        <div class="chips">
+          <template x-for="s in ['', '草稿', '待发布', '已发布', '已替代']" :key="s || '全部'">
+            <span class="fchip" :class="{on: fStatus === s}"
+              @click="fStatus = s; list.load(1)" x-text="s || '全部'"></span>
+          </template>
+        </div>
+        <input x-model="fRelVersion" @keydown.enter="search()" placeholder="发布版本" style="width:120px">
+        <button class="b-ghost b-sm" @click="search()">查询</button>
+      </div>
+    </div>
+    <div class="scroll-x">
+      <table class="tbl tight">
+        <tr>
+          <th>发布单号</th><th>发布版本</th><th>基准期间</th><th>上一版本</th><th>状态</th><th>发布人</th><th>发布日期</th><th>创建时间</th><th class="right">操作</th>
+        </tr>
+        <template x-if="!list.items.length"><tr><td colspan="9" class="empty" x-text="(fStatus || fRelVersion) ? '无匹配数据' : '暂无发布单 —— 点「新建发布草稿」创建'"></td></tr></template>
+        <template x-for="d in list.items" :key="d.rel_no">
+          <tr class="data">
+            <td><button class="b-link mono" @click="viewX(d)" x-text="d.rel_no"></button></td>
+            <td class="mono" x-text="dash(d.rel_version)"></td>
+            <td x-text="dash(d.base_period)"></td>
+            <td class="mono" x-text="dash(d.prev_version)"></td>
+            <td><span class="st" :class="'st-' + hue(d.status)" x-text="statusLabel(d.status)"></span></td>
+            <td x-text="dash(d.publisher)"></td>
+            <td class="mono" x-text="fmtTime(d.publish_date)"></td>
+            <td class="mono" x-text="fmtTime(d.created_at)"></td>
+            <td class="right rowact" style="white-space:nowrap">
+              <button class="b-pri b-sm" x-show="d.status === '草稿'" @click="viewX(d)">添加明细</button>
+              <button class="b-pri b-sm" x-show="d.status === '草稿'" @click="checklistVerify(d)">校验</button>
+              <button class="b-pri b-sm" x-show="d.status === '待发布'" @click="publish(d)">发布</button>
+              <button class="b-pri b-sm" x-show="d.status === '已发布'" @click="viewX(d)">修订</button>
+              <button class="b-ghost b-sm" x-show="d.status === '已发布'" @click="versionDiff(d)">比对</button>
+              <button class="b-ghost b-sm" x-show="d.status === '已替代'" @click="viewX(d)">查看</button>
+            </td>
+          </tr>
+        </template>
+      </table>
+    </div>
+    <div class="tagline" style="padding:10px 16px">
+      <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+        <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+        <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+      </div>
+    </div>
+  </div></div>
+
+  <!-- 详情模态 -->
+  <div class="modal-mask" x-show="modalX.open" @click.self="closeX()"
+       @keydown.escape.window="closeX()" x-cloak>
+    <div class="modal">
+      <div class="modal-hd">
+        <div>
+          <div class="docno" x-text="modalX.d ? modalX.d.header.rel_no : '发布单详情'"></div>
+          <div class="sub">需求发布详情 · DEMAND RELEASE</div>
+        </div>
+        <template x-if="modalX.d">
+          <span class="st" :class="'st-' + hue(modalX.d.header.status)" x-text="statusLabel(modalX.d.header.status)"></span>
+        </template>
+        <button class="x" @click="closeX()">✕</button>
+      </div>
+      <div class="modal-bd">
+        <template x-if="modalX.loading">
+          <div class="loadbox"><span class="spin">◌</span><br>载入发布单明细…</div>
+        </template>
+        <template x-if="!modalX.loading && modalX.d">
+          <div>
+            <div class="sec">基本信息</div>
+            <div class="kv">
+              <div><div class="k">发布单号</div><div class="v mono" x-text="dash(modalX.d.header.rel_no)"></div></div>
+              <div><div class="k">发布版本</div><div class="v mono" x-text="dash(modalX.d.header.rel_version)"></div></div>
+              <div><div class="k">基准期间</div><div class="v mono" x-text="dash(modalX.d.header.base_period)"></div></div>
+              <div><div class="k">上一版本</div><div class="v mono" x-text="dash(modalX.d.header.prev_version)"></div></div>
+              <div><div class="k">状态</div><div class="v"><span class="st" :class="'st-' + hue(modalX.d.header.status)" x-text="statusLabel(modalX.d.header.status)"></span></div></div>
+            </div>
+
+            <div class="sec">发布信息</div>
+            <div class="kv">
+              <div><div class="k">发布人</div><div class="v" x-text="dash(modalX.d.header.publisher)"></div></div>
+              <div><div class="k">发布日期</div><div class="v mono" x-text="fmtTime(modalX.d.header.publish_date)"></div></div>
+            </div>
+
+            <div class="sec">时间</div>
+            <div class="kv">
+              <div><div class="k">创建时间</div><div class="v mono" x-text="fmtTime(modalX.d.header.created_at)"></div></div>
+              <div><div class="k">更新时间</div><div class="v mono" x-text="fmtTime(modalX.d.header.updated_at)"></div></div>
+            </div>
+
+            <div class="sec">发布明细（<span x-text="modalX.d.details ? modalX.d.details.length : 0"></span> 行）</div>
+            <div class="scroll-x">
+              <table class="tbl tight">
+                <tr><th>零件号</th><th>车型</th><th>期间</th><th class="num">消耗量</th><th>事件项</th><th class="num">发布量</th><th>拆回量</th><th>依据</th><th>链路线索</th></tr>
+                <template x-if="!modalX.d.details || !modalX.d.details.length">
+                  <tr><td colspan="9" class="empty">暂无明细</td></tr>
+                </template>
+                <template x-for="d in modalX.d.details" :key="d.line_no || d.part_no + '_' + d.period">
+                  <tr>
+                    <td class="mono" x-text="dash(d.part_no)"></td>
+                    <td x-text="dash(d.veh_model)"></td>
+                    <td class="mono" x-text="dash(d.period)"></td>
+                    <td class="num" x-text="fmt(d.cons_qty)"></td>
+                    <td class="mono" x-text="JSON.stringify(tryParse(d.event_items)) || '—'"></td>
+                    <td class="num"><b x-text="fmt(d.rel_qty)"></b></td>
+                    <td class="mono" x-text="JSON.stringify(tryParse(d.split_qty)) || '—'"></td>
+                    <td x-text="dash(d.basis)"></td>
+                    <td class="mono" x-text="JSON.stringify(tryParse(d.lineage)) || '—'"></td>
+                  </tr>
+                </template>
+              </table>
+            </div>
+
+            <!-- 添加明细表单 -->
+            <template x-if="lineForm.show && modalX.d.header.status === '草稿'">
+              <div>
+                <div class="sec">添加发布明细行</div>
+                <div class="frow">
+                  <div><label class="f">零件号 <span class="req">*</span></label>
+                    <div style="position:relative;">
+                      <input x-model="lineForm.part_no"
+                             @click.stop="toggleAuto('lineForm_part_no','part_no')"
+                             @input="autoShow = 'lineForm_part_no'; filterAuto('part_no', lineForm.part_no)"
+                             placeholder="搜索零件号或名称..."
+                             autocomplete="off"
+                             style="width:100%">
+                      <div class="auto-drop" x-show="autoShow==='lineForm_part_no'" @click.away="autoShow=''"
+                           style="position:absolute; top:100%; left:0; right:0; max-height:240px; overflow-y:auto;
+                                  background:#fff; border:1px solid #ccc; border-radius:4px; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,.1)">
+                        <div x-show="!autoFiltered.length" style="padding:8px; color:#999">无匹配结果</div>
+                        <template x-for="item in autoFiltered" :key="item['part_no']">
+                          <div @mousedown.prevent="selectAuto(item, lineForm, 'part_no')"
+                               style="padding:6px 12px; cursor:pointer; border-bottom:1px solid #f0f0f0"
+                               @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+                            <div style="font-weight:500" x-text="item['part_no']"></div>
+                            <div style="font-size:12px; color:#888" x-text="autoDisplay[item['part_no']] || '—'"></div>
+                          </div>
+                        </template>
+                      </div>
+                    </div></div>
+                  <div><label class="f">车型 <span class="req">*</span></label>
+                    <div style="position:relative;">
+                      <input x-model="lineForm.veh_model"
+                             @click.stop="toggleAuto('lineForm_veh_model','vehicle_code')"
+                             @input="autoShow = 'lineForm_veh_model'; filterAuto('vehicle_code', lineForm.veh_model)"
+                             placeholder="搜索车型代码或名称..."
+                             autocomplete="off"
+                             style="width:100%">
+                      <div class="auto-drop" x-show="autoShow==='lineForm_veh_model'" @click.away="autoShow=''"
+                           style="position:absolute; top:100%; left:0; right:0; max-height:240px; overflow-y:auto;
+                                  background:#fff; border:1px solid #ccc; border-radius:4px; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,.1)">
+                        <div x-show="!autoFiltered.length" style="padding:8px; color:#999">无匹配结果</div>
+                        <template x-for="item in autoFiltered" :key="item['vehicle_code']">
+                          <div @mousedown.prevent="selectAuto(item, lineForm, 'veh_model', 'vehicle_code')"
+                               style="padding:6px 12px; cursor:pointer; border-bottom:1px solid #f0f0f0"
+                               @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+                            <div style="font-weight:500" x-text="item['vehicle_code']"></div>
+                            <div style="font-size:12px; color:#888" x-text="autoDisplay[item['vehicle_code']] || '—'"></div>
+                          </div>
+                        </template>
+                      </div>
+                    </div></div>
+                  <div><label class="f">期间 <span class="req">*</span></label>
+                    <input x-model="lineForm.period" placeholder="YYYY-MM"></div>
+                  <div><label class="f">消耗量 <span class="req">*</span></label>
+                    <input type="number" x-model="lineForm.cons_qty"></div>
+                </div>
+                <div class="frow">
+                  <div style="grid-column: span 2"><label class="f">事件项 <span class="req">*</span> (JSON)</label>
+                    <textarea x-model="lineForm.event_items" rows="2" placeholder='[{"type":"断点","qty":200}]'></textarea></div>
+                  <div style="grid-column: span 2"><label class="f">依据 <span class="req">*</span></label>
+                    <textarea x-model="lineForm.basis" rows="2" placeholder="如 D04-核定值+函件"></textarea></div>
+                </div>
+                <div style="margin-bottom:8px">
+                  <button class="b-ghost b-sm" @click="lineForm.more = !lineForm.more"
+                    x-text="lineForm.more ? '收起字段 ▴' : '更多字段 ▾'"></button>
+                </div>
+                <div class="collapse" :class="{open: lineForm.more}">
+                  <div class="frow">
+                    <div style="grid-column: span 2"><label class="f">链路线索 <span class="req">*</span> (JSON)</label>
+                      <textarea x-model="lineForm.lineage" rows="2" placeholder='{"source":"D04","batch":"PRC-001"}'></textarea></div>
+                    <div style="grid-column: span 2"><label class="f">拆回量 (JSON)</label>
+                      <textarea x-model="lineForm.split_qty" rows="2" placeholder='{"OEM-A":500}'></textarea></div>
+                  </div>
+                </div>
+                <div class="mt12 tagline">
+                  <span class="muted">发布量 = 消耗量 + Σ事件量（系统强制计算）</span>
+                  <button class="b-pri right" :disabled="lineForm.busy" @click="submitLine()"
+                    x-text="lineForm.busy ? '提交中…' : '添加明细'"></button>
+                </div>
+              </div>
+            </template>
+
+            <!-- 修订表单 -->
+            <template x-if="reviseForm.show && modalX.d.header.status === '已发布'">
+              <div>
+                <div class="sec">版本修订</div>
+                <div class="frow">
+                  <div style="grid-column: span 3"><label class="f">修订原因 <span class="req">*</span></label>
+                    <input x-model="reviseForm.reason" placeholder="说明为何需要产生子版本"></div>
+                  <div style="display:flex; align-items:flex-end">
+                    <button class="b-pri b-sm" :disabled="reviseForm.busy" @click="submitRevise()"
+                      x-text="reviseForm.busy ? '提交中…' : '生成新版本'"></button></div>
+                </div>
+              </div>
+            </template>
+
+            <details class="raw"><summary>原始数据</summary>
+              <pre class="json" x-text="JSON.stringify(modalX.d, null, 2)"></pre></details>
+          </div>
+        </template>
+      </div>
+      <div class="modal-ft" x-show="modalX.d">
+        <template x-if="modalX.d">
+          <div class="tagline" style="gap:8px">
+            <template x-if="modalX.d.header.status === '草稿' && !lineForm.show">
+              <button class="b-pri" @click="openLineForm()">添加明细</button>
+            </template>
+            <template x-if="lineForm.show">
+              <button class="b-ghost" @click="lineForm.show = false">收起明细</button>
+            </template>
+            <button class="b-pri" x-show="modalX.d.header.status === '草稿'" @click="checklistVerify(modalX.d)">Checklist 校验</button>
+            <button class="b-pri" x-show="modalX.d.header.status === '待发布'" @click="publish(modalX.d)">正式发布</button>
+            <template x-if="modalX.d.header.status === '已发布' && !reviseForm.show">
+              <button class="b-pri" @click="openRevise()">修订</button>
+            </template>
+            <template x-if="reviseForm.show">
+              <button class="b-ghost" @click="reviseForm.show = false">收起修订</button>
+            </template>
+            <button class="b-ghost" x-show="modalX.d.header.status === '已发布'" @click="versionDiff(modalX.d)">版本比对</button>
+            <span class="muted" x-show="modalX.d.header.status === '已替代'">已替代 · 只读</span>
+            <button class="b-ghost right" @click="closeX()">关闭</button>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+</div>

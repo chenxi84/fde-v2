@@ -1,0 +1,114 @@
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px;flex-wrap:wrap">
+    <b>项目-零件映射</b>
+    <div class="right tagline" style="gap:8px">
+      <input x-model="filterProj" @keydown.enter="search()" placeholder="项目号…" style="width:100px">
+      <input x-model="filterPart" @keydown.enter="search()" placeholder="零件号…" style="width:100px">
+      <input x-model="filterVeh" @keydown.enter="search()" placeholder="车型…" style="width:100px">
+      <button class="b-ghost b-sm" @click="search()">搜索</button>
+    </div>
+  </div>
+  <div style="padding:0 16px 8px"><button class="b-pri b-sm" @click="showCreate()">+ 新建映射</button></div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr><th>项目号</th><th>零件号</th><th>车型</th><th>单车用量</th><th>供应份额</th><th>生效起</th><th>生效止</th><th class="right">操作</th></tr>
+      <template x-if="!list.items.length"><tr><td colspan="8" class="empty">无匹配数据</td></tr></template>
+      <template x-for="d in list.items" :key="d.project_no + d.part_no">
+        <tr class="data">
+          <td><button class="b-link mono" @click="view(d)" x-text="d.project_no"></button></td>
+          <td x-text="d.part_no"></td>
+          <td x-text="dash(d.veh_model)"></td>
+          <td x-text="dash(d.usage)"></td>
+          <td x-text="d.share != null ? fmt(d.share) : dash()"></td>
+          <td x-text="dash(d.eff_from)"></td>
+          <td x-text="dash(d.eff_to)"></td>
+          <td class="right rowact">
+            <button class="b-pri b-sm" @click="view(d)">详情</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:8px 16px" x-show="list.total > 0">
+    <span style="font-size:12px;color:var(--muted)">共 <span x-text="list.total"></span> 条</span>
+    <div class="right tagline" style="gap:4px">
+      <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">上一页</button>
+      <span style="font-size:12px" x-text="list.page + ' / ' + Math.ceil(list.total / list.size)"></span>
+      <button class="b-ghost b-sm" :disabled="list.page * list.size >= list.total" @click="list.load(list.page + 1)">下一页</button>
+    </div>
+  </div>
+</div></div>
+
+<div class="modal-mask" x-show="modal.open" @click.self="closeModal()">
+  <div class="modal" style="max-width:480px">
+    <template x-if="modal.loading"><div class="loadbox" style="padding:40px;text-align:center">加载中…</div></template>
+    <template x-if="!modal.loading && modal.d">
+      <div>
+        <div class="modal-hd" style="background:var(--ink);color:#fff">
+          <span><b x-text="modal.d.project_no + ' / ' + modal.d.part_no"></b></span>
+          <button class="b-ghost" style="color:#fff" @click="closeModal()">✕</button>
+        </div>
+        <div class="modal-bd" style="padding:16px">
+          <div class="sec">基本信息</div>
+          <div class="kv"><label>项目号</label><span x-text="modal.d.project_no"></span></div>
+          <div class="kv"><label>零件号</label><span x-text="modal.d.part_no"></span></div>
+          <div class="sec">量纲信息</div>
+          <div class="kv"><label>车型</label><span x-text="dash(modal.d.veh_model)"></span></div>
+          <div class="kv"><label>单车用量</label><span x-text="dash(modal.d.usage)"></span></div>
+          <div class="kv"><label>供应份额</label><span x-text="modal.d.share != null ? fmt(modal.d.share) : dash()"></span></div>
+          <div class="sec">生效期间</div>
+          <div class="kv"><label>生效起</label><span x-text="dash(modal.d.eff_from)"></span></div>
+          <div class="kv"><label>生效止</label><span x-text="dash(modal.d.eff_to)"></span></div>
+          <details class="mt12"><summary style="font-size:12px;color:var(--muted);cursor:pointer">原始数据</summary>
+            <pre style="font-size:11px;max-height:200px;overflow:auto" x-text="JSON.stringify(modal.d, null, 2)"></pre>
+          </details>
+        </div>
+        <div class="modal-ft"><button class="b-pri" @click="showEdit()">编辑</button><button class="b-ghost" @click="closeModal()">关闭</button></div>
+      </div>
+    </template>
+  </div>  <!-- /.modal -->
+</div>
+
+<div class="modal-mask" x-show="form.open" @click.self="form.open = false">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-hd"><b x-text="form.mode === 'create' ? '新建映射' : '编辑映射'"></b><button class="b-ghost" @click="form.open = false">✕</button></div>
+    <div class="modal-bd" style="padding:16px">
+      <div class="kv"><label>项目号 ★</label>
+        <span style="position:relative">
+          <input x-model="projQuery" :disabled="form.mode === 'edit'" @focus="projOpen = true" @click.stop="projOpen = true" @input="projOpen = true" :placeholder="form.mode === 'edit' ? form.project_no : '搜索项目…'" style="width:100%">
+          <div class="autocomplete-drop" x-show="projOpen && projectOptions.length && form.mode !== 'edit'" @click.away="projOpen = false" style="position:absolute;top:100%;left:0;right:0;background:var(--card);border:1px solid var(--line);max-height:200px;overflow:auto;z-index:100;border-radius:4px">
+            <template x-for="p in filteredProjects" :key="p.project_no">
+              <div @click="selectProject(p)" style="padding:6px 8px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--line-sub)">
+                <div x-text="p.project_no + ' - ' + p.project_name"></div>
+              </div>
+            </template>
+            <div x-show="!filteredProjects.length" style="padding:6px 8px;color:var(--muted);font-size:12px">暂无可选项目</div>
+          </div>
+        </span>
+      </div>
+      <div class="kv"><label>零件号 ★</label>
+        <span style="position:relative">
+          <input x-model="partQuery" :disabled="form.mode === 'edit'" @focus="partOpen = true" @click.stop="partOpen = true" @input="partOpen = true" :placeholder="form.mode === 'edit' ? form.part_no : '搜索物料…'" style="width:100%">
+          <div class="autocomplete-drop" x-show="partOpen && partOptions.length && form.mode !== 'edit'" @click.away="partOpen = false" style="position:absolute;top:100%;left:0;right:0;background:var(--card);border:1px solid var(--line);max-height:200px;overflow:auto;z-index:100;border-radius:4px">
+            <template x-for="p in filteredParts" :key="p.part_no">
+              <div @click="selectPart(p)" style="padding:6px 8px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--line-sub)">
+                <div x-text="p.part_no + ' - ' + p.part_name"></div>
+              </div>
+            </template>
+            <div x-show="!filteredParts.length" style="padding:6px 8px;color:var(--muted);font-size:12px">暂无可选物料</div>
+          </div>
+        </span>
+      </div>
+      <details class="mt12"><summary style="font-size:12px;color:var(--muted);cursor:pointer">更多字段 ▾</summary>
+        <div class="mt8" style="display:flex;flex-direction:column;gap:8px">
+          <div class="kv"><label>车型</label><span><input x-model="form.veh_model" style="width:100%"></span></div>
+          <div class="kv"><label>单车用量</label><span><input type="number" min="0" x-model="form.usage" style="width:100%"></span></div>
+          <div class="kv"><label>供应份额</label><span><input type="number" min="0" max="1" step="0.01" x-model="form.share" style="width:100%"></span></div>
+          <div class="kv"><label>生效起</label><span><input type="date" x-model="form.eff_from" style="width:100%"></span></div>
+          <div class="kv"><label>生效止</label><span><input type="date" x-model="form.eff_to" style="width:100%"></span></div>
+        </div>
+      </details>
+    </div>
+    <div class="modal-ft"><button class="b-pri" @click="save()">保存</button><button class="b-ghost" @click="form.open = false">取消</button></div>
+  </div>  <!-- /.modal -->
+</div>

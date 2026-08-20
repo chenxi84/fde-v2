@@ -1,0 +1,183 @@
+<div>
+  <!-- 加载态 -->
+  <div class="loadbox" x-show="loading"><span class="spin">◌</span><br>载入看板…</div>
+
+  <div x-show="!loading">
+    <!-- KPI 指标带 -->
+    <div class="kpis">
+      <div class="kpi rv" style="--kc:#b45309">
+        <button class="v b-link" style="padding:0" @click="gotoPage('demand_pool')" x-text="kpi.pending"></button>
+        <div class="k">待下达补库单</div>
+      </div>
+      <div class="kpi rv" style="--kc:#0e7490; animation-delay:.05s">
+        <button class="v b-link" style="padding:0" @click="gotoPage('demand_pool')" x-text="kpi.released"></button>
+        <div class="k">已下达补库单</div>
+      </div>
+      <div class="kpi rv" style="--kc:#16a34a; animation-delay:.1s">
+        <button class="v b-link" style="padding:0" @click="gotoPage('demand_pool')" x-text="kpi.producing"></button>
+        <div class="k">生产中补库单</div>
+      </div>
+      <div class="kpi rv" style="--kc:#d97706; animation-delay:.15s">
+        <button class="v b-link" style="padding:0" @click="gotoPage('strategy_fitting')" x-text="kpi.review"></button>
+        <div class="k">待复核拟合</div>
+      </div>
+      <div class="kpi rv" style="--kc:#475569; animation-delay:.2s">
+        <button class="v b-link" style="padding:0" @click="gotoPage('md_monthly_version')" x-text="kpi.draft"></button>
+        <div class="k">草稿版本</div>
+      </div>
+      <div class="kpi rv" style="--kc:#b91c1c; animation-delay:.25s">
+        <button class="v b-link" style="padding:0" @click="gotoPage('inventory_projection')" x-text="kpi.shortage"></button>
+        <div class="k">缺货预警</div>
+      </div>
+    </div>
+
+    <!-- 主链管道（销售预测 → 库存策略 → 毛需求/净需求 → 主计划 → 库存推移表 → 需求池 → 策略拟合） -->
+    <div class="overline">主链管道</div>
+    <div class="pipe">
+      <!-- ① 销售预测 -->
+      <div class="pipe-col rv">
+        <h4><span class="idx">①</span><span>销售预测</span></h4>
+        <div class="sline" x-show="!pipe.forecast.items.length"><span class="muted">暂无数据</span></div>
+        <template x-for="d in pipe.forecast.items" :key="d.material_no + d.customer_no + d.rolling_month">
+          <div>
+            <div class="sline">
+              <button class="b-link mono" @click="gotoPage('sales_forecast')" x-text="d.material_no"></button>
+              <span class="tagline" style="gap:4px">
+                <span class="st st-red" x-show="d.abnormal_flag" x-text="'异常'"></span>
+                <b x-text="fmt(d.final_qty)"></b>
+              </span>
+            </div>
+            <div class="sline"><span class="muted" x-text="dash(d.customer_no) + ' · ' + dash(d.rolling_month)"></span></div>
+          </div>
+        </template>
+      </div>
+
+      <!-- ② 库存策略 -->
+      <div class="pipe-col rv" style="animation-delay:.05s">
+        <h4><span class="idx">②</span><span>库存策略</span></h4>
+        <div class="sline" x-show="!pipe.strategy.items.length"><span class="muted">暂无数据</span></div>
+        <template x-for="d in pipe.strategy.items" :key="d.material_no">
+          <div>
+            <div class="sline">
+              <button class="b-link mono" @click="gotoPage('inventory_strategy')" x-text="d.material_no"></button>
+              <b x-text="fmt(d.min_level)"></b>
+            </div>
+            <div class="sline"><span class="muted" x-text="dash(d.hedge_tool) + ' · 安全 ' + fmt(d.safety_level) + ' · 批次 ' + fmt(d.batch_level)"></span></div>
+          </div>
+        </template>
+      </div>
+
+      <!-- ③ 毛需求/净需求 -->
+      <div class="pipe-col rv" style="animation-delay:.1s">
+        <h4><span class="idx">③</span><span>毛需求/净需求</span></h4>
+        <div class="sline" x-show="!pipe.demand.items.length"><span class="muted">暂无数据</span></div>
+        <template x-for="d in pipe.demand.items" :key="d.material_no + d.rolling_month">
+          <div>
+            <div class="sline">
+              <button class="b-link mono" @click="gotoPage('demand')" x-text="d.material_no"></button>
+              <b x-text="fmt(d.net_qty)"></b>
+            </div>
+            <div class="sline"><span class="muted" x-text="dash(d.rolling_month) + ' · 毛 ' + fmt(d.gross_qty)"></span></div>
+          </div>
+        </template>
+      </div>
+
+      <!-- ④ 主计划 -->
+      <div class="pipe-col rv" style="animation-delay:.15s">
+        <h4><span class="idx">④</span><span>主计划</span></h4>
+        <div class="sline" x-show="!pipe.master.items.length"><span class="muted">暂无数据</span></div>
+        <template x-for="d in pipe.master.items" :key="d.material_no + d.rolling_month + d.plan_version">
+          <div>
+            <div class="sline">
+              <button class="b-link mono" @click="gotoPage('master_plan')" x-text="d.material_no"></button>
+              <b x-text="fmt(d.plan_qty)"></b>
+            </div>
+            <div class="sline"><span class="muted" x-text="dash(d.rolling_month) + ' · v' + dash(d.plan_version)"></span></div>
+          </div>
+        </template>
+      </div>
+
+      <!-- ⑤ 库存推移表 -->
+      <div class="pipe-col rv" style="animation-delay:.2s">
+        <h4><span class="idx">⑤</span><span>库存推移表</span></h4>
+        <div class="sline" x-show="!pipe.projection.items.length"><span class="muted">暂无数据</span></div>
+        <template x-for="d in pipe.projection.items" :key="d.material_no + d.biz_date">
+          <div>
+            <div class="sline">
+              <button class="b-link mono" @click="gotoPage('inventory_projection')" x-text="d.material_no"></button>
+              <span class="st" :class="'st-' + hue(d.alert_type)" x-text="dash(d.alert_type)"></span>
+            </div>
+            <div class="sline"><span class="muted" x-text="dash(d.biz_date) + ' · 结存 ' + fmt(d.balance)"></span></div>
+          </div>
+        </template>
+      </div>
+
+      <!-- ⑥ 需求池 -->
+      <div class="pipe-col rv" style="animation-delay:.25s">
+        <h4><span class="idx">⑥</span><span>需求池</span></h4>
+        <div class="sline" x-show="!pipe.pool.items.length"><span class="muted">暂无数据</span></div>
+        <template x-for="d in pipe.pool.items" :key="d.replenish_no">
+          <div>
+            <div class="sline">
+              <button class="b-link mono" @click="gotoPage('demand_pool')" x-text="d.replenish_no"></button>
+              <span class="st" :class="'st-' + hue(d.status)" x-text="dash(d.status)"></span>
+            </div>
+            <div class="sline"><span class="muted" x-text="dash(d.material_no) + ' · ' + dash(d.replenish_type)"></span></div>
+          </div>
+        </template>
+      </div>
+
+      <!-- ⑦ 策略拟合 -->
+      <div class="pipe-col rv" style="animation-delay:.3s">
+        <h4><span class="idx">⑦</span><span>策略拟合</span></h4>
+        <div class="sline" x-show="!pipe.fitting.items.length"><span class="muted">暂无数据</span></div>
+        <template x-for="d in pipe.fitting.items" :key="d.fit_version + d.material_no">
+          <div>
+            <div class="sline">
+              <button class="b-link mono" @click="gotoPage('strategy_fitting')" x-text="d.material_no"></button>
+              <span class="st" :class="'st-' + hue(d.status)" x-text="dash(d.status)"></span>
+            </div>
+            <div class="sline"><span class="muted" x-text="dash(d.fit_version) + ' · ' + dash(d.pred_method)"></span></div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- 待办队列 -->
+    <div class="overline">待办队列</div>
+    <div class="pipe">
+      <div class="pipe-col rv">
+        <h4><span class="idx">①</span><span>需求池 · 待下达补库</span><span class="right mono" x-text="todo.replenish.total"></span></h4>
+        <div class="sline" x-show="!todo.replenish.items.length"><span class="muted">暂无待办</span></div>
+        <template x-for="d in todo.replenish.items" :key="d.replenish_no">
+          <div class="sline">
+            <button class="b-link mono" @click="gotoPage('demand_pool')" x-text="d.replenish_no"></button>
+            <span class="muted mono" x-text="dash(d.material_no)"></span>
+          </div>
+        </template>
+      </div>
+
+      <div class="pipe-col rv" style="animation-delay:.05s">
+        <h4><span class="idx">②</span><span>策略拟合 · 待复核</span><span class="right mono" x-text="todo.fitting.total"></span></h4>
+        <div class="sline" x-show="!todo.fitting.items.length"><span class="muted">暂无待办</span></div>
+        <template x-for="d in todo.fitting.items" :key="d.fit_version + d.material_no">
+          <div class="sline">
+            <button class="b-link mono" @click="gotoPage('strategy_fitting')" x-text="d.material_no"></button>
+            <span class="muted mono" x-text="dash(d.fit_version)"></span>
+          </div>
+        </template>
+      </div>
+
+      <div class="pipe-col rv" style="animation-delay:.1s">
+        <h4><span class="idx">③</span><span>月度版本 · 草稿</span><span class="right mono" x-text="todo.version.total"></span></h4>
+        <div class="sline" x-show="!todo.version.items.length"><span class="muted">暂无待办</span></div>
+        <template x-for="d in todo.version.items" :key="d.version_no">
+          <div class="sline">
+            <button class="b-link mono" @click="gotoPage('md_monthly_version')" x-text="d.version_no"></button>
+            <span class="muted mono" x-text="dash(d.anchor_period)"></span>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+</div>

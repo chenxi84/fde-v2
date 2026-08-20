@@ -1,0 +1,136 @@
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>客户列表</b>
+    <span class="muted">主数据 · 客户/工厂</span>
+    <div class="right tagline" style="gap:8px">
+      <input x-model="keyword" @keydown.enter="search()" placeholder="编号 / 名称" style="width:220px">
+      <button class="b-ghost b-sm" @click="search()">查询</button>
+      <button class="b-pri b-sm" @click="openCreate()">+ 新建客户</button>
+    </div>
+  </div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr><th>客户编号</th><th>简称</th><th>结算模式</th><th>信誉标签</th><th>创建时间</th></tr>
+      <template x-if="!list.items.length">
+        <tr><td colspan="5" class="empty"
+          x-text="keyword ? '无符合条件的客户' : '暂无客户 —— 点「新建客户」创建'"></td></tr>
+      </template>
+      <template x-for="d in list.items" :key="d.customer_code">
+        <tr class="data">
+          <td><button class="b-link mono" @click="viewX(d)" x-text="d.customer_code"></button></td>
+          <td x-text="dash(d.short_name || d.customer_name)"></td>
+          <td x-text="dash(d.settlement_mode)"></td>
+          <td x-text="dash(d.predict_behavior_label)"></td>
+          <td class="mono" x-text="fmtTime(d.created_at)"></td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:10px 16px">
+    <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+    <div class="right tagline" style="gap:8px">
+      <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+      <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+      <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- 新建表单模态 -->
+<div class="modal-mask" x-show="form.open" @click.self="closeCreate()" x-cloak>
+  <div class="modal" style="max-width:500px">
+    <div class="modal-hd"><div><div class="docno">新建客户</div></div>
+      <button class="x" @click="closeCreate()">✕</button></div>
+    <div class="modal-bd">
+      <div class="frow"><div>
+        <label class="f">客户编号 <span class="req">*</span></label>
+        <input x-model="form.customer_code" placeholder="如 OEM-TOYOTA"></div><div>
+        <label class="f">客户名称 <span class="req">*</span></label>
+        <input x-model="form.customer_name" placeholder="如 丰田汽车"></div></div>
+      <div class="frow"><div>
+        <label class="f">简称</label>
+        <input x-model="form.short_name" placeholder="如 丰田"></div><div>
+        <label class="f">结算模式</label>
+        <select x-model="form.settlement_mode">
+          <option>寄售</option><option>非寄售</option>
+        </select></div></div>
+      <div class="frow"><div>
+        <label class="f">信誉标签</label>
+        <select x-model="form.predict_behavior_label">
+          <option>待评估</option><option>高信任</option><option>中等信任</option><option>低信任</option>
+        </select></div><div>
+</div></div>
+      <div class="mt12 tagline">
+        <button class="b-pri right" :disabled="form.busy" @click="saveForm()"
+          x-text="form.busy ? '创建中...' : '创建客户'"></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 详情模态 -->
+<div class="modal-mask" x-show="modalX.open" @click.self="closeModal()"
+     @keydown.escape.window="closeModal()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div>
+        <div class="docno" x-text="modalX.d ? '客户详情 · ' + modalX.d.customer_code : '客户详情'"></div>
+        <div class="sub">客户主数据 · CUSTOMER MASTER</div>
+      </div>
+      <button class="x" @click="closeModal()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <template x-if="modalX.loading">
+        <div class="loadbox"><span class="spin">◌</span><br>载入客户明细…</div>
+      </template>
+      <template x-if="!modalX.loading && modalX.d">
+        <div>
+          <div class="sec">基本信息</div>
+          <div class="kv">
+            <div><div class="k">客户编号</div><div class="v mono" x-text="dash(modalX.d.customer_code)"></div></div>
+            <div><div class="k">客户名称</div><div class="v" x-text="dash(modalX.d.customer_name)"></div></div>
+            <div><div class="k">简称</div><div class="v" x-text="dash(modalX.d.short_name)"></div></div>
+            <div><div class="k">结算模式</div><div class="v" x-text="dash(modalX.d.settlement_mode)"></div></div>
+            <div><div class="k">信誉标签</div><div class="v" x-text="dash(modalX.d.predict_behavior_label)"></div></div>
+          </div>
+          <div class="sec">工厂列表
+            <button class="b-pri b-sm right" @click="openAddPlant()" style="margin-left:8px">+ 添加工厂</button>
+          </div>
+          <div class="scroll-x">
+            <table class="tbl tight">
+              <tr><th>工厂编码</th><th>工厂名称</th><th class="right">操作</th></tr>
+              <template x-if="!plantList.length"><tr><td colspan="3" class="empty">暂无工厂</td></tr></template>
+              <template x-for="p in plantList" :key="p.plant_code">
+                <tr><td class="mono" x-text="p.plant_code"></td>
+                  <td x-text="dash(p.plant_name)"></td>
+                  <td class="right"><button class="b-dng b-sm" @click="removePlant(p.plant_code)">删除</button></td></tr>
+              </template>
+            </table>
+          </div>
+          <div class="sec">原始数据</div>
+          <pre class="json" x-text="JSON.stringify(modalX.d, null, 2)"></pre>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<!-- 添加工厂子表模态 -->
+<div class="modal-mask" x-show="plantForm.show" @click.self="plantForm.show=false" x-cloak>
+  <div class="modal" style="max-width:400px">
+    <div class="modal-hd"><div><div class="docno">添加工厂</div></div>
+      <button class="x" @click="plantForm.show=false">✕</button></div>
+    <div class="modal-bd">
+      <div class="frow"><div>
+        <label class="f">工厂编码 <span class="req">*</span></label>
+        <input x-model="plantForm.plant_code" placeholder="如 PLANT-A1"></div><div>
+        <label class="f">工厂名称</label>
+        <input x-model="plantForm.plant_name" placeholder="如 广丰一工厂"></div></div>
+      <div class="mt12 tagline">
+        <button class="b-pri right" :disabled="plantForm.busy" @click="savePlant()"
+          x-text="plantForm.busy ? '添加中...' : '添加工厂'"></button>
+      </div>
+    </div>
+  </div>
+</div>
+</div>

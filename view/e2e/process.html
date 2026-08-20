@@ -1,0 +1,17 @@
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px">
+    <b>流程总览（参考实现）</b>
+    <span class="muted" style="font-size:12px">数据驱动 SVG 流程图 · x-html 注入 + data-page 事件委托</span>
+  </div>
+  <div class="scroll-x" style="padding:8px 16px 14px">
+    <template x-if="!svgHtml">
+      <div class="loadbox"><span class="spin">◌</span> 载入…</div>
+    </template>
+    <template x-if="svgHtml">
+      <div @click="onSvgClick($event)" x-html="svgHtml"></div>
+    </template>
+    <div class="muted" style="font-size:11px; padding-top:6px">
+      图例：<span class="st st-green">绿</span> 已完成 · <span class="st st-slate">灰</span> 未开始 · 点击节点进入对应页面
+    </div>
+  </div>
+</div></div>

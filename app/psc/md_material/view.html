@@ -1,0 +1,341 @@
+<!-- 列表区：工具栏 / 表格 / 分页条 -->
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>物料列表</b>
+    <span class="muted">主数据 · 物料属性 / 预测方法 / 库存参数</span>
+    <div class="right tagline" style="gap:8px; flex-wrap:wrap">
+      <div class="chips">
+        <template x-for="s in ['', '正常', 'EOP', '停用']" :key="s || '全部'">
+          <span class="fchip" :class="{on: filter === s}"
+            @click="filter = s; search()" x-text="s || '全部'"></span>
+        </template>
+      </div>
+      <input x-model="material_no" @keydown.enter="search()" placeholder="物料号" style="width:130px">
+      <input x-model="material_name" @keydown.enter="search()" placeholder="物料名称" style="width:150px">
+      <button class="b-ghost b-sm" @click="search()">查询</button>
+      <button class="b-pri b-sm" @click="openCreate()">+ 新建物料</button>
+      <button class="b-ghost b-sm" @click="openImport()">批量导入</button>
+    </div>
+  </div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr><th>物料号</th><th>物料名称</th><th>状态</th><th>单位货值</th><th>价值分类</th><th>切线成本</th><th>生产时间</th><th>物流时间</th><th>变更风险</th><th>满足率</th><th>组批窗口</th><th>基线方法</th><th>基线参数</th><th>拟合版本</th><th>拟合生效</th><th class="right">操作</th></tr>
+      <template x-if="!list.items.length">
+        <tr><td colspan="16" class="empty"
+          x-text="(material_no || material_name || filter) ? '无符合条件的物料' : '暂无物料 —— 点「新建物料」创建'"></td></tr>
+      </template>
+      <template x-for="d in list.items" :key="d.material_no">
+        <tr class="data">
+          <td><button class="b-link mono" @click="viewX(d)" x-text="d.material_no"></button></td>
+          <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="dash(d.material_name)"></td>
+          <td><span class="st" :class="'st-' + hue(d.status)" x-text="dash(d.status)"></span></td>
+          <td class="mono" x-text="dash(d.unit_value)"></td>
+          <td><span class="st" :class="'st-' + hue(d.value_class)" x-show="d.value_class" x-text="d.value_class"></span>
+            <span class="muted" x-show="!d.value_class" x-text="dash(d.value_class)"></span></td>
+          <td class="mono" x-text="dash(d.change_cost)"></td>
+          <td class="mono" x-text="dash(d.prod_days)"></td>
+          <td class="mono" x-text="dash(d.logistics_days)"></td>
+          <td><span class="st" :class="'st-' + hue(d.change_risk)" x-show="d.change_risk" x-text="d.change_risk"></span>
+            <span class="muted" x-show="!d.change_risk" x-text="dash(d.change_risk)"></span></td>
+          <td class="mono" x-text="dash(d.service_level)"></td>
+          <td class="mono" x-text="dash(d.batch_window)"></td>
+          <td x-text="dash(d.base_method)"></td>
+          <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="dash(d.base_params)"></td>
+          <td class="mono" x-text="dash(d.fit_version)"></td>
+          <td class="mono" x-text="dash(d.fit_effective_at)"></td>
+          <td class="right rowact">
+            <button class="b-ghost b-sm" @click="openEdit(d)">编辑</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:10px 16px">
+    <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+    <div class="right tagline" style="gap:8px">
+      <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+      <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+      <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- 详情模态：点物料号 → md_material.get 全量字段（15 项，含 fit 快照） -->
+<div class="modal-mask" x-show="modalX.open" @click.self="closeModal()"
+     @keydown.escape.window="closeModal()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div>
+        <div class="docno" x-text="modalX.d ? '物料详情 · ' + modalX.d.material_no : '物料详情'"></div>
+        <div class="sub">物料主数据 · MATERIAL MASTER</div>
+      </div>
+      <template x-if="modalX.d">
+        <span class="st" :class="'st-' + hue(modalX.d.status)" x-text="modalX.d.status"></span>
+      </template>
+      <button class="x" @click="closeModal()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <template x-if="modalX.loading">
+        <div class="loadbox"><span class="spin">◌</span><br>载入物料明细…</div>
+      </template>
+      <template x-if="!modalX.loading && modalX.d">
+        <div>
+          <div class="sec">基本信息</div>
+          <div class="kv">
+            <div><div class="k">物料号</div><div class="v mono" x-text="dash(modalX.d.material_no)"></div>
+              <div class="muted" style="font-size:11px;margin-top:4px">全局唯一主键 · 创建后不可变更</div></div>
+            <div><div class="k">物料名称</div><div class="v" x-text="dash(modalX.d.material_name)"></div></div>
+            <div><div class="k">状态</div><div class="v">
+              <span class="st" :class="'st-' + hue(modalX.d.status)" x-text="dash(modalX.d.status)"></span>
+              <div class="muted" style="font-size:11px;margin-top:4px">外部维护 · 本系统只读</div></div></div>
+          </div>
+
+          <div class="sec">库存策略参数</div>
+          <div class="kv">
+            <div><div class="k">单位货值（元/件）</div><div class="v mono" x-text="fmt(modalX.d.unit_value)"></div></div>
+            <div><div class="k">价值分类</div><div class="v">
+              <span class="st" :class="'st-' + hue(modalX.d.value_class)" x-show="modalX.d.value_class" x-text="modalX.d.value_class"></span>
+              <span class="muted" x-show="!modalX.d.value_class">—</span></div></div>
+            <div><div class="k">切线成本（元/次）</div><div class="v mono" x-text="fmt(modalX.d.change_cost)"></div></div>
+            <div><div class="k">生产时间（天）</div><div class="v mono" x-text="dash(modalX.d.prod_days)"></div></div>
+            <div><div class="k">物流时间（天）</div><div class="v mono" x-text="dash(modalX.d.logistics_days)"></div></div>
+            <div><div class="k">变更风险</div><div class="v">
+              <span class="st" :class="'st-' + hue(modalX.d.change_risk)" x-show="modalX.d.change_risk" x-text="modalX.d.change_risk"></span>
+              <span class="muted" x-show="!modalX.d.change_risk">—</span></div></div>
+            <div><div class="k">满足率目标（0~1）</div><div class="v mono" x-text="dash(modalX.d.service_level)"></div></div>
+            <div><div class="k">组批窗口</div><div class="v mono" x-text="bwLabel(modalX.d.batch_window)"></div></div>
+          </div>
+
+          <div class="sec">预测方法参数</div>
+          <div class="kv">
+            <div><div class="k">基线方法</div><div class="v" x-text="dash(modalX.d.base_method)"></div></div>
+            <div style="grid-column: span 2"><div class="k">基线参数</div>
+              <div class="v">
+                <template x-if="tryParse(modalX.d.base_params)">
+                  <div class="kv" style="margin-top:6px;background:#fff">
+                    <template x-for="(val, key) in tryParse(modalX.d.base_params)" :key="key">
+                      <div><div class="k mono" x-text="key"></div>
+                        <div class="v mono" x-text="JSON.stringify(val)"></div></div>
+                    </template>
+                  </div>
+                </template>
+                <span class="mono" x-show="!tryParse(modalX.d.base_params)" x-text="dash(modalX.d.base_params)"></span>
+              </div></div>
+          </div>
+
+          <div class="sec">拟合版本快照</div>
+          <div class="kv">
+            <div><div class="k">拟合版本</div><div class="v mono" x-text="dash(modalX.d.fit_version)"></div></div>
+            <div><div class="k">生效时间</div><div class="v mono" x-text="fmtTime(modalX.d.fit_effective_at)"></div></div>
+            <div style="grid-column: span 2"><div class="muted" style="font-size:11px">set_fit_params 回填 · 最近拟合版本</div></div>
+          </div>
+
+          <div class="sec">所属项目</div>
+          <template x-if="modalX.projects && modalX.projects.length">
+            <div class="scroll-x">
+              <table class="tbl tight">
+                <tr><th>项目号</th><th>项目名称</th><th>车型</th><th class="mono">单车用量</th><th class="mono">供应份额</th></tr>
+                <template x-for="pj in modalX.projects" :key="pj.project_no">
+                  <tr class="data">
+                    <td class="mono" x-text="pj.project_no"></td>
+                    <td x-text="dash(pj.project_name)"></td>
+                    <td x-text="dash(pj.veh_model)"></td>
+                    <td class="mono" x-text="dash(pj.usage)"></td>
+                    <td class="mono" x-text="pct(pj.share)"></td>
+                  </tr>
+                </template>
+              </table>
+            </div>
+          </template>
+          <div class="muted" style="font-size:12px" x-show="!modalX.projects || !modalX.projects.length">该物料暂无项目映射</div>
+
+          <details class="raw"><summary>原始数据</summary>
+            <pre class="json" x-text="JSON.stringify(modalX.d, null, 2)"></pre></details>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft" x-show="modalX.d">
+      <div class="tagline" style="gap:8px">
+        <span class="muted">状态由外部维护 · 本系统只读</span>
+        <div class="right tagline" style="gap:8px">
+          <button class="b-pri" @click="openEdit(modalX.d)">编辑</button>
+          <button class="b-ghost" @click="closeModal()">关闭</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 创建 / 编辑表单模态（status 不进表单：create 默认「正常」、update 不改） -->
+<div class="modal-mask" x-show="form.open" @click.self="closeCreate()"
+     @keydown.escape.window="closeCreate()" x-cloak>
+  <div class="modal" style="max-width:640px">
+    <div class="modal-hd">
+      <div>
+        <div class="docno" x-text="form.mode === 'edit' ? '编辑物料 · ' + form.material_no : '新建物料'"></div>
+        <div class="sub">物料主数据 · MATERIAL MASTER</div>
+      </div>
+      <button class="x" @click="closeCreate()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="sec">基本信息</div>
+      <div class="frow">
+        <div>
+          <label class="f">物料号 <span class="req">*</span></label>
+          <input x-model="form.material_no" maxlength="64" :disabled="form.mode === 'edit'" placeholder="如 M10001">
+          <div class="muted" style="font-size:11px;margin-top:4px">全局唯一主键 · 创建后不可变更</div>
+        </div>
+        <div>
+          <label class="f">物料名称 <span class="req">*</span></label>
+          <input x-model="form.material_name" maxlength="100" placeholder="物料名称">
+        </div>
+      </div>
+
+      <div class="sec">库存策略参数</div>
+      <div class="frow">
+        <div>
+          <label class="f">单位货值（元/件）</label>
+          <input type="number" step="0.01" min="0" x-model="form.unit_value" placeholder="≥0">
+        </div>
+        <div>
+          <label class="f">价值分类</label>
+          <select x-model="form.value_class">
+            <option value="">—</option><option value="高">高</option><option value="低">低</option>
+          </select>
+        </div>
+      </div>
+      <div class="frow">
+        <div>
+          <label class="f">切线成本（元/次）</label>
+          <input type="number" step="0.01" min="0" x-model="form.change_cost" placeholder="≥0">
+        </div>
+        <div>
+          <label class="f">生产时间（天）</label>
+          <input type="number" min="0" x-model="form.prod_days" placeholder="≥0">
+        </div>
+      </div>
+      <div class="frow">
+        <div>
+          <label class="f">物流时间（天）</label>
+          <input type="number" min="0" x-model="form.logistics_days" placeholder="≥0">
+        </div>
+        <div>
+          <label class="f">变更风险</label>
+          <select x-model="form.change_risk">
+            <option value="">—</option><option value="高">高</option><option value="低">低</option>
+          </select>
+        </div>
+      </div>
+      <div class="frow">
+        <div>
+          <label class="f">满足率目标（0~1）</label>
+          <input type="number" step="0.01" min="0" max="1" x-model="form.service_level" placeholder="0.95">
+        </div>
+        <div>
+          <label class="f">组批窗口（天）</label>
+          <input type="number" min="1" x-model="form.batch_window" placeholder=">0（如 28）">
+        </div>
+      </div>
+
+      <div class="sec">预测方法参数</div>
+      <div class="frow">
+        <div>
+          <label class="f">基线方法</label>
+          <select x-model="form.base_method">
+            <option value="">—</option>
+            <option value="移动平均">移动平均</option>
+            <option value="指数平滑">指数平滑</option>
+            <option value="阶跃检测">阶跃检测</option>
+            <option value="借用参考">借用参考</option>
+          </select>
+        </div>
+      </div>
+      <div class="frow">
+        <div>
+          <label class="f">基线参数（JSON）</label>
+          <textarea x-model="form.base_params" rows="3" :disabled="!form.base_method"
+            :placeholder="bpPlaceholder()" style="font-family:var(--mono);font-size:12px"></textarea>
+          <div class="muted" style="font-size:11px;margin-top:4px">留空 = 后端按该方法默认参数落库 · 与基线方法匹配由后端校验</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-ft">
+      <div class="tagline" style="gap:8px">
+        <span class="muted" x-show="form.mode === 'create'">物料号 / 物料名称必填 · 其余选填（status 默认「正常」）</span>
+        <span class="muted" x-show="form.mode === 'edit'">物料号不可改 · status 外部维护不进表单</span>
+        <div class="right tagline" style="gap:8px">
+          <button class="b-ghost" @click="closeCreate()">取消</button>
+          <button class="b-pri" :disabled="form.busy" @click="save()"
+            x-text="form.busy ? '处理中…' : (form.mode === 'edit' ? '保存修改' : '创建')"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 批量导入模态：下载模板 + 选文件 + 导入摘要（成功/失败/错误明细） -->
+<div class="modal-mask" x-show="imp.open" @click.self="closeImport()"
+     @keydown.escape.window="closeImport()" x-cloak>
+  <div class="modal" style="max-width:560px">
+    <div class="modal-hd">
+      <div>
+        <div class="docno">批量导入物料</div>
+        <div class="sub">ERP/PLM 冗余同步 · 本地批量建账 · IMPORT BATCH</div>
+      </div>
+      <button class="x" @click="closeImport()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="frow">
+        <div>
+          <label class="f">模板下载</label>
+          <div class="muted" style="font-size:11px;margin-top:4px">表头：material_no, material_name, status, unit_value, value_class, change_cost, prod_days, logistics_days, change_risk, service_level, batch_window, base_method, base_params</div>
+          <button class="b-ghost b-sm" style="margin-top:8px" @click="downloadTemplate()">下载 CSV 模板</button>
+        </div>
+      </div>
+      <div class="frow">
+        <div>
+          <label class="f">选择文件（CSV）</label>
+          <input type="file" accept=".csv,text/csv" @change="onImportFile($event)">
+          <div class="muted" style="font-size:11px;margin-top:4px" x-show="imp.fileName"
+            x-text="'已选择：' + imp.fileName + '（' + imp.rows.length + ' 行）'"></div>
+        </div>
+      </div>
+
+      <template x-if="imp.summary">
+        <div>
+          <div class="sec">导入摘要</div>
+          <div class="kv">
+            <div><div class="k">总数</div><div class="v mono" x-text="imp.summary.total"></div></div>
+            <div><div class="k">成功</div><div class="v mono" x-text="imp.summary.success"></div></div>
+            <div><div class="k">失败</div><div class="v mono" x-text="imp.summary.fail"></div></div>
+          </div>
+          <template x-if="imp.summary.errors && imp.summary.errors.length">
+            <div>
+              <div class="sec">错误明细</div>
+              <div class="scroll-x">
+                <table class="tbl tight">
+                  <tr><th>行号</th><th>字段</th><th>错误信息</th></tr>
+                  <template x-for="er in imp.summary.errors" :key="er.row + '-' + (er.field || '')">
+                    <tr><td class="mono" x-text="er.row"></td>
+                      <td x-text="dash(er.field)"></td>
+                      <td x-text="er.message"></td></tr>
+                  </template>
+                </table>
+              </div>
+            </div>
+          </template>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft">
+      <div class="tagline" style="gap:8px">
+        <span class="muted" x-show="!imp.summary">逐行校验 + upsert（已存在主键更新 · 新行新增）</span>
+        <div class="right tagline" style="gap:8px">
+          <button class="b-ghost" @click="closeImport()" x-text="imp.summary ? '完成' : '取消'"></button>
+          <button class="b-pri" :disabled="imp.busy || !imp.rows.length" @click="doImport()"
+            x-show="!imp.summary" x-text="imp.busy ? '导入中…' : '开始导入'"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

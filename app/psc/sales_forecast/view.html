@@ -1,0 +1,569 @@
+<div class="card mt12"><div class="bd" style="padding:0">
+  <!-- ══ 工具栏：开启版本 / 汇总 / 查看汇总（版本级入口） ══ -->
+  <div class="tagline" style="padding:12px 16px 0; flex-wrap:wrap">
+    <b>销售预测处理表</b>
+    <span class="muted" style="font-size:12px">复合键 · 版本 + 物料 + 客户 + 滚动月度</span>
+    <div class="right tagline" style="gap:8px">
+      <button class="b-pri b-sm" @click="openOpenVersion()">开启版本</button>
+      <button class="b-ghost b-sm" @click="openCreate()">新建组合</button>
+      <button class="b-ghost b-sm" @click="openImportOrig()">批量导入客户原始预测</button>
+      <button class="b-ghost b-sm" :disabled="batchBusy" @click="batchBaseline()"
+        x-text="batchBusy ? '算基线中…' : '批量算基线'"></button>
+      <button class="b-ghost b-sm" :disabled="decideBusy" @click="batchDecide()"
+        x-text="decideBusy ? '决策中…' : '批量决策'"></button>
+      <button class="b-ghost b-sm" @click="openSummarize()">汇总</button>
+      <button class="b-ghost b-sm" @click="openSummaryQuery()">查看汇总</button>
+    </div>
+  </div>
+  <!-- ══ 过滤条：与 sales_forecast.list 可过滤参数一一对应（契约无 keyword → 不设搜索框） ══ -->
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <select x-model="fVersion" @change="onVersionChange()" style="width:150px">
+      <option value="">全部版本</option>
+      <template x-for="v in versionOptions" :key="v.version_no">
+        <option :value="v.version_no" x-text="v.version_no + ' · ' + v.lock_status"></option>
+      </template>
+    </select>
+    <div style="position:relative">
+      <input x-model="fMaterial"
+             @click.stop="toggleAuto('f_material','material_no','material_name')"
+             @input="autoShow = 'f_material'; filterAuto('material_no','material_name', fMaterial)"
+             placeholder="物料（代号/名称）…" autocomplete="off" style="width:170px">
+      <div class="auto-drop" x-show="autoShow==='f_material'" @click.away="autoShow=''"
+           style="position:absolute; top:100%; left:0; right:0; max-height:240px; overflow-y:auto;
+                  background:#fff; border:1px solid #ccc; border-radius:4px; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,.1)">
+        <div x-show="!autoFiltered.length" style="padding:8px; color:#999">无匹配物料</div>
+        <template x-for="item in autoFiltered" :key="item.material_no">
+          <div @mousedown.prevent="pickMaterial(item)"
+               style="padding:6px 12px; cursor:pointer; border-bottom:1px solid #f0f0f0"
+               @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+            <div style="font-weight:500" x-text="item.material_no"></div>
+            <div style="font-size:12px; color:#888" x-text="item.material_name || '—'"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+    <div style="position:relative">
+      <input x-model="fCustomer"
+             @click.stop="toggleAuto('f_customer','customer_no','customer_name')"
+             @input="autoShow = 'f_customer'; filterAuto('customer_no','customer_name', fCustomer)"
+             placeholder="客户（代号/名称）…" autocomplete="off" style="width:170px">
+      <div class="auto-drop" x-show="autoShow==='f_customer'" @click.away="autoShow=''"
+           style="position:absolute; top:100%; left:0; right:0; max-height:240px; overflow-y:auto;
+                  background:#fff; border:1px solid #ccc; border-radius:4px; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,.1)">
+        <div x-show="!autoFiltered.length" style="padding:8px; color:#999">无匹配客户</div>
+        <template x-for="item in autoFiltered" :key="item.customer_no">
+          <div @mousedown.prevent="pickCustomer(item)"
+               style="padding:6px 12px; cursor:pointer; border-bottom:1px solid #f0f0f0"
+               @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+            <div style="font-weight:500" x-text="item.customer_no"></div>
+            <div style="font-size:12px; color:#888" x-text="item.customer_name || '—'"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+    <select x-model="fRolling" @change="search()" style="width:110px">
+      <option value="">全部月度</option>
+      <option value="N+1">N+1</option>
+      <option value="N+2">N+2</option>
+      <option value="N+3">N+3</option>
+    </select>
+    <div class="chips">
+      <span class="fchip" :class="{on: fAbnormal === ''}" @click="fAbnormal = ''; list.load(1)">全部</span>
+      <span class="fchip" :class="{on: fAbnormal === 'true'}" @click="fAbnormal = 'true'; list.load(1)">异常</span>
+      <span class="fchip" :class="{on: fAbnormal === 'false'}" @click="fAbnormal = 'false'; list.load(1)">正常</span>
+    </div>
+    <button class="b-ghost b-sm" @click="resetFilters()">重置</button>
+  </div>
+  <!-- ══ 表格：列 ⊆ 详情字段集；序 = 定位 → 数量 → 方法 → 异常 → 最终预测 → 操作 ══ -->
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr>
+        <th>版本</th><th>物料</th><th>客户</th><th>滚动月度</th>
+        <th>原始预测</th><th>调整后需求</th><th>基线方法</th><th>基线数量</th>
+        <th>事件调整量</th><th>该品种调整后需求合计</th><th>异常标记</th><th>最终预测</th><th class="right">操作</th>
+      </tr>
+      <template x-if="!list.items.length"><tr><td colspan="13" class="empty">无匹配数据</td></tr></template>
+      <template x-for="d in list.items" :key="d.version_no + d.material_no + d.customer_no + d.rolling_month">
+        <tr class="data">
+          <td><button class="b-link mono" @click="viewX(d)" x-text="d.version_no"></button></td>
+          <td>
+            <button class="b-link mono" @click="viewX(d)" x-text="d.material_no"></button>
+            <span class="st" style="margin-left:6px" x-show="switchInfo(d.material_no)"
+                  :class="switchInfo(d.material_no) ? switchInfo(d.material_no).cls : ''"
+                  :title="switchInfo(d.material_no) ? switchInfo(d.material_no).time : ''"
+                  x-text="switchInfo(d.material_no) ? switchInfo(d.material_no).label : ''"></span>
+            <div class="muted" style="font-size:11px" x-show="materialName(d.material_no)" x-text="materialName(d.material_no)"></div>
+          </td>
+          <td>
+            <button class="b-link mono" @click="viewX(d)" x-text="d.customer_no"></button>
+            <div class="muted" style="font-size:11px" x-show="customerName(d.customer_no)" x-text="customerName(d.customer_no)"></div>
+          </td>
+          <td><button class="b-link mono" @click="viewX(d)" x-text="d.rolling_month"></button></td>
+          <td class="mono" x-text="d.orig_qty != null ? fmt(d.orig_qty) : '—'"></td>
+          <td class="mono" x-text="d.adj_qty != null ? fmt(d.adj_qty) : '—'"></td>
+          <td x-text="dash(d.base_method)"></td>
+          <td class="mono" x-text="d.base_qty != null ? fmt(d.base_qty) : '—'"></td>
+          <td class="mono" x-text="signed(d.event_adj)"></td>
+          <td class="mono" x-text="adjSum(d) != null ? fmt(adjSum(d)) : '—'"></td>
+          <td><span class="st" :class="'st-' + abnormalHue(d.abnormal_flag)" x-text="abnormalText(d.abnormal_flag)"></span></td>
+          <td>
+            <span class="mono" style="font-weight:600" x-text="d.final_qty != null ? fmt(d.final_qty) : '—'"></span>
+            <div class="muted" style="font-size:11px" x-show="d.abnormal_flag && d.final_qty == null">待人工填</div>
+          </td>
+          <td class="right rowact" style="white-space:nowrap">
+            <span class="muted" style="font-size:11px" x-show="!isDraft(d)">只读</span>
+            <button class="b-ghost b-sm" x-show="isDraft(d)" @click="openFill(d)">填预测</button>
+            <button class="b-ghost b-sm" x-show="isDraft(d)" @click="act(d, 'calc_baseline')">算基线</button>
+            <button class="b-ghost b-sm" x-show="isDraft(d)" @click="openEvent(d)">事件调整</button>
+            <button class="b-pri b-sm" x-show="isDraft(d)" @click="act(d, 'decide')">决策</button>
+            <button class="b-pri b-sm" x-show="isDraft(d) && d.abnormal_flag" @click="openFinal(d)">填最终</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <!-- ══ 分页条 ══ -->
+  <div class="tagline" style="padding:10px 16px">
+    <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+    <div class="right tagline" style="gap:8px">
+      <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+      <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+      <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- ════════════ 详情模态（查全：sales_forecast.get 全字段） ════════════ -->
+<div class="modal-mask" x-show="modalX.open" @click.self="closeX()"
+     @keydown.escape.window="closeX()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div><div class="docno" x-text="modalX.d ? (modalX.d.version_no + ' · ' + modalX.d.material_no + ' · ' + modalX.d.customer_no + ' · ' + modalX.d.rolling_month) : '销售预测明细'"></div>
+        <div class="sub">销售预测 · SALES FORECAST</div></div>
+      <template x-if="modalX.d">
+        <span class="st" :class="'st-' + abnormalHue(modalX.d.abnormal_flag)" x-text="abnormalText(modalX.d.abnormal_flag)"></span>
+      </template>
+      <button class="x" @click="closeX()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <template x-if="modalX.loading">
+        <div class="loadbox"><span class="spin">◌</span><br>载入明细…</div>
+      </template>
+      <template x-if="!modalX.loading && modalX.d">
+        <div>
+          <div class="sec">定位信息</div>
+          <div class="kv">
+            <div><div class="k">版本</div><div class="v mono" x-text="dash(modalX.d.version_no)"></div>
+              <div class="muted" style="font-size:11px">弱引用 md_monthly_version</div></div>
+            <div><div class="k">物料</div><div class="v mono" x-text="dash(modalX.d.material_no)"></div>
+              <div class="muted" style="font-size:11px" x-show="materialName(modalX.d.material_no)" x-text="materialName(modalX.d.material_no)"></div>
+              <div class="muted" style="font-size:11px" x-show="!materialName(modalX.d.material_no)">弱引用 md_material 主数据</div></div>
+            <div><div class="k">客户</div><div class="v mono" x-text="dash(modalX.d.customer_no)"></div>
+              <div class="muted" style="font-size:11px" x-show="customerName(modalX.d.customer_no)" x-text="customerName(modalX.d.customer_no)"></div>
+              <div class="muted" style="font-size:11px" x-show="!customerName(modalX.d.customer_no)">弱引用 md_customer 主数据</div></div>
+            <div><div class="k">滚动月度</div><div class="v mono" x-text="dash(modalX.d.rolling_month)"></div>
+              <div class="muted" style="font-size:11px">N+1 / N+2 / N+3</div></div>
+          </div>
+
+          <div class="sec">客户预测（双源之一）</div>
+          <div class="kv">
+            <div><div class="k">原始预测</div><div class="v mono" x-text="modalX.d.orig_qty != null ? fmt(modalX.d.orig_qty) : '—'"></div>
+              <div class="muted" style="font-size:11px">客户填报</div></div>
+            <div><div class="k">MAPE</div><div class="v mono" x-text="modalX.d.mape != null ? fmt(modalX.d.mape) : '—'"></div>
+              <div class="muted" style="font-size:11px">attainment 派生（只读快照）</div></div>
+            <div><div class="k">bias</div><div class="v mono" x-text="modalX.d.bias != null ? fmt(modalX.d.bias) : '—'"></div>
+              <div class="muted" style="font-size:11px">attainment 派生（只读快照）</div></div>
+            <div><div class="k">调整后需求</div><div class="v mono" x-text="modalX.d.adj_qty != null ? fmt(modalX.d.adj_qty) : '—'"></div>
+              <div class="muted" style="font-size:11px">= orig_qty × (1 − bias)，系统修正人工可调</div></div>
+          </div>
+
+          <div class="sec">基线（双源之二）</div>
+          <div class="kv">
+            <div><div class="k">基线方法</div><div class="v" x-text="dash(modalX.d.base_method)"></div>
+              <div class="muted" style="font-size:11px">md_material 主数据快照</div></div>
+            <div style="grid-column: span 2"><div class="k">基线参数</div>
+              <div class="v mono" style="white-space:pre-wrap">
+                <span x-show="tryParse(modalX.d.base_params)" x-text="JSON.stringify(tryParse(modalX.d.base_params))"></span>
+                <span x-show="!tryParse(modalX.d.base_params)" x-text="dash(modalX.d.base_params)"></span>
+              </div>
+              <div class="muted" style="font-size:11px">四种方法参数（window / alpha / threshold / ref_material）</div></div>
+            <div><div class="k">基线数量</div><div class="v mono" x-text="modalX.d.base_qty != null ? fmt(modalX.d.base_qty) : '—'"></div></div>
+            <div x-show="modalX.d.bp_material_no"><div class="k">断点追溯原物料</div><div class="v mono" x-text="modalX.d.bp_material_no"></div>
+              <div class="muted" style="font-size:11px">md_breakpoint.trace 追溯结果</div></div>
+            <div x-show="modalX.d.switch_time"><div class="k">断点切换时间</div><div class="v mono" x-text="fmtTime(modalX.d.switch_time)"></div></div>
+          </div>
+
+          <div class="sec">事件调整</div>
+          <div class="kv">
+            <div style="grid-column: span 2"><div class="k">事件分析</div><div class="v" style="white-space:pre-wrap" x-text="dash(modalX.d.event_analysis)"></div></div>
+            <div><div class="k">事件调整量</div><div class="v mono" x-text="signed(modalX.d.event_adj)"></div>
+              <div class="muted" style="font-size:11px">只作用归属期，不外推</div></div>
+            <div><div class="k">基线和事件合计</div><div class="v mono" x-text="modalX.d.base_event_qty != null ? fmt(modalX.d.base_event_qty) : '—'"></div>
+              <div class="muted" style="font-size:11px">= base_qty + event_adj</div></div>
+          </div>
+
+          <div class="sec">决策结果</div>
+          <div class="kv">
+            <div><div class="k">异常标记</div><div class="v"><span class="st" :class="'st-' + abnormalHue(modalX.d.abnormal_flag)" x-text="abnormalText(modalX.d.abnormal_flag)"></span></div>
+              <div class="muted" style="font-size:11px">双源分歧需人工介入</div></div>
+            <div><div class="k">最终预测</div><div class="v mono" style="font-weight:600" x-text="modalX.d.final_qty != null ? fmt(modalX.d.final_qty) : '—'"></div>
+              <div class="muted" style="font-size:11px" x-show="modalX.d.abnormal_flag && modalX.d.final_qty == null">异常行未人工填写</div></div>
+          </div>
+
+          <div class="sec">时间信息</div>
+          <div class="kv">
+            <div><div class="k">创建时间</div><div class="v mono" x-text="fmtTime(modalX.d.created_at)"></div></div>
+            <div><div class="k">更新时间</div><div class="v mono" x-text="fmtTime(modalX.d.updated_at)"></div></div>
+          </div>
+
+          <details class="raw"><summary>原始数据</summary>
+            <pre class="json" x-text="JSON.stringify(modalX.d, null, 2)"></pre></details>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft" x-show="modalX.d">
+      <template x-if="modalX.d">
+        <div class="tagline" style="gap:8px">
+          <span class="muted" x-show="!isDraft(modalX.d)">当前版本已锁定 · 只读</span>
+          <button class="b-ghost" x-show="isDraft(modalX.d)" @click="openFill(modalX.d)">填预测</button>
+          <button class="b-ghost" x-show="isDraft(modalX.d)" @click="act(modalX.d, 'calc_baseline')">算基线</button>
+          <button class="b-ghost" x-show="isDraft(modalX.d)" @click="openEvent(modalX.d)">事件调整</button>
+          <button class="b-pri" x-show="isDraft(modalX.d)" @click="act(modalX.d, 'decide')">决策</button>
+          <button class="b-pri" x-show="isDraft(modalX.d) && modalX.d.abnormal_flag" @click="openFinal(modalX.d)">填最终</button>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ 行级加工小模态（填预测 / 事件调整 / 填最终 复用） ════════════ -->
+<div class="modal-mask" x-show="editForm.open" @click.self="closeEdit()"
+     @keydown.escape.window="closeEdit()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div><div class="docno" x-text="editForm.row ? (editForm.row.version_no + ' · ' + editForm.row.material_no + ' · ' + editForm.row.customer_no + ' · ' + editForm.row.rolling_month) : ''"></div>
+        <div class="sub" x-text="editTitle() + ' · SALES FORECAST'"></div></div>
+      <button class="x" @click="closeEdit()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <template x-if="editForm.row">
+        <div>
+          <!-- 只读回显当前值 -->
+          <div class="kv" x-show="editForm.kind === 'fill'">
+            <div><div class="k">当前原始预测</div><div class="v mono" x-text="dash(editForm.row.orig_qty)"></div></div>
+            <div><div class="k">当前调整后需求</div><div class="v mono" x-text="dash(editForm.row.adj_qty)"></div></div>
+            <div><div class="k">MAPE / bias</div><div class="v mono" x-text="dash(editForm.row.mape) + ' / ' + dash(editForm.row.bias)"></div></div>
+          </div>
+          <div class="kv" x-show="editForm.kind === 'event'">
+            <div><div class="k">当前基线数量</div><div class="v mono" x-text="dash(editForm.row.base_qty)"></div></div>
+            <div><div class="k">当前事件调整量</div><div class="v mono" x-text="signed(editForm.row.event_adj)"></div></div>
+            <div><div class="k">当前基线和事件合计</div><div class="v mono" x-text="dash(editForm.row.base_event_qty)"></div></div>
+          </div>
+          <div class="kv" x-show="editForm.kind === 'final'">
+            <div><div class="k">当前最终预测</div><div class="v mono" x-text="dash(editForm.row.final_qty)"></div></div>
+            <div><div class="k">异常标记</div><div class="v"><span class="st" :class="'st-' + abnormalHue(editForm.row.abnormal_flag)" x-text="abnormalText(editForm.row.abnormal_flag)"></span></div></div>
+          </div>
+
+          <!-- 填预测表单 -->
+          <div class="frow" x-show="editForm.kind === 'fill'">
+            <div><label class="f">原始预测数量 orig_qty <span class="muted" style="font-weight:400; font-size:11px">可选 · 留空即客户不填报</span></label>
+              <input type="number" x-model="editForm.orig_qty" placeholder="客户原始预测数量"></div>
+            <div class="l more" style="grid-column: span 2; margin-top:6px; cursor:pointer" @click="editForm.more = !editForm.more"
+              x-text="'更多字段 ' + (editForm.more ? '▴' : '▾')"></div>
+            <div class="collapse" :class="{open: editForm.more}" style="grid-column: span 2">
+              <div style="padding-top:10px">
+                <label class="f">调整后需求 adj_qty <span class="muted" style="font-weight:400; font-size:11px">缺省自动算 = orig_qty × (1 − bias)</span></label>
+                <input type="number" x-model="editForm.adj_qty" placeholder="人工覆盖调整后需求">
+              </div>
+            </div>
+          </div>
+
+          <!-- 事件调整表单 -->
+          <div class="frow" x-show="editForm.kind === 'event'">
+            <div style="grid-column: span 2"><label class="f">事件分析 event_analysis <span class="muted" style="font-weight:400; font-size:11px">可选 · 促销 / SOP / 断点</span></label>
+              <input x-model="editForm.event_analysis" maxlength="500" placeholder="促销 / SOP / 断点 分析"></div>
+            <div><label class="f">事件调整量 event_adj <span class="muted" style="font-weight:400; font-size:11px">默认 0 · 只作用归属期</span></label>
+              <input type="number" x-model="editForm.event_adj" placeholder="0"></div>
+          </div>
+
+          <!-- 填最终表单 -->
+          <div class="frow" x-show="editForm.kind === 'final'">
+            <div><label class="f">最终预测量 final_qty <span class="req">*</span></label>
+              <input type="number" x-model="editForm.final_qty" placeholder="异常行人工填写最终预测" @keydown.enter="submitEdit()"></div>
+          </div>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft">
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost" @click="closeEdit()">取消</button>
+        <button class="b-pri" :disabled="editForm.busy" @click="submitEdit()"
+          x-text="editForm.busy ? '处理中…' : '提交'"></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ 开启版本模态（open_version：唯一"创建"入口，数据来源类型 = 手工参考创建） ════════════ -->
+<div class="modal-mask" x-show="openVersionForm.open" @click.self="closeOpenVersion()"
+     @keydown.escape.window="closeOpenVersion()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div><div class="docno">开启月度版本</div>
+        <div class="sub">销售预测 · OPEN VERSION</div></div>
+      <button class="x" @click="closeOpenVersion()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="frow">
+        <div><label class="f">版本 <span class="req">*</span></label>
+          <select x-model="openVersionForm.version_no">
+            <option value="">请选择草稿版本</option>
+            <template x-if="!draftVersions().length"><option value="" disabled>暂无可开启的草稿版本</option></template>
+            <template x-for="v in draftVersions()" :key="v.version_no">
+              <option :value="v.version_no" x-text="v.version_no + ' · ' + v.anchor_period"></option>
+            </template>
+          </select></div>
+      </div>
+      <div class="sec">上游数据摘要（只读）</div>
+      <div class="muted" style="font-size:12px; line-height:1.8">
+        预测范围 = 正常状态物料 × 该物料的历史采购客户；当前正常状态物料数 <b x-text="openVersionForm.materialCount"></b>。
+        某物料无任何历史采购记录时客户为空、仅初始化一行（避免 300 客户 × 3 月铺满）。
+        开启后系统生成清单并拆 N+1 / N+2 / N+3 进处理表；未覆盖的组合可用「新建组合」手工补充。
+      </div>
+    </div>
+    <div class="modal-ft">
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost" @click="closeOpenVersion()">取消</button>
+        <button class="b-pri" :disabled="openVersionForm.busy" @click="submitOpenVersion()"
+          x-text="openVersionForm.busy ? '处理中…' : '开启版本'"></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ 新建组合模态（create：手工补充 物料×客户 组合，客户可空） ════════════ -->
+<div class="modal-mask" x-show="createForm.open" @click.self="closeCreate()"
+     @keydown.escape.window="closeCreate()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div><div class="docno">新建组合</div>
+        <div class="sub">销售预测 · CREATE COMBO</div></div>
+      <button class="x" @click="closeCreate()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="frow">
+        <div><label class="f">版本 <span class="req">*</span></label>
+          <select x-model="createForm.version_no">
+            <option value="">请选择草稿版本</option>
+            <template x-if="!draftVersions().length"><option value="" disabled>暂无可新建的草稿版本</option></template>
+            <template x-for="v in draftVersions()" :key="v.version_no">
+              <option :value="v.version_no" x-text="v.version_no + ' · ' + v.anchor_period"></option>
+            </template>
+          </select></div>
+        <div><label class="f">物料 <span class="req">*</span></label>
+          <div style="position:relative">
+            <input x-model="createForm.material_no"
+                   @click.stop="toggleAuto('create_material','material_no','material_name')"
+                   @input="autoShow = 'create_material'; filterAuto('material_no','material_name', createForm.material_no)"
+                   placeholder="物料（代号/名称）…" autocomplete="off" style="width:100%">
+            <div class="auto-drop" x-show="autoShow==='create_material'" @click.away="autoShow=''"
+                 style="position:absolute; top:100%; left:0; right:0; max-height:240px; overflow-y:auto;
+                        background:#fff; border:1px solid #ccc; border-radius:4px; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,.1)">
+              <div x-show="!autoFiltered.length" style="padding:8px; color:#999">无匹配物料</div>
+              <template x-for="item in autoFiltered" :key="item.material_no">
+                <div @mousedown.prevent="pickCreateMaterial(item)"
+                     style="padding:6px 12px; cursor:pointer; border-bottom:1px solid #f0f0f0"
+                     @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+                  <div style="font-weight:500" x-text="item.material_no"></div>
+                  <div style="font-size:12px; color:#888" x-text="item.material_name || '—'"></div>
+                </div>
+              </template>
+            </div>
+          </div></div>
+        <div><label class="f">客户 <span class="muted" style="font-weight:400;font-size:11px">可选 · 留空 = 空客户组合</span></label>
+          <div style="position:relative">
+            <input x-model="createForm.customer_no"
+                   @click.stop="toggleAuto('create_customer','customer_no','customer_name')"
+                   @input="autoShow = 'create_customer'; filterAuto('customer_no','customer_name', createForm.customer_no)"
+                   placeholder="客户（代号/名称，可空）…" autocomplete="off" style="width:100%">
+            <div class="auto-drop" x-show="autoShow==='create_customer'" @click.away="autoShow=''"
+                 style="position:absolute; top:100%; left:0; right:0; max-height:240px; overflow-y:auto;
+                        background:#fff; border:1px solid #ccc; border-radius:4px; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,.1)">
+              <div x-show="!autoFiltered.length" style="padding:8px; color:#999">无匹配客户</div>
+              <template x-for="item in autoFiltered" :key="item.customer_no">
+                <div @mousedown.prevent="pickCreateCustomer(item)"
+                     style="padding:6px 12px; cursor:pointer; border-bottom:1px solid #f0f0f0"
+                     @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+                  <div style="font-weight:500" x-text="item.customer_no"></div>
+                  <div style="font-size:12px; color:#888" x-text="item.customer_name || '—'"></div>
+                </div>
+              </template>
+            </div>
+          </div></div>
+      </div>
+      <div class="muted" style="font-size:12px; line-height:1.8; margin-top:8px">
+        手工补充「开启版本」未覆盖的物料×客户组合；系统按 N+1 / N+2 / N+3 拆三行进处理表，客户留空则生成空客户组合。
+      </div>
+    </div>
+    <div class="modal-ft">
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost" @click="closeCreate()">取消</button>
+        <button class="b-pri" :disabled="createForm.busy" @click="submitCreate()"
+          x-text="createForm.busy ? '处理中…' : '创建组合'"></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ 版本汇总模态（summarize：处理表 → 汇总表派生合计） ════════════ -->
+<div class="modal-mask" x-show="summarizeForm.open" @click.self="closeSummarize()"
+     @keydown.escape.window="closeSummarize()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div><div class="docno">版本汇总</div>
+        <div class="sub">销售预测 · SUMMARIZE</div></div>
+      <button class="x" @click="closeSummarize()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="frow">
+        <div><label class="f">版本 <span class="req">*</span></label>
+          <select x-model="summarizeForm.version_no">
+            <option value="">请选择草稿版本</option>
+            <template x-if="!draftVersions().length"><option value="" disabled>暂无可汇总的草稿版本</option></template>
+            <template x-for="v in draftVersions()" :key="v.version_no">
+              <option :value="v.version_no" x-text="v.version_no + ' · ' + v.anchor_period"></option>
+            </template>
+          </select></div>
+      </div>
+      <div class="muted" style="font-size:12px; line-height:1.8">按物料 × 滚动月度合计所有客户最终预测量，刷新汇总表。汇总表是处理表派生合计，禁止独立编辑。</div>
+    </div>
+    <div class="modal-ft">
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost" @click="closeSummarize()">取消</button>
+        <button class="b-pri" :disabled="summarizeForm.busy" @click="submitSummarize()"
+          x-text="summarizeForm.busy ? '处理中…' : '执行汇总'"></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ 汇总查询模态（get_summary：销售预测最终输出，供毛需求合成） ════════════ -->
+<div class="modal-mask" x-show="summaryQuery.open" @click.self="closeSummaryQuery()"
+     @keydown.escape.window="closeSummaryQuery()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div><div class="docno">汇总查询</div>
+        <div class="sub">销售预测 · GET SUMMARY</div></div>
+      <button class="x" @click="closeSummaryQuery()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="frow">
+        <div><label class="f">版本 <span class="req">*</span></label>
+          <select x-model="summaryQuery.version_no">
+            <option value="">请选择版本</option>
+            <template x-for="v in versionOptions" :key="v.version_no">
+              <option :value="v.version_no" x-text="v.version_no + ' · ' + v.lock_status"></option>
+            </template>
+          </select></div>
+        <div><label class="f">物料 <span class="muted" style="font-weight:400; font-size:11px">可选 · 不选 = 整版本</span></label>
+          <div style="position:relative">
+            <input x-model="summaryQuery.material_no"
+                   @click.stop="toggleAuto('sum_material','material_no','material_name')"
+                   @input="autoShow = 'sum_material'; filterAuto('material_no','material_name', summaryQuery.material_no)"
+                   placeholder="物料（代号/名称）…" autocomplete="off" style="width:100%">
+            <div class="auto-drop" x-show="autoShow==='sum_material'" @click.away="autoShow=''"
+                 style="position:absolute; top:100%; left:0; right:0; max-height:240px; overflow-y:auto;
+                        background:#fff; border:1px solid #ccc; border-radius:4px; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,.1)">
+              <div x-show="!autoFiltered.length" style="padding:8px; color:#999">无匹配物料</div>
+              <template x-for="item in autoFiltered" :key="item.material_no">
+                <div @mousedown.prevent="pickSumMaterial(item)"
+                     style="padding:6px 12px; cursor:pointer; border-bottom:1px solid #f0f0f0"
+                     @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+                  <div style="font-weight:500" x-text="item.material_no"></div>
+                  <div style="font-size:12px; color:#888" x-text="item.material_name || '—'"></div>
+                </div>
+              </template>
+            </div>
+          </div></div>
+        <div style="grid-column: span 2"><button class="b-pri b-sm right" :disabled="summaryQuery.busy" @click="runSummaryQuery()"
+          x-text="summaryQuery.busy ? '查询中…' : '查询汇总'"></button></div>
+      </div>
+      <div class="sec" x-show="summaryQuery.rows.length">汇总行（<span x-text="summaryQuery.rows.length"></span>）</div>
+      <div class="scroll-x" x-show="summaryQuery.rows.length">
+        <table class="tbl tight">
+          <tr><th>版本</th><th>物料</th><th>滚动月度</th><th>最终预测合计</th></tr>
+          <template x-for="r in summaryQuery.rows" :key="r.version_no + r.material_no + r.rolling_month">
+            <tr>
+              <td class="mono" x-text="dash(r.version_no)"></td>
+              <td class="mono" x-text="dash(r.material_no)"></td>
+              <td class="mono" x-text="dash(r.rolling_month)"></td>
+              <td class="mono" style="font-weight:600" x-text="r.final_qty_sum != null ? fmt(r.final_qty_sum) : '—'"></td>
+            </tr>
+          </template>
+        </table>
+      </div>
+      <div class="empty" x-show="summaryQuery.rows.length === 0" style="padding:12px 0">无汇总数据</div>
+    </div>
+    <div class="modal-ft">
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost" @click="closeSummaryQuery()">关闭</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 批量导入客户原始预测模态 ══ -->
+<div class="modal-mask" x-show="importOrigForm.open" @click.self="closeImportOrig()"
+     @keydown.escape.window="closeImportOrig()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div>
+        <div class="docno">批量导入客户原始预测</div>
+        <div class="sub">当前版本 <span class="mono" x-text="fVersion"></span> · 列：material_no, customer_no, rolling_month, orig_qty</div>
+      </div>
+      <button class="x" @click="closeImportOrig()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="muted" style="font-size:12px;line-height:1.6">
+        每行一条：material_no,customer_no,rolling_month(N+1/N+2/N+3),orig_qty。写入 orig_qty 并按 bias 自动算 adj_qty；N+1 自动关联历史台账。
+      </div>
+      <div class="tagline" style="gap:8px;margin-top:8px">
+        <button class="b-ghost b-sm" @click="downloadOrigTemplate()">下载 CSV 模板</button>
+        <label class="b-ghost b-sm" style="cursor:pointer">选择文件
+          <input type="file" accept=".csv,.txt" style="display:none" @change="onImportOrigFile($event)">
+        </label>
+      </div>
+      <textarea x-model="importOrigForm.text" rows="8" style="width:100%;font-family:monospace;font-size:12px;margin-top:8px"
+        placeholder="每行一条：M1,C001,N+1,1000"></textarea>
+      <template x-if="importOrigForm.result">
+        <div class="mt12">
+          <div class="tagline" style="gap:8px">
+            <span class="st st-green" x-text="'成功 ' + importOrigForm.result.success + ' 条'"></span>
+            <span class="st st-red" x-text="'失败 ' + importOrigForm.result.fail + ' 条'"></span>
+            <span class="muted" x-text="'共 ' + importOrigForm.result.total + ' 条'"></span>
+          </div>
+          <template x-if="importOrigForm.result.errors && importOrigForm.result.errors.length">
+            <div class="scroll-x mt8">
+              <table class="tbl tight">
+                <tr><th>行号</th><th>错误信息</th></tr>
+                <template x-for="e in importOrigForm.result.errors" :key="e.row">
+                  <tr><td class="mono" x-text="e.row"></td><td x-text="e.message"></td></tr>
+                </template>
+              </table>
+            </div>
+          </template>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft">
+      <div class="tagline" style="gap:8px">
+        <span class="muted">仅当前所选版本（须为草稿）</span>
+        <div class="right tagline" style="gap:8px">
+          <button class="b-ghost" @click="closeImportOrig()">关闭</button>
+          <button class="b-pri" :disabled="importOrigForm.busy" @click="runImportOrig()"
+            x-text="importOrigForm.busy ? '导入中…' : '批量导入'"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

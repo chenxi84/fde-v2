@@ -1,0 +1,62 @@
+<div class="card mt12" x-show="loading">
+  <div class="bd"><div class="loadbox"><span class="spin">◌</span><br>加载工作台数据…</div></div>
+</div>
+
+<template x-if="!loading">
+<div>
+  <!-- KPI 指标带 -->
+  <div class="kpi" style="display:flex;gap:12px;flex-wrap:wrap">
+    <template x-for="k in kpis" :key="k.label">
+      <div class="card" style="flex:1;min-width:140px;cursor:pointer" @click="go(k.link)">
+        <div class="bd" style="text-align:center;padding:16px">
+          <div class="muted" style="font-size:12px" x-text="k.label"></div>
+          <div style="font-size:28px;font-weight:700;color:#f5b04c" x-text="k.val"></div>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <!-- 主链管道 -->
+  <div class="card mt12">
+    <div class="hd"><h3>主链管道</h3></div>
+    <div class="bd">
+      <div style="display:flex;gap:8px;overflow-x:auto">
+        <template x-for="p in pipes" :key="p.label">
+          <div class="card" style="min-width:160px;cursor:pointer" @click="go(p.app)">
+            <div class="hd"><h3 x-text="p.label"></h3></div>
+            <div class="bd" style="padding:8px">
+              <template x-for="(cnt, st) in p.items" :key="st">
+                <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0">
+                  <span class="muted" x-text="st"></span>
+                  <span class="mono" x-text="cnt"></span>
+                </div>
+              </template>
+              <div x-show="!Object.keys(p.items).length" class="muted" style="font-size:12px">暂无数据</div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- 待办区 -->
+  <div style="display:flex;gap:12px" class="mt12">
+    <div class="card" style="flex:1">
+      <div class="hd"><h3>📋 销售待办</h3></div>
+      <div class="bd">
+        <div class="muted" style="font-size:13px">• 待修正行：进入「毛需求加工」页面处理</div>
+        <div class="muted" style="font-size:13px">• 核对质询待应答：同上</div>
+        <button class="b-ghost b-sm mt8" @click="go('demand_processing')">前往加工页 →</button>
+      </div>
+    </div>
+    <div class="card" style="flex:1">
+      <div class="hd"><h3>📊 计划待办</h3></div>
+      <div class="bd">
+        <div class="muted" style="font-size:13px">• 待拆解：进入「需求收集」页面操作</div>
+        <div class="muted" style="font-size:13px">• 待核对 / 待确认事件 / 待发布</div>
+        <button class="b-ghost b-sm mt8" @click="go('demand_collection')">前往收集页 →</button>
+      </div>
+    </div>
+  </div>
+</div>
+</template>

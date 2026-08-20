@@ -1,0 +1,139 @@
+<div x-show="loading" class="loadbox" style="padding:40px;text-align:center">加载中…</div>
+
+<div x-show="!loading">
+  <!-- KPI 指标带 -->
+  <div class="frow" style="gap:12px;margin-bottom:16px">
+    <div class="card kpi" style="flex:1;min-width:180px">
+      <div class="bd" style="text-align:center">
+        <div style="font-size:12px;color:var(--faint)">活跃版本</div>
+        <div style="font-size:24px;font-weight:700" x-text="activeVersion ? activeVersion.fcst_version : '—'"></div>
+        <div style="font-size:11px;color:var(--muted)" x-text="activeVersion ? '锚定 ' + activeVersion.base_period : '无活跃版本'"></div>
+      </div>
+    </div>
+    <div class="card kpi" style="flex:1;min-width:180px">
+      <div class="bd" style="text-align:center">
+        <div style="font-size:12px;color:var(--faint)">快照完成率</div>
+        <div style="font-size:24px;font-weight:700">
+          <span x-text="snapshotStatus ? snapshotStatus.total_rows - snapshotStatus.unfilled_rows : '—'"></span>
+          <span style="font-size:14px;color:var(--muted)"> / </span>
+          <span style="font-size:14px;color:var(--muted)" x-text="snapshotStatus ? snapshotStatus.total_rows : '—'"></span>
+        </div>
+        <div style="font-size:11px;color:var(--muted)">已填 / 总行</div>
+      </div>
+    </div>
+    <div class="card kpi" style="flex:1;min-width:180px">
+      <div class="bd" style="text-align:center">
+        <div style="font-size:12px;color:var(--faint)">未填快照行</div>
+        <div style="font-size:24px;font-weight:700" x-text="dash(unfilledCount)"></div>
+        <div style="font-size:11px;color:var(--muted)">待销售填写</div>
+      </div>
+    </div>
+    <div class="card kpi" style="flex:1;min-width:180px">
+      <div class="bd" style="text-align:center">
+        <div style="font-size:12px;color:var(--faint)">待核定加工行</div>
+        <div style="font-size:24px;font-weight:700" x-text="dash(unconfirmedCount)"></div>
+        <div style="font-size:11px;color:var(--muted)">待计划核定</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 主链管道 -->
+  <div class="frow" style="gap:12px;margin-bottom:16px">
+    <div class="card" style="flex:1;min-width:220px">
+      <div class="bd" style="padding:12px">
+        <b>📷 最近快照</b>
+        <table class="tbl tight mt8" style="font-size:12px">
+          <tr><th>物料</th><th>期间</th><th>预测量</th><th>标记</th></tr>
+          <template x-if="!recentSnapshot.length"><tr><td colspan="4" class="empty">暂无</td></tr></template>
+          <template x-for="d in recentSnapshot" :key="d.part_no + d.period">
+            <tr class="data">
+              <td x-text="d.part_no"></td>
+              <td x-text="d.period"></td>
+              <td x-text="fmt(d.orig_qty)"></td>
+              <td><span class="st" :class="'st-' + hue(d.data_flag)" x-text="d.data_flag"></span></td>
+            </tr>
+          </template>
+        </table>
+        <button class="b-ghost b-sm mt8" @click="gotoPage('forecast_snapshot')">查看全部 →</button>
+      </div>
+    </div>
+    <div class="card" style="flex:1;min-width:220px">
+      <div class="bd" style="padding:12px">
+        <b>📈 最近基线</b>
+        <table class="tbl tight mt8" style="font-size:12px">
+          <tr><th>物料</th><th>基线值</th><th>路径</th><th>状态</th></tr>
+          <template x-if="!recentBaseline.length"><tr><td colspan="4" class="empty">暂无</td></tr></template>
+          <template x-for="d in recentBaseline" :key="d.part_no + d.period">
+            <tr class="data">
+              <td x-text="d.part_no"></td>
+              <td x-text="fmt(d.base_qty)"></td>
+              <td x-text="d.base_path"></td>
+              <td><span class="st" :class="'st-' + hue(d.status)" x-text="d.status"></span></td>
+            </tr>
+          </template>
+        </table>
+        <button class="b-ghost b-sm mt8" @click="gotoPage('forecast_baseline')">查看全部 →</button>
+      </div>
+    </div>
+    <div class="card" style="flex:1;min-width:220px">
+      <div class="bd" style="padding:12px">
+        <b>⚙ 加工批次</b>
+        <table class="tbl tight mt8" style="font-size:12px">
+          <tr><th>批次</th><th>状态</th></tr>
+          <template x-if="!recentBatches.length"><tr><td colspan="2" class="empty">暂无</td></tr></template>
+          <template x-for="d in recentBatches" :key="d.prc_batch">
+            <tr class="data">
+              <td><button class="b-link" x-text="d.prc_batch" @click="gotoPage('forecast_processing')"></button></td>
+              <td><span class="st" :class="'st-' + hue(d.status)" x-text="d.status"></span></td>
+            </tr>
+          </template>
+        </table>
+        <button class="b-ghost b-sm mt8" @click="gotoPage('forecast_processing')">查看全部 →</button>
+      </div>
+    </div>
+    <div class="card" style="flex:1;min-width:220px">
+      <div class="bd" style="padding:12px">
+        <b>📦 发布单</b>
+        <table class="tbl tight mt8" style="font-size:12px">
+          <tr><th>单号</th><th>状态</th></tr>
+          <template x-if="!recentReleases.length"><tr><td colspan="2" class="empty">暂无</td></tr></template>
+          <template x-for="d in recentReleases" :key="d.rel_no">
+            <tr class="data">
+              <td><button class="b-link" x-text="d.rel_no" @click="gotoPage('demand_release')"></button></td>
+              <td><span class="st" :class="'st-' + hue(d.status)" x-text="d.status"></span></td>
+            </tr>
+          </template>
+        </table>
+        <button class="b-ghost b-sm mt8" @click="gotoPage('demand_release')">查看全部 →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 待办队列 -->
+  <div class="frow" style="gap:12px">
+    <div class="card" style="flex:1;min-width:220px">
+      <div class="bd" style="padding:12px">
+        <b>⏳ 进行中加工批次</b>
+        <template x-if="!inProgressBatches.length"><div class="empty mt8">暂无</div></template>
+        <template x-for="d in inProgressBatches" :key="d.prc_batch">
+          <div class="mt8" style="display:flex;justify-content:space-between;align-items:center">
+            <span x-text="d.prc_batch"></span>
+            <button class="b-pri b-sm" @click="gotoPage('forecast_processing')">处理 →</button>
+          </div>
+        </template>
+      </div>
+    </div>
+    <div class="card" style="flex:1;min-width:220px">
+      <div class="bd" style="padding:12px">
+        <b>📝 草稿发布单</b>
+        <template x-if="!draftReleases.length"><div class="empty mt8">暂无</div></template>
+        <template x-for="d in draftReleases" :key="d.rel_no">
+          <div class="mt8" style="display:flex;justify-content:space-between;align-items:center">
+            <span x-text="d.rel_no"></span>
+            <button class="b-pri b-sm" @click="gotoPage('demand_release')">发布 →</button>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+</div>

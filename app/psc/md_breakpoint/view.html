@@ -1,0 +1,254 @@
+<div class="card mt12"><div class="bd" style="padding:0">
+  <!-- ══ 过滤区：标题 + 客户/原物料/新物料三个 autocomplete（与 md_breakpoint.list 参数一一对应；契约无 keyword/status，不设关键字框/状态 chips） ══ -->
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>断点台账</b>
+    <span class="muted" style="font-size:12px">新旧件断点切换关系 · 软失效管理</span>
+    <div class="right tagline" style="gap:8px; flex-wrap:wrap">
+      <div style="position:relative">
+        <input x-model="fC.q" @focus="fC.open = true"
+          @click.stop="fC.open = true; fO.open = false; fN.open = false"
+          @input="fC.open = true; fC.no = ''" placeholder="客户…" style="width:140px">
+        <div x-show="fC.open" @click.away="fC.open = false"
+          style="position:absolute;top:100%;left:0;right:0;background:var(--card);border:1px solid var(--line);max-height:200px;overflow:auto;z-index:100;border-radius:4px">
+          <template x-for="c in filterCustomers(fC.q)" :key="c.customer_no">
+            <div @click="pickFCustomer(c)" style="padding:6px 8px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--line)">
+              <div class="mono" x-text="c.customer_no"></div>
+              <div class="muted" style="font-size:11px" x-text="c.customer_name"></div>
+            </div>
+          </template>
+          <div x-show="!filterCustomers(fC.q).length" style="padding:6px 8px;color:var(--muted);font-size:12px">暂无可选客户</div>
+        </div>
+      </div>
+      <div style="position:relative">
+        <input x-model="fO.q" @focus="fO.open = true"
+          @click.stop="fO.open = true; fC.open = false; fN.open = false"
+          @input="fO.open = true; fO.no = ''" placeholder="原物料号…" style="width:140px">
+        <div x-show="fO.open" @click.away="fO.open = false"
+          style="position:absolute;top:100%;left:0;right:0;background:var(--card);border:1px solid var(--line);max-height:200px;overflow:auto;z-index:100;border-radius:4px">
+          <template x-for="m in filterMaterials(fO.q)" :key="m.material_no">
+            <div @click="pickFOld(m)" style="padding:6px 8px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--line)">
+              <div class="mono" x-text="m.material_no"></div>
+              <div class="muted" style="font-size:11px" x-text="m.material_name"></div>
+            </div>
+          </template>
+          <div x-show="!filterMaterials(fO.q).length" style="padding:6px 8px;color:var(--muted);font-size:12px">暂无可选物料</div>
+        </div>
+      </div>
+      <div style="position:relative">
+        <input x-model="fN.q" @focus="fN.open = true"
+          @click.stop="fN.open = true; fC.open = false; fO.open = false"
+          @input="fN.open = true; fN.no = ''" placeholder="新物料号…" style="width:140px">
+        <div x-show="fN.open" @click.away="fN.open = false"
+          style="position:absolute;top:100%;left:0;right:0;background:var(--card);border:1px solid var(--line);max-height:200px;overflow:auto;z-index:100;border-radius:4px">
+          <template x-for="m in filterMaterials(fN.q)" :key="m.material_no">
+            <div @click="pickFNew(m)" style="padding:6px 8px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--line)">
+              <div class="mono" x-text="m.material_no"></div>
+              <div class="muted" style="font-size:11px" x-text="m.material_name"></div>
+            </div>
+          </template>
+          <div x-show="!filterMaterials(fN.q).length" style="padding:6px 8px;color:var(--muted);font-size:12px">暂无可选物料</div>
+        </div>
+      </div>
+      <button class="b-ghost b-sm" @click="search()">查询</button>
+      <button class="b-ghost b-sm" @click="resetFilters()">重置</button>
+      <button class="b-pri b-sm" @click="openCreate()">＋ 新建断点</button>
+    </div>
+  </div>
+  <!-- ══ 表格：列 ⊆ 详情字段集；序 = 标识 → 归属 → 物料 → 时间；无状态列（列表恒 disabled=0） ══ -->
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr>
+        <th>断点标识</th><th>客户</th><th>原物料号</th><th>新物料号</th>
+        <th>切换时间</th><th>变更单号</th><th class="right">操作</th>
+      </tr>
+      <template x-if="!list.items.length">
+        <tr><td colspan="7" class="empty"
+          x-text="(fC.no || fO.no || fN.no) ? '无符合条件的断点记录' : '暂无断点基础数据 —— 点「新建断点」创建'"></td></tr>
+      </template>
+      <template x-for="d in list.items" :key="d.bp_id">
+        <tr class="data">
+          <td class="mono" x-text="dash(d.bp_id)"></td>
+          <td>
+            <span class="mono" x-text="dash(d.customer_no)"></span>
+            <template x-if="customerName(d.customer_no)">
+              <div class="muted" style="font-size:11px" x-text="customerName(d.customer_no)"></div>
+            </template>
+          </td>
+          <td>
+            <span class="mono" x-text="dash(d.old_material_no)"></span>
+            <template x-if="materialName(d.old_material_no)">
+              <div class="muted" style="font-size:11px" x-text="materialName(d.old_material_no)"></div>
+            </template>
+          </td>
+          <td>
+            <button class="b-link mono" @click="viewX(d)" x-text="dash(d.new_material_no)"></button>
+            <template x-if="materialName(d.new_material_no)">
+              <div class="muted" style="font-size:11px" x-text="materialName(d.new_material_no)"></div>
+            </template>
+          </td>
+          <td x-text="dash(d.switch_time)"></td>
+          <td x-text="dash(d.ecn_no)"></td>
+          <td class="right rowact">
+            <button class="b-pri b-sm" @click="openEdit(d)">编辑</button>
+            <button class="b-dng b-sm" @click="disable(d)">停用</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <!-- ══ 分页条 ══ -->
+  <div class="tagline" style="padding:10px 16px">
+    <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+    <div class="right tagline" style="gap:8px">
+      <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+      <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+      <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- ════════════ 详情模态（查全：md_breakpoint.get 全字段，含 disabled） ════════════ -->
+<div class="modal-mask" x-show="modalX.open" @click.self="closeX()"
+     @keydown.escape.window="closeX()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div><div class="docno" x-text="modalX.d ? modalX.d.bp_id : '断点详情'"></div>
+        <div class="sub">断点基础数据 · BREAKPOINT</div></div>
+      <template x-if="modalX.d">
+        <span class="st" :class="'st-' + bpBadge(modalX.d).hue" x-text="bpBadge(modalX.d).txt"></span>
+      </template>
+      <button class="x" @click="closeX()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <template x-if="modalX.loading">
+        <div class="loadbox"><span class="spin">◌</span><br>载入明细…</div>
+      </template>
+      <template x-if="!modalX.loading && modalX.d">
+        <div>
+          <div class="sec">基本信息</div>
+          <div class="kv">
+            <div><div class="k">断点标识</div><div class="v mono" x-text="dash(modalX.d.bp_id)"></div>
+              <div class="muted" style="font-size:11px">系统自增主键 · 全局唯一</div></div>
+            <div><div class="k">停用状态</div><div class="v">
+              <span class="st" :class="'st-' + bpBadge(modalX.d).hue" x-text="bpBadge(modalX.d).txt"></span></div>
+              <div class="muted" style="font-size:11px">软失效标记 · 停用后不再参与追溯</div></div>
+          </div>
+
+          <div class="sec">断点关系</div>
+          <div class="kv">
+            <div><div class="k">客户</div><div class="v mono" x-text="dash(modalX.d.customer_no)"></div>
+              <div class="muted" style="font-size:11px" x-text="customerName(modalX.d.customer_no)"></div></div>
+            <div><div class="k">原物料号</div><div class="v mono" x-text="dash(modalX.d.old_material_no)"></div>
+              <div class="muted" style="font-size:11px" x-text="materialName(modalX.d.old_material_no)"></div></div>
+            <div><div class="k">新物料号</div><div class="v mono" x-text="dash(modalX.d.new_material_no)"></div>
+              <div class="muted" style="font-size:11px" x-text="materialName(modalX.d.new_material_no)"></div></div>
+          </div>
+
+          <div class="sec">切换信息</div>
+          <div class="kv">
+            <div><div class="k">切换时间</div><div class="v mono" x-text="dash(modalX.d.switch_time)"></div></div>
+            <div><div class="k">变更单号</div><div class="v mono" x-text="dash(modalX.d.ecn_no)"></div></div>
+          </div>
+
+          <details class="raw"><summary>原始数据</summary>
+            <pre class="json" x-text="JSON.stringify(modalX.d, null, 2)"></pre></details>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft" x-show="modalX.d">
+      <template x-if="modalX.d">
+        <div class="tagline" style="gap:8px">
+          <button class="b-pri" @click="openEdit(modalX.d)">编辑</button>
+          <button class="b-dng" @click="disable(modalX.d)">停用</button>
+          <button class="b-ghost" @click="closeX()">关闭</button>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ 创建 / 编辑表单模态（create 5 参数 + update 加 bp_id 只读定位键） ════════════ -->
+<div class="modal-mask" x-show="form.open" @click.self="closeForm()"
+     @keydown.escape.window="closeForm()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div><div class="docno" x-text="form.mode === 'edit' ? ('编辑断点 #' + form.bp_id) : '新建断点'"></div>
+        <div class="sub">断点基础数据 · CREATE / UPDATE</div></div>
+      <button class="x" @click="closeForm()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="frow">
+        <div x-show="form.mode === 'edit'"><label class="f">断点标识</label>
+          <input :value="form.bp_id" disabled></div>
+        <div><label class="f">客户 <span class="req">*</span></label>
+          <div style="position:relative">
+            <input x-model="acC.q" @focus="acC.open = true"
+              @click.stop="acC.open = true; acO.open = false; acN.open = false"
+              @input="acC.open = true; form.customer_no = ''" placeholder="搜索客户…" style="width:100%">
+            <div x-show="acC.open" @click.away="acC.open = false"
+              style="position:absolute;top:100%;left:0;right:0;background:var(--card);border:1px solid var(--line);max-height:200px;overflow:auto;z-index:100;border-radius:4px">
+              <template x-for="c in filterCustomers(acC.q)" :key="c.customer_no">
+                <div @click="pickFC(c)" style="padding:6px 8px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--line)">
+                  <div class="mono" x-text="c.customer_no"></div>
+                  <div class="muted" style="font-size:11px" x-text="c.customer_name"></div>
+                </div>
+              </template>
+              <div x-show="!filterCustomers(acC.q).length" style="padding:6px 8px;color:var(--muted);font-size:12px">暂无可选客户</div>
+            </div>
+          </div>
+        </div>
+        <div><label class="f">原物料号 <span class="req">*</span></label>
+          <div style="position:relative">
+            <input x-model="acO.q" @focus="acO.open = true"
+              @click.stop="acO.open = true; acC.open = false; acN.open = false"
+              @input="acO.open = true; form.old_material_no = ''" placeholder="搜索原物料…" style="width:100%">
+            <div x-show="acO.open" @click.away="acO.open = false"
+              style="position:absolute;top:100%;left:0;right:0;background:var(--card);border:1px solid var(--line);max-height:200px;overflow:auto;z-index:100;border-radius:4px">
+              <template x-for="m in filterMaterials(acO.q)" :key="m.material_no">
+                <div @click="pickFO(m)" style="padding:6px 8px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--line)">
+                  <div class="mono" x-text="m.material_no"></div>
+                  <div class="muted" style="font-size:11px" x-text="m.material_name"></div>
+                </div>
+              </template>
+              <div x-show="!filterMaterials(acO.q).length" style="padding:6px 8px;color:var(--muted);font-size:12px">暂无可选物料</div>
+            </div>
+          </div>
+        </div>
+        <div><label class="f">新物料号 <span class="req">*</span></label>
+          <div style="position:relative">
+            <input x-model="acN.q" @focus="acN.open = true"
+              @click.stop="acN.open = true; acC.open = false; acO.open = false"
+              @input="acN.open = true; form.new_material_no = ''" placeholder="搜索新物料…" style="width:100%">
+            <div x-show="acN.open" @click.away="acN.open = false"
+              style="position:absolute;top:100%;left:0;right:0;background:var(--card);border:1px solid var(--line);max-height:200px;overflow:auto;z-index:100;border-radius:4px">
+              <template x-for="m in filterMaterials(acN.q)" :key="m.material_no">
+                <div @click="pickFN(m)" style="padding:6px 8px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--line)">
+                  <div class="mono" x-text="m.material_no"></div>
+                  <div class="muted" style="font-size:11px" x-text="m.material_name"></div>
+                </div>
+              </template>
+              <div x-show="!filterMaterials(acN.q).length" style="padding:6px 8px;color:var(--muted);font-size:12px">暂无可选物料</div>
+            </div>
+          </div>
+        </div>
+        <div><label class="f">切换时间 <span class="req">*</span></label>
+          <input type="date" x-model="form.switch_time" style="width:100%"></div>
+      </div>
+      <div class="l more" style="margin-top:14px; cursor:pointer" @click="form.more = !form.more"
+        x-text="'更多字段 ' + (form.more ? '▴' : '▾')"></div>
+      <div class="collapse" :class="{open: form.more}">
+        <div style="padding-top:12px">
+          <label class="f">变更单号（ECN） <span class="muted" style="font-weight:400; font-size:11px">可选</span></label>
+          <input x-model="form.ecn_no" maxlength="50" placeholder="可选 · 最多 50 字符" style="width:100%">
+        </div>
+      </div>
+    </div>
+    <div class="modal-ft">
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost" @click="closeForm()">取消</button>
+        <button class="b-pri" :disabled="form.busy" @click="save()"
+          x-text="form.busy ? '处理中…' : (form.mode === 'edit' ? '保存修改' : '创建')"></button>
+      </div>
+    </div>
+  </div>
+</div>

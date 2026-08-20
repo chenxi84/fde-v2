@@ -20,11 +20,13 @@ app/
 将下面这句话发给 Claude Code 或其他 AI 代理工具：
 
 ```
-按 design/工具链使用说明.md 逐步执行，为应用组 my_app 构建完整的后端和前端。
+按 design-plus/工具链使用说明.md 逐步执行，为应用组 my_app 构建完整的后端和前端。
 业务说明在 app/my_app/brd/ 里。
 ```
 
 AI 代理会按九步法自动推进（架构设计 → 应用详设 → 编码 → 测试 → 前端设计 → 前端编码 → 前端测试），只需在第①步（应用划分）和第②步（字段/规则）两处把关确认即可。
+
+> **两个规格目录**：`design-plus/` 含完成门禁（每步完成后强制 100% 覆盖度检查），适合正式项目；`design-normal/` 无门禁，适合 demo / 低优先级 / 探索性设计。只需在 prompt 中把 `design-plus/` 换成 `design-normal/` 即可切换。
 
 ---
 
@@ -96,10 +98,11 @@ fde-v2/
 ├── main.py                  # 启动入口
 ├── app/                     # 所有应用（你创建的也在这）
 │   └── e2e/                 #   参考样例
-├── design/                  # 九步法工具链规格
+├── design-plus/              # ★ 主规格：九步法工具链（含完成门禁，正式项目用）
 │   ├── CONVENTION.md        #   后端编码约定
 │   ├── VIEW_CONVENTION.md   #   前端编码约定
 │   └── 工具链使用说明.md     #   ★ 构建操作手册
+├── design-normal/            # 基础规格：无门禁版，适用于 demo / 低优先级项目
 ├── config/
 │   └── .env.example         # 配置模板
 └── fde_platform/            # 平台引擎（一般不动）

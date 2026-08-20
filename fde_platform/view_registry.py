@@ -86,7 +86,7 @@ def _parse_page_meta(js_path: Path) -> dict:
         return int(mm.group(1)) if mm else None
 
     out = {}
-    for f in ("key", "name", "ic", "title", "crumb"):
+    for f in ("key", "name", "ic", "title", "crumb", "col_default_hidden"):
         v = s(f)
         if v is not None:
             out[f] = v
@@ -123,14 +123,17 @@ def _scan() -> dict:
             key = app_dir.name
             name = meta.get("name") or key
             pid = f"{group}:{key}"
-            pages.append({
+            entry = {
                 "id": pid, "key": key, "name": name,
                 "ic": meta.get("ic") or "▢",
                 "title": meta.get("title") or name,
                 "crumb": meta.get("crumb") or "",
                 "order": meta.get("order"),
                 "url": f"/app/{group}/{key}/view.js",
-            })
+            }
+            if meta.get("col_default_hidden"):
+                entry["col_default_hidden"] = meta["col_default_hidden"]
+            pages.append(entry)
             services[pid] = _read_services(vjs)
 
         # ② 组级页：view/<组>/<key>.js（无后端应用的组级聚合页，如 dashboard）

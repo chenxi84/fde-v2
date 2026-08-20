@@ -1,0 +1,30 @@
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px">
+    <b>产销协同流程总览</b>
+    <span class="muted" style="font-size:12px">月度版本 → 销售预测 → 库存策略 → 净需求发布</span>
+    <div class="right tagline" style="gap:8px">
+      <select x-model="fv" @change="onVersionChange()" style="width:190px">
+        <option value="">选择版本</option>
+        <template x-for="v in versions" :key="v.version_no">
+          <option :value="v.version_no" x-text="v.version_no + ' · ' + (v.lock_status || '—')"></option>
+        </template>
+      </select>
+      <button class="b-pri b-sm" @click="agentAnalyze()">✦ Agent 分析下一步</button>
+    </div>
+  </div>
+
+  <div class="scroll-x" style="padding:8px 16px 14px">
+    <template x-if="loading">
+      <div class="loadbox"><span class="spin">◌</span> 载入进度…</div>
+    </template>
+
+    <template x-if="!loading && svgHtml">
+      <div @click="onSvgClick($event)" x-html="svgHtml"></div>
+    </template>
+
+    <div class="muted" style="font-size:11px; padding-top:6px">
+      图例：<span class="st st-green">绿</span> 已完成 · <span class="st st-slate">灰</span> 未开始 ·
+      点击节点/阶段名进入对应页面（自动带当前版本）
+    </div>
+  </div>
+</div></div>

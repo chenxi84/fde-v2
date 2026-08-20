@@ -1,0 +1,244 @@
+<!-- ══ 列表区：过滤条（标题 + 状态 chips + 物料/版本/异常过滤）+ 表格 + 分页条 ══ -->
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>策略拟合台账</b>
+    <span class="muted" style="font-size:12px">状态机 · 待复核 → 已生效 / 已否决</span>
+    <div class="right tagline" style="gap:8px; flex-wrap:wrap">
+      <div class="chips">
+        <template x-for="s in ['', '待复核', '已生效', '已否决']" :key="s || '全部'">
+          <span class="fchip" :class="{on: fStatus === s}"
+            @click="fStatus = s; list.load(1)" x-text="s || '全部'"></span>
+        </template>
+      </div>
+      <input x-model="fMaterial" @keydown.enter="search()" placeholder="物料号（模糊）…" style="width:140px">
+      <input x-model="fVersion" @keydown.enter="search()" placeholder="版本 YYYYMM" maxlength="6" style="width:120px">
+      <select x-model="fAbnormal" @change="search()" style="width:100px">
+        <option value="">全部异常</option>
+        <option value="true">异常</option>
+        <option value="false">正常</option>
+      </select>
+      <button class="b-ghost b-sm" @click="search()">搜索</button>
+      <button class="b-ghost b-sm" @click="resetFilters()">重置</button>
+      <button class="b-pri b-sm" @click="openRun()">＋ 发起拟合</button>
+      <button class="b-ghost b-sm" @click="openBatch()">批量拟合</button>
+    </div>
+  </div>
+  <!-- ══ 表格：列 ⊆ 详情字段集；序 = 物料号 → 版本 → 预测拟合 → 库存拟合 → 回测指标 → 状态 ══ -->
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr>
+        <th>物料号</th><th>拟合版本</th><th>预测方法</th><th>预测误差</th>
+        <th>服务系数</th><th>安全水位</th><th>组批窗口</th><th>满足率</th>
+        <th>库存天数</th><th>切线次数</th><th>异常标记</th><th>状态</th>
+        <th class="right">操作</th>
+      </tr>
+      <template x-if="!list.items.length">
+        <tr><td colspan="13" class="empty"
+          x-text="(fStatus || fMaterial || fVersion || fAbnormal) ? '无匹配数据' : '暂无拟合结果 —— 点击「发起拟合」或「批量拟合」生成'"></td></tr>
+      </template>
+      <template x-for="d in list.items" :key="d.fit_version + '|' + d.material_no">
+        <tr class="data">
+          <td>
+            <button class="b-link mono" @click="viewX(d)" x-text="d.material_no"></button>
+            <div x-show="matName(d.material_no)" style="font-size:11px;color:var(--muted)" x-text="matName(d.material_no)"></div>
+          </td>
+          <td class="mono" x-text="dash(d.fit_version)"></td>
+          <td><span class="st" :class="'st-' + hue(d.pred_method)" x-text="dash(d.pred_method)"></span></td>
+          <td class="mono" x-text="pct(d.smape)"></td>
+          <td class="mono" x-text="fmt(d.service_factor)"></td>
+          <td class="mono" x-text="fmt(d.safety_level)"></td>
+          <td class="mono" x-text="fmt(d.batch_window)"></td>
+          <td class="mono" x-text="pct(d.fulfill_rate)"></td>
+          <td class="mono" x-text="fmt(d.inv_days)"></td>
+          <td class="mono" x-text="fmt(d.changeover_cnt)"></td>
+          <td><span class="st" :class="'st-' + abnHue(d.abnormal_flag)" x-text="abnText(d.abnormal_flag)"></span></td>
+          <td><span class="st" :class="'st-' + hue(d.status)" x-text="d.status"></span></td>
+          <td class="right rowact">
+            <button class="b-pri b-sm" x-show="d.status === '待复核'" @click="act(d, 'approve')">复核通过</button>
+            <button class="b-ghost b-sm" x-show="d.status === '待复核'" @click="act(d, 'reject')">否决</button>
+            <button class="b-ghost b-sm" x-show="d.status === '已生效'" @click="act(d, 'rollback')">回滚</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <!-- ══ 分页条 ══ -->
+  <div class="tagline" style="padding:10px 16px">
+    <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+    <div class="right tagline" style="gap:8px">
+      <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+      <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+      <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- ════════════ 详情模态（查全：strategy_fitting.get 全字段） ════════════ -->
+<div class="modal-mask" x-show="modalX.open" @click.self="closeX()"
+     @keydown.escape.window="closeX()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div><div class="docno" x-text="modalX.d ? (modalX.d.material_no + ' · ' + modalX.d.fit_version) : '策略拟合详情'"></div>
+        <div class="sub">策略拟合 · 滚动回测拟合最优方法参数 · STRATEGY FITTING</div></div>
+      <template x-if="modalX.d">
+        <span class="tagline" style="gap:8px">
+          <span class="st st-amber" x-show="modalX.d.abnormal_flag === true">⚠ 异常</span>
+          <span class="st" :class="'st-' + hue(modalX.d.status)" x-text="modalX.d.status"></span>
+        </span>
+      </template>
+      <button class="x" @click="closeX()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <template x-if="modalX.loading">
+        <div class="loadbox"><span class="spin">◌</span><br>载入明细…</div>
+      </template>
+      <template x-if="!modalX.loading && modalX.d">
+        <div>
+          <div class="sec">标识信息</div>
+          <div class="kv">
+            <div><div class="k">物料号</div><div class="v mono" x-text="dash(modalX.d.material_no)"></div>
+              <div class="muted" style="font-size:11px">弱引用物料主数据，来源 md_material（BR-17）</div></div>
+            <div><div class="k">拟合版本</div><div class="v mono" x-text="dash(modalX.d.fit_version)"></div>
+              <div class="muted" style="font-size:11px">复合主键 · 拟合版本+物料号全局唯一（BR-01）</div></div>
+            <div style="grid-column: span 2"><div class="k">物料名称</div><div class="v" x-text="matName(modalX.d.material_no) || dash(modalX.d.material_no)"></div></div>
+          </div>
+
+          <div class="sec">预测拟合结果</div>
+          <div class="kv">
+            <div><div class="k">预测方法</div><div class="v"><span class="st" :class="'st-' + hue(modalX.d.pred_method)" x-text="dash(modalX.d.pred_method)"></span></div></div>
+            <div><div class="k">预测误差（sMAPE）</div><div class="v mono" x-text="pct(modalX.d.smape)"></div>
+              <div class="muted" style="font-size:11px">越小越准（BR-06）</div></div>
+            <div style="grid-column: span 2"><div class="k">预测参数（pred_params）</div>
+              <div class="v mono" x-show="!tryParse(modalX.d.pred_params)" x-text="dash(modalX.d.pred_params)"></div>
+              <div class="scroll-x" x-show="tryParse(modalX.d.pred_params)" style="margin-top:6px">
+                <table class="tbl tight">
+                  <tr><th>参数</th><th>值</th></tr>
+                  <template x-for="(val, key) in tryParse(modalX.d.pred_params)" :key="key">
+                    <tr class="data"><td class="mono" x-text="key"></td><td class="mono" x-text="dash(val)"></td></tr>
+                  </template>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="sec">库存拟合结果</div>
+          <div class="kv">
+            <div><div class="k">服务系数</div><div class="v mono" x-text="fmt(modalX.d.service_factor)"></div></div>
+            <div><div class="k">安全水位</div><div class="v mono" x-text="fmt(modalX.d.safety_level)"></div></div>
+            <div><div class="k">组批窗口</div><div class="v mono" x-text="fmt(modalX.d.batch_window)"></div>
+              <div class="muted" style="font-size:11px">天存储 · 28 = 4 周</div></div>
+            <div style="grid-column: span 2"><div class="k">说明</div><div class="v muted">约束优化选成本最小（BR-11）</div></div>
+          </div>
+
+          <div class="sec">回测指标</div>
+          <div class="kv">
+            <div><div class="k">满足率</div><div class="v mono" x-text="pct(modalX.d.fulfill_rate)"></div>
+              <div class="muted" style="font-size:11px">满足率 = 1 − 缺货量/总需求（BR-10）</div></div>
+            <div><div class="k">库存天数</div><div class="v mono" x-text="fmt(modalX.d.inv_days)"></div></div>
+            <div><div class="k">切线次数</div><div class="v mono" x-text="fmt(modalX.d.changeover_cnt)"></div></div>
+          </div>
+
+          <div class="sec">复核状态</div>
+          <div class="kv">
+            <div><div class="k">异常标记</div><div class="v"><span class="st" :class="'st-' + abnHue(modalX.d.abnormal_flag)" x-text="abnText(modalX.d.abnormal_flag)"></span></div>
+              <div class="muted" x-show="modalX.d.abnormal_flag === true" style="font-size:11px;color:var(--red, #b91c1c)">参数跳变过大，复核通过须二次确认（BR-14）</div></div>
+            <div><div class="k">状态</div><div class="v"><span class="st" :class="'st-' + hue(modalX.d.status)" x-text="dash(modalX.d.status)"></span></div></div>
+          </div>
+
+          <details class="raw"><summary>原始数据</summary>
+            <pre class="json" x-text="JSON.stringify(modalX.d, null, 2)"></pre></details>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft" x-show="modalX.d">
+      <template x-if="modalX.d">
+        <div class="tagline" style="gap:8px">
+          <span class="muted" x-show="modalX.d.status === '已否决'">已否决 · 终态，无可用操作</span>
+          <button class="b-pri" x-show="modalX.d.status === '待复核'" @click="act(modalX.d, 'approve')">复核通过</button>
+          <button class="b-ghost" x-show="modalX.d.status === '待复核'" @click="act(modalX.d, 'reject')">否决</button>
+          <button class="b-ghost" x-show="modalX.d.status === '已生效'" @click="act(modalX.d, 'rollback')">回滚</button>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ 发起拟合表单（strategy_fitting.run：material_no / fit_version） ════════════ -->
+<div class="modal-mask" x-show="form.open" @click.self="closeRun()"
+     @keydown.escape.window="closeRun()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div><div class="docno">发起拟合</div>
+        <div class="sub">策略拟合 · 单物料滚动回测 · RUN</div></div>
+      <button class="x" @click="closeRun()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="muted" style="font-size:12px; margin-bottom:12px">
+        上游数据来源：历史干净需求（ERP，断点前后拼接、剔除一次性脉冲）/ 物料当前参数（md_material）
+      </div>
+      <div class="frow">
+        <div style="grid-column: span 2">
+          <label class="f">物料号 <span class="req">*</span></label>
+          <!-- 主数据引用铁律：内联 autocomplete，禁止手工录入 / 普通 <select> -->
+          <div style="position:relative">
+            <input x-model="matQuery" placeholder="搜索物料号 / 名称…"
+              @focus="matOpen = true" @click.stop="matOpen = true" @input="onMatInput()"
+              @keydown.escape="matOpen = false">
+            <div x-show="matOpen" @click.away="matOpen = false" x-cloak
+              style="position:absolute;z-index:20;top:100%;left:0;right:0;margin-top:2px;background:var(--card);border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 18px rgba(14,27,42,.12);max-height:240px;overflow:auto">
+              <template x-for="o in matFiltered()" :key="o.material_no">
+                <div @click="pickMat(o)" style="padding:6px 10px;cursor:pointer;display:flex;flex-direction:column;gap:2px">
+                  <span class="mono" style="font-weight:700" x-text="o.material_no"></span>
+                  <span class="muted" style="font-size:11px" x-text="dash(o.material_name)"></span>
+                </div>
+              </template>
+              <div x-show="!matFiltered().length" class="muted" style="padding:8px 10px;font-size:12px">暂无可选物料</div>
+            </div>
+          </div>
+        </div>
+        <div style="grid-column: span 2">
+          <label class="f">拟合版本 <span class="req">*</span></label>
+          <input x-model="form.fit_version" maxlength="6" placeholder="YYYYMM（6 位数字）" @keydown.enter="saveRun()">
+        </div>
+      </div>
+    </div>
+    <div class="modal-ft">
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost" @click="closeRun()">取消</button>
+        <button class="b-pri" :disabled="form.busy" @click="saveRun()"
+          x-text="form.busy ? '处理中…' : '发起拟合'"></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ 批量拟合表单（strategy_fitting.run_batch：fit_version） ════════════ -->
+<div class="modal-mask" x-show="batch.open" @click.self="closeBatch()"
+     @keydown.escape.window="closeBatch()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div><div class="docno">批量拟合</div>
+        <div class="sub">策略拟合 · 整批滚动回测 · RUN BATCH</div></div>
+      <button class="x" @click="closeBatch()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="muted" style="font-size:12px; margin-bottom:12px">
+        对全部「正常」状态物料逐物料拟合（幂等：同版本已有结果覆盖为待复核）。
+        上游数据来源：历史干净需求（ERP）/ 物料当前参数（md_material）
+      </div>
+      <div class="frow">
+        <div style="grid-column: span 2">
+          <label class="f">拟合版本 <span class="req">*</span></label>
+          <input x-model="batch.fit_version" maxlength="6" placeholder="YYYYMM（6 位数字）" @keydown.enter="saveBatch()">
+        </div>
+      </div>
+    </div>
+    <div class="modal-ft">
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost" @click="closeBatch()">取消</button>
+        <button class="b-pri" :disabled="batch.busy" @click="saveBatch()"
+          x-text="batch.busy ? '处理中…' : '批量拟合'"></button>
+      </div>
+    </div>
+  </div>
+</div>

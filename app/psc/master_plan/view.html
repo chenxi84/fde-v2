@@ -1,0 +1,232 @@
+<div class="card mt12"><div class="bd" style="padding:0">
+  <!-- ══ 过滤区：标题 + 月度版本下拉 + 物料号 autocomplete（与 master_plan.list 参数一一对应；契约无 keyword，不设搜索框） ══ -->
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>主计划台账</b>
+    <span class="muted" style="font-size:12px">线下产能平衡结果导回 · 计划版本号版本化</span>
+    <div class="right tagline" style="gap:8px; flex-wrap:wrap">
+      <select x-model="fVersion" @change="search()" style="width:160px">
+        <option value="">全部月度版本</option>
+        <template x-for="v in versionOptions" :key="v.version_no">
+          <option :value="v.version_no" x-text="v.version_no + (versionMap[v.version_no] ? ' · ' + versionMap[v.version_no] : '')"></option>
+        </template>
+      </select>
+      <div style="position:relative">
+        <input x-model="fMaterial"
+               @click.stop="toggleMaterialAuto('filter', fMaterial)"
+               @input="materialAutoShow = 'filter'; filterMaterial(fMaterial)"
+               placeholder="物料号 / 名称…" autocomplete="off" style="width:180px">
+        <div class="auto-drop" x-show="materialAutoShow === 'filter'" @click.away="closeMaterial()"
+             style="position:absolute; top:100%; left:0; right:0; max-height:240px; overflow-y:auto;
+                    background:#fff; border:1px solid #ccc; border-radius:4px; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,.1)">
+          <div x-show="!materialFiltered.length" style="padding:8px; color:#999">无匹配物料</div>
+          <template x-for="item in materialFiltered" :key="item.material_no">
+            <div @mousedown.prevent="selectMaterialFilter(item)"
+                 style="padding:6px 12px; cursor:pointer; border-bottom:1px solid #f0f0f0"
+                 @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+              <div style="font-weight:500" x-text="item.material_no"></div>
+              <div style="font-size:12px; color:#888" x-text="item.material_name || '—'"></div>
+            </div>
+          </template>
+        </div>
+      </div>
+      <button class="b-ghost b-sm" @click="resetFilters()">重置</button>
+      <button class="b-pri b-sm" @click="openImport()">＋ 导入</button>
+    </div>
+  </div>
+  <!-- ══ 表格：列 ⊆ 详情字段集；序 = 版本 → 归属 → 数量 → 时间；无状态机 → 无操作列 ══ -->
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr>
+        <th>计划版本号</th><th>物料号</th><th>月度版本</th><th>滚动月度</th>
+        <th class="right">需求量</th><th>最迟入库日期</th>
+      </tr>
+      <template x-if="!list.items.length"><tr><td colspan="6" class="empty">无匹配数据</td></tr></template>
+      <template x-for="d in list.items" :key="d.plan_version + '|' + d.material_no + '|' + d.rolling_month">
+        <tr class="data">
+          <td><button class="b-link mono" @click="viewX(d)" x-text="'v' + d.plan_version"></button></td>
+          <td>
+            <span class="mono" x-text="dash(d.material_no)"></span>
+            <template x-if="materialName(d.material_no)">
+              <div class="muted" style="font-size:11px" x-text="materialName(d.material_no)"></div>
+            </template>
+          </td>
+          <td class="mono" x-text="dash(d.version_no)"></td>
+          <td><span class="st" :class="'st-' + rmHue(d.rolling_month)" x-text="dash(d.rolling_month)"></span></td>
+          <td class="right num" x-text="fmt(d.plan_qty)"></td>
+          <td class="mono" x-text="dash(d.latest_inbound_date)"></td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <!-- ══ 分页条 ══ -->
+  <div class="tagline" style="padding:10px 16px">
+    <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+    <div class="right tagline" style="gap:8px">
+      <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+      <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+      <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- ════════════ 详情模态（查全：master_plan.get 全 6 字段） ════════════ -->
+<div class="modal-mask" x-show="modalX.open" @click.self="closeX()"
+     @keydown.escape.window="closeX()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div><div class="docno" x-text="modalX.d ? modalX.d.material_no : '主计划详情'"></div>
+        <div class="sub">主计划 · MASTER PLAN · 线下产能平衡结果导回</div></div>
+      <template x-if="modalX.d">
+        <span class="st st-blue" x-text="'v' + modalX.d.plan_version"></span>
+      </template>
+      <button class="x" @click="closeX()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <template x-if="modalX.loading">
+        <div class="loadbox"><span class="spin">◌</span><br>载入明细…</div>
+      </template>
+      <template x-if="!modalX.loading && modalX.d">
+        <div>
+          <div class="sec">主键信息</div>
+          <div class="kv">
+            <div><div class="k">计划版本号</div><div class="v mono" x-text="'v' + dash(modalX.d.plan_version)"></div>
+              <div class="muted" style="font-size:11px">系统生成 · 版本演进 +1</div></div>
+            <div><div class="k">物料号</div><div class="v mono" x-text="dash(modalX.d.material_no)"></div>
+              <div class="muted" style="font-size:11px">引用 md_material 主数据</div></div>
+            <div><div class="k">物料名称</div><div class="v" x-text="materialName(modalX.d.material_no) || '—'"></div></div>
+            <div><div class="k">滚动月度</div><div class="v"><span class="st" :class="'st-' + rmHue(modalX.d.rolling_month)" x-text="dash(modalX.d.rolling_month)"></span></div></div>
+          </div>
+
+          <div class="sec">版本信息</div>
+          <div class="kv">
+            <div><div class="k">月度版本</div><div class="v mono" x-text="dash(modalX.d.version_no)"></div>
+              <div class="muted" style="font-size:11px">导入时指定 · 承接净需求导出的月度版本</div></div>
+          </div>
+
+          <div class="sec">数量信息</div>
+          <div class="kv">
+            <div><div class="k">需求量</div><div class="v" x-text="fmt(modalX.d.plan_qty)"></div>
+              <div class="muted" style="font-size:11px">计划生产量 · ≥0</div></div>
+          </div>
+
+          <div class="sec">时间信息</div>
+          <div class="kv">
+            <div><div class="k">最迟入库日期</div><div class="v mono" x-text="dash(modalX.d.latest_inbound_date)"></div>
+              <div class="muted" style="font-size:11px">该批计划最迟完工入库时间 · 推移表据此记预计入库量</div></div>
+          </div>
+
+          <details class="raw"><summary>原始数据</summary>
+            <pre class="json" x-text="JSON.stringify(modalX.d, null, 2)"></pre></details>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft" x-show="modalX.d">
+      <template x-if="modalX.d">
+        <div class="tagline" style="gap:8px">
+          <span class="muted">无状态机 · 无可用操作（数据经导入进入）</span>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ 导入表单模态（master_plan.import_plan：version_no 顶部一次指定 + 批量行录入） ════════════ -->
+<div class="modal-mask" x-show="importForm.open" @click.self="closeImport()"
+     @keydown.escape.window="closeImport()" x-cloak>
+  <div class="modal" style="max-width:820px">
+    <div class="modal-hd">
+      <div><div class="docno">导入主计划</div>
+        <div class="sub">数据来源：净需求（线下产能平衡结果导回）</div></div>
+      <button class="x" @click="closeImport()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="frow">
+        <div><label class="f">月度版本 <span class="req">*</span></label>
+          <select x-model="importForm.version_no">
+            <option value="">请选择月度版本</option>
+            <template x-if="!versionOptions.length"><option value="" disabled>暂无可用月度版本</option></template>
+            <template x-for="v in versionOptions" :key="v.version_no">
+              <option :value="v.version_no" x-text="v.version_no + (versionMap[v.version_no] ? ' · ' + versionMap[v.version_no] : '')"></option>
+            </template>
+          </select></div>
+      </div>
+
+      <div class="sec">批量行录入（每行 = 物料号 / 滚动月度 / 需求量 / 最迟入库日期）</div>
+      <div class="scroll-x">
+        <table class="tbl tight">
+          <tr><th style="width:220px">物料号</th><th style="width:120px">滚动月度</th>
+            <th style="width:120px">需求量</th><th style="width:160px">最迟入库日期</th>
+            <th class="right">操作</th></tr>
+          <template x-for="(row, idx) in importForm.rows" :key="idx">
+            <tr>
+              <td>
+                <div style="position:relative">
+                  <input x-model="row.material_no"
+                         @click.stop="toggleMaterialAuto('row' + idx, row.material_no)"
+                         @input="materialAutoShow = 'row' + idx; filterMaterial(row.material_no)"
+                         placeholder="物料号 / 名称…" autocomplete="off" style="width:100%">
+                  <div class="auto-drop" x-show="materialAutoShow === ('row' + idx)" @click.away="closeMaterial()"
+                       style="position:absolute; top:100%; left:0; right:0; max-height:200px; overflow-y:auto;
+                              background:#fff; border:1px solid #ccc; border-radius:4px; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,.1)">
+                    <div x-show="!materialFiltered.length" style="padding:8px; color:#999">无匹配物料</div>
+                    <template x-for="item in materialFiltered" :key="item.material_no">
+                      <div @mousedown.prevent="selectMaterialRow(item, idx)"
+                           style="padding:6px 12px; cursor:pointer; border-bottom:1px solid #f0f0f0"
+                           @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+                        <div style="font-weight:500" x-text="item.material_no"></div>
+                        <div style="font-size:12px; color:#888" x-text="item.material_name || '—'"></div>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </td>
+              <td>
+                <select x-model="row.rolling_month">
+                  <option value="">请选择</option>
+                  <option value="N+1">N+1</option>
+                  <option value="N+2">N+2</option>
+                  <option value="N+3">N+3</option>
+                </select>
+              </td>
+              <td><input type="number" min="0" x-model="row.plan_qty" placeholder="0" style="width:100%"></td>
+              <td><input type="date" x-model="row.latest_inbound_date" style="width:100%"></td>
+              <td class="right rowact">
+                <button class="b-ghost b-sm" @click="removeRow(idx)" :disabled="importForm.rows.length <= 1">删除行</button>
+              </td>
+            </tr>
+          </template>
+        </table>
+      </div>
+      <div class="mt12 tagline">
+        <button class="b-ghost b-sm" @click="addRow()">＋ 添加行</button>
+        <span class="muted" style="font-size:11px">plan_version 由系统按「物料 × 滚动月度」自动 +1，不进表单</span>
+      </div>
+
+      <!-- 后端逐行校验失败明细回显 -->
+      <template x-if="importForm.errors.length">
+        <div class="mt12">
+          <div class="sec">导入失败明细（共 <span x-text="importForm.errors.length"></span> 条）</div>
+          <div class="scroll-x">
+            <table class="tbl tight">
+              <tr><th style="width:80px">行号</th><th style="width:160px">字段</th><th>错误</th></tr>
+              <template x-for="e in importForm.errors" :key="e.row + '|' + e.field">
+                <tr>
+                  <td class="mono" x-text="e.row"></td>
+                  <td class="mono" x-text="e.field"></td>
+                  <td x-text="e.message"></td>
+                </tr>
+              </template>
+            </table>
+          </div>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft">
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost" @click="closeImport()">取消</button>
+        <button class="b-pri" :disabled="importForm.busy" @click="saveImport()"
+          x-text="importForm.busy ? '处理中…' : '导入'"></button>
+      </div>
+    </div>
+  </div>
+</div>

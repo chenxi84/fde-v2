@@ -3,7 +3,7 @@
 一个「**领域驱动 + 约定优于配置**」的轻量业务平台，以及一条「**原始业务说明 → 可运行业务系统**」的全自动构建流水线。
 
 - **平台（运行期）**：把 `app/` 下符合约定的聚合根应用自动发现、加载、暴露为服务，并提供 Web 控制台、AI Agent、MCP、定时任务、鉴权等多入口。
-- **流水线（构建期）**：`design/` 轻量九步法（后端五步 + 前端四步），配合 AI 代理从一段业务说明出发，自动产出**架构设计 → 详设 → 编码 → 测试用例/执行 → 契约冻结 → 前端四步**，端到端交付一个可运行系统。
+- **流水线（构建期）**：`design-plus/` 轻量九步法（后端五步 + 前端四步），配合 AI 代理从一段业务说明出发，自动产出**架构设计 → 详设 → 编码 → 测试用例/执行 → 契约冻结 → 前端四步**，端到端交付一个可运行系统。
 
 > 仓库内自带现行约定样板 `app/e2e/`（成员/任务，最小完整、九步产物齐全）。
 >
@@ -33,7 +33,7 @@
 2. **约定优于配置**——应用名、服务名、库名全部从文件夹名 / 公共方法名推导，**无任何 manifest**。
 3. **按名调用、运行期绑定**——跨应用调用只认「名字」（`self.fde.call("应用","服务", **参数)`），不 `import`、不共享事务，编译可过、运行才校验。
 
-由此得到的根基等式（`design/CONVENTION.md` §2 / §8）：
+由此得到的根基等式（`design-plus/CONVENTION.md` §2 / §8）：
 
 > **一个聚合根 = 一个应用 = 一个同名文件夹 = 一个同名类 = 一个同名 SQLite 库 = 一个独立事务 / 一致性边界。**
 
@@ -71,7 +71,8 @@ fde-v2/
 ├── view/                      # 组级聚合页（无后端应用的页面，如 e2e/dashboard）
 │   ├── lib/                   #   前端公共库（alpine / shell / api / styles，只读环境前提）
 │   └── pages/                 #   平台通用页（console / agent）
-├── design/                    # 轻量技能体系规格（应用构建九步法 + 前后端约定正本）
+├── design-plus/                    # ★ 主规格：轻量技能体系（九步法 + 前后端约定正本，含完成门禁）
+├── design-normal/                  # 基础规格：无门禁版，适用于 demo / 低优先级 / 非正式设计
 │   ├── CONVENTION.md          #   ★ 后端应用约定正本（CONVENTION v2，唯一来源）
 │   ├── VIEW_CONVENTION.md     #   ★ 前端视图约定正本（VIEW_CONVENTION v1，唯一来源）
 │   ├── view-convention/       #   前端约定参考资料（architecture/patterns/design-system/pitfalls）
@@ -114,12 +115,12 @@ python main.py
 
 ### 从零构建一个新业务系统
 
-推荐入口：将设计规格与业务说明发给 AI 代理（如 Claude Code），按 `design/工具链使用说明.md` 逐步执行九步法。
+推荐入口：将设计规格与业务说明发给 AI 代理（如 Claude Code），按 `design-plus/工具链使用说明.md` 逐步执行九步法。**正式项目**建议使用 `design-plus/`（含完成门禁，每步强制 100% 覆盖度）；demo / 低优先级项目可用 `design-normal/`（无门禁）。
 
 也可手工驱动 Claude，把下面这句话连同你的业务说明发给它：
 
 ```
-按 design/ 九步法构建应用组 <组>（逐步照 design/工具链使用说明.md 执行），业务说明如下：
+按 design-plus/ 九步法构建应用组 <组>（逐步照 design-plus/工具链使用说明.md 执行），业务说明如下：
 <背景 / 目标 / 主流程 / 涉及数据 / 角色，越具体越好>
 ```
 
@@ -140,6 +141,8 @@ Claude 会读规范、逐步推进，你只需在「第①步 应用划分」「
 | **资源目录** | 每个应用自动建 `resource/import-file`（上传）/ `export-file`（产出），配套内置文件工具供 Agent / MCP 做数据导入。 |
 | **定时任务** | APScheduler 按 cron 调度公共服务，管理页 `/scheduler`，日志落 `config/scheduler.db`。 |
 | **视图装配** | 扫描各应用 `view.{js,html}` 的自描述 `PAGE_META`，零接线装配进所属组菜单；仅经写死端点 `/app/<名>/view.{js,html}` serve。 |
+| **列表排序（零改动）** | 平台保留参数 `sort_by/sort_dir` + `watchSortableTables()` 自动装饰表头：点击列头由后端排序后返回当前页，应用 list 契约与前端代码均无需改动（`fde_platform/listsort.py`）。 |
+| **自定义显示列（跟账号）** | 工具栏右侧注入列设置图标，弹层可对**全部已渲染列**勾选显隐（表头文本标识 + nth-child 隐藏，扛 x-for 重渲染）；配置存 `/api/prefs/cols:<页>`（`user_prefs` 表，per-user 持久化）。`list()` 约定返回全字段、视图渲染全列，`PAGE_META.col_default_hidden` 声明默认隐藏的非关键列（默认只显示关键列），用户调整后个人配置覆盖。范例 `md_material`。 |
 | **数据库双模** | 默认 SQLite，配置 `DATABASE_URL` 即可切换 PostgreSQL；建表语句、SQL 方言自动翻译，应用零改动。 |
 | **自动审计** | `CREATE TABLE` 自动追加 `created_at / updated_at / created_by / updated_by`；INSERT / UPDATE 自动注入当前用户与时间。 |
 | **集成接口管理** | `/integration`：扫描发现外部系统适配器与网关应用，支持 HTTP 方法 / 鉴权（Basic/Bearer/API Key）/ Mock / 连通测试 / 调用日志统计。 |
@@ -151,7 +154,7 @@ Claude 会读规范、逐步推进，你只需在「第①步 应用划分」「
 
 ## 应用约定（CONVENTION v2）
 
-完整正文见 `design/CONVENTION.md`（唯一正本）。最小骨架：
+完整正文见 `design-plus/CONVENTION.md`（唯一正本）。最小骨架：
 
 ```python
 # app/<组>/<应用>/<应用>.py
@@ -187,7 +190,7 @@ class Todo:                                  # 类 = 聚合根，PascalCase（�
 
 ## 构建流水线（九步法）
 
-编排总纲：见 `design/工具链使用说明.md`（Claude Code / 工程师逐步执行），从一段业务说明到完整可运行系统。
+编排总纲：见 `design-plus/工具链使用说明.md`（Claude Code / 工程师逐步执行），从一段业务说明到完整可运行系统。
 
 | 步 | 做什么 | 任务 kind | 产出 | 人工关注 |
 |---|---|---|---|---|
@@ -215,7 +218,7 @@ class Todo:                                  # 类 = 聚合根，PascalCase（�
 
 ## 测试与验收红线
 
-一切验收（第⑤步测试执行 / 第⑨步前端测试执行）共同遵守、不可逾越（规格见 `design/测试执行.md`、`design/前端测试执行.md`）：
+一切验收（第⑤步测试执行 / 第⑨步前端测试执行）共同遵守、不可逾越（规格见 `design-plus/测试执行.md`、`design-plus/前端测试执行.md`）：
 
 1. **数据库隔离（最高优先）**：在 `fde_platform/dbguard.py isolate_dbs()` 下跑——测试前移走全部应用库 / 平台库，结束原样还回，**绝不污染用户 demo 数据**。
 2. **串行**：dbguard 带跨进程锁（`fde_platform/.dbguard.lock`），并行触发会被干净拒绝。
@@ -230,7 +233,7 @@ class Todo:                                  # 类 = 聚合根，PascalCase（�
 ```bash
 python -m fde_platform.scanner             # 跨应用调用契约左移校验（有问题退出码 1）
 python tests/verify_web.py                 # 平台 Web / test_client 验收
-python design/前端验收样板/verify_view_e2e.py            # e2e 前端验收（playwright，需 Chromium）
+python design-plus/前端验收样板/verify_view_e2e.py            # e2e 前端验收（playwright，需 Chromium）
 ```
 
 ---
@@ -255,11 +258,11 @@ python design/前端验收样板/verify_view_e2e.py            # e2e 前端验�
 
 | 想了解 | 读 |
 |---|---|
-| 怎么驱动流水线构建系统（操作手册 · 九步法全景） | `design/工具链使用说明.md` |
-| 后端应用约定（CONVENTION v2，唯一正本） | `design/CONVENTION.md` |
-| 聚合根识别方法（第①步，本体驱动 + DDD） | `design/架构设计.md` |
-| 应用详设模板（第②步） | `design/应用设计.md` |
-| 前端视图约定正本（第⑥–⑨步） | `design/VIEW_CONVENTION.md`（+ 参考 `design/view-convention/`） |
+| 怎么驱动流水线构建系统（操作手册 · 九步法全景） | `design-plus/工具链使用说明.md` |
+| 后端应用约定（CONVENTION v2，唯一正本） | `design-plus/CONVENTION.md` |
+| 聚合根识别方法（第①步，本体驱动 + DDD） | `design-plus/架构设计.md` |
+| 应用详设模板（第②步） | `design-plus/应用设计.md` |
+| 前端视图约定正本（第⑥–⑨步） | `design-plus/VIEW_CONVENTION.md`（+ 参考 `design-plus/view-convention/`） |
 | 上线后持续演进 | 修改详设 → AI 代理单步重执行 → 回归测试 |
 | 外部系统对接 | `/integration` 集成接口管理（扫描/配置/测试/跟踪） |
 | 平台 MCP 管理 | `python -m fde_platform.mcp_server --user admin` |

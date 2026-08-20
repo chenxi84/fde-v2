@@ -36,7 +36,7 @@ from flask import (
 )
 
 from fde import FdeError
-from fde_platform import builtin_tools, integration, scanner, users, view_registry
+from fde_platform import builtin_tools, integration, listsort, scanner, users, view_registry
 from fde_platform.logging_config import init_logging
 from fde_platform.runtime import FdePlatform
 
@@ -273,7 +273,7 @@ def app_detail(app_name):
 
 # ══════════════════════════════════════════════════════════
 # 前端视图（view/ 通用同源静态托管）
-#   模块 = view/ 下含 index.html 的目录（如 view/crm/），由 design/
+#   模块 = view/ 下含 index.html 的目录（如 view/crm/），由 design-plus/
 #   VIEW_CONVENTION.md（技能 fde-view-gen）按统一范式生成；view/lib/ 为跨模块公共基座
 #   （api.js / shell.js / 设计系统），view/pages/ 为平台公共页（Agent / 服务台），
 #   二者无 index.html、不进模块清单，但同样按需静态放行。
@@ -424,6 +424,26 @@ def api_my_pages():
         "is_admin": False, "pages": users.get_user_page_grants(u["id"])}})
 
 
+@app.route("/api/prefs/<path:key>", methods=["GET"])
+def api_pref_get(key):
+    """读当前登录用户的偏好（JSON），如列表自定义显示列。不存在返回 null。"""
+    u = users.session_user()
+    if not u:
+        return jsonify({"status": "error", "message": "未登录"}), 401
+    return jsonify({"status": "ok", "data": users.get_pref(u["id"], key)})
+
+
+@app.route("/api/prefs/<path:key>", methods=["POST", "PUT"])
+def api_pref_set(key):
+    """写当前登录用户的偏好（body.value 任意 JSON）。per-user 持久化，跟账号走。"""
+    u = users.session_user()
+    if not u:
+        return jsonify({"status": "error", "message": "未登录"}), 401
+    body = request.get_json(silent=True) or {}
+    users.set_pref(u["id"], key, body.get("value"))
+    return jsonify({"status": "ok"})
+
+
 @app.route("/api/view_boot")
 def api_view_boot():
     """某业务模块的壳启动清单（通用壳 bootShell 的装配源）：
@@ -468,11 +488,22 @@ def api_call(app_name, service):
 
     raw = request.get_json(silent=True) or {}
     raw.pop("context", None)  # 丢弃客户端伪造的身份（§4.1 防伪造）
+
+    # 平台级 list 排序（fde_platform/listsort.py）：sort_by/sort_dir 为平台保留参数，
+    # 先行弹出、不透传应用；拦截后剥分页取全量 → 平台排序 → 按请求分页切片。
+    list_sort = None
+    if service == "list" and listsort.wants_sort(raw):
+        sort_by, sort_dir = listsort.pop_sort(raw)
+        req_page, req_size = listsort.pop_paging(raw)
+        list_sort = (sort_by, sort_dir, req_page, req_size)
+
     params = _coerce(raw, svc["parameters"])
 
     try:
         # 身份来自登录态（无会话则 None → 平台默认身份）；客户端无法伪造（§4.1）
         result = platform.call(app_name, service, ctx=users.current_caller_ctx(), **params)
+        if list_sort is not None:
+            result = listsort.apply(result, *list_sort)
         return jsonify({"status": "ok", "data": result})
     except FdeError as e:
         return jsonify({"status": "error", "kind": "business", "message": str(e)})

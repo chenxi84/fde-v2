@@ -1,0 +1,131 @@
+<div class="card mt12"><div class="bd" style="padding:0">
+  <!-- ══ 过滤区：标题 + 版本号精确匹配 + 状态 chips（与 list(version_no, lock_status, page, size) 一一对应；契约无 keyword，不设搜索框） ══ -->
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>月度版本台账</b>
+    <span class="muted" style="font-size:12px">状态机 · 草稿 → 发布（锁定） → 冻结（冻结不可逆）</span>
+    <div class="right tagline" style="gap:8px; flex-wrap:wrap">
+      <div class="chips">
+        <template x-for="s in ['', '草稿', '发布（锁定）', '冻结']" :key="s || '全部'">
+          <span class="fchip" :class="{on: fStatus === s}"
+            @click="fStatus = s; list.load(1)" x-text="s || '全部'"></span>
+        </template>
+      </div>
+      <input x-model="fVersion" @keydown.enter="search()" placeholder="版本号 · 如 202608" style="width:150px">
+      <button class="b-ghost b-sm" @click="search()">搜索</button>
+      <button class="b-ghost b-sm" @click="resetFilters()">重置</button>
+      <button class="b-pri b-sm" @click="openCreate()">＋ 新建版本</button>
+    </div>
+  </div>
+  <!-- ══ 表格：列 ⊆ 详情字段集；序 = 单号 → 状态 → 归属 → 时间 ══ -->
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr>
+        <th>版本号</th><th>锁定状态</th><th>锚定期间</th><th>opening 日</th><th class="right">操作</th>
+      </tr>
+      <template x-if="!list.items.length"><tr><td colspan="5" class="empty">无匹配数据</td></tr></template>
+      <template x-for="d in list.items" :key="d.version_no">
+        <tr class="data">
+          <td><button class="b-link mono" @click="viewX(d)" x-text="d.version_no"></button></td>
+          <td><span class="st" :class="'st-' + hue(d.lock_status)" x-text="d.lock_status"></span></td>
+          <td class="mono" x-text="dash(d.anchor_period)"></td>
+          <td class="mono" x-text="dash(d.opening_date)"></td>
+          <td class="right rowact">
+            <button class="b-pri b-sm" x-show="d.lock_status === '草稿'" @click="act(d, 'publish')">发布</button>
+            <button class="b-pri b-sm" x-show="d.lock_status === '发布（锁定）'" @click="act(d, 'freeze')">冻结</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <!-- ══ 分页条 ══ -->
+  <div class="tagline" style="padding:10px 16px">
+    <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+    <div class="right tagline" style="gap:8px">
+      <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+      <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+      <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- ════════════ 详情模态（查全：get 全字段） ════════════ -->
+<div class="modal-mask" x-show="modalX.open" @click.self="closeX()"
+     @keydown.escape.window="closeX()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div><div class="docno" x-text="modalX.d ? modalX.d.version_no : '月度版本详情'"></div>
+        <div class="sub">月度版本 · MONTHLY VERSION</div></div>
+      <template x-if="modalX.d">
+        <span class="st" :class="'st-' + hue(modalX.d.lock_status)" x-text="modalX.d.lock_status"></span>
+      </template>
+      <button class="x" @click="closeX()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <template x-if="modalX.loading">
+        <div class="loadbox"><span class="spin">◌</span><br>载入明细…</div>
+      </template>
+      <template x-if="!modalX.loading && modalX.d">
+        <div>
+          <div class="sec">基本信息</div>
+          <div class="kv">
+            <div><div class="k">版本号</div><div class="v mono" x-text="dash(modalX.d.version_no)"></div>
+              <div class="muted" style="font-size:11px">YYYYMM 格式 · 全局唯一 · 主键</div></div>
+            <div><div class="k">锁定状态</div><div class="v"><span class="st" :class="'st-' + hue(modalX.d.lock_status)" x-text="dash(modalX.d.lock_status)"></span></div>
+              <div class="muted" style="font-size:11px">初始恒为「草稿」</div></div>
+            <div><div class="k">锚定期间</div><div class="v mono" x-text="dash(modalX.d.anchor_period)"></div></div>
+            <div><div class="k">opening 日</div><div class="v mono" x-text="dash(modalX.d.opening_date)"></div></div>
+          </div>
+
+          <div class="sec">状态信息</div>
+          <div class="kv">
+            <div style="grid-column: span 2"><div class="k">流转规则</div><div class="v">
+              单向流转：草稿 --publish--&gt; 发布（锁定） --freeze--&gt; 冻结，冻结不可逆</div></div>
+          </div>
+
+          <details class="raw"><summary>原始数据</summary>
+            <pre class="json" x-text="JSON.stringify(modalX.d, null, 2)"></pre></details>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft" x-show="modalX.d">
+      <template x-if="modalX.d">
+        <div class="tagline" style="gap:8px">
+          <span class="muted" x-show="modalX.d.lock_status === '冻结'">已冻结 · 终态，无可用操作</span>
+          <button class="b-pri" x-show="modalX.d.lock_status === '草稿'" @click="act(modalX.d, 'publish')">发布</button>
+          <button class="b-pri" x-show="modalX.d.lock_status === '发布（锁定）'" @click="act(modalX.d, 'freeze')">冻结</button>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ 创建表单模态（create 全参数：version_no / anchor_period / opening_date） ════════════ -->
+<div class="modal-mask" x-show="form.open" @click.self="closeCreate()"
+     @keydown.escape.window="closeCreate()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div><div class="docno">新建版本</div>
+        <div class="sub">月度版本 · CREATE</div></div>
+      <button class="x" @click="closeCreate()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="frow">
+        <div><label class="f">版本号 <span class="req">*</span></label>
+          <input x-model="form.version_no" maxlength="6" placeholder="如 202608" @keydown.enter="save()">
+          <div class="muted" style="font-size:11px">6 位数字 YYYYMM（月 01~12）· 全局唯一</div></div>
+        <div><label class="f">锚定期间 <span class="req">*</span></label>
+          <input type="month" x-model="form.anchor_period" placeholder="YYYY-MM" @keydown.enter="save()">
+          <div class="muted" style="font-size:11px">格式 YYYY-MM · 与历史台账期间一致</div></div>
+        <div><label class="f">opening 日 <span class="req">*</span></label>
+          <input type="date" x-model="form.opening_date"></div>
+      </div>
+    </div>
+    <div class="modal-ft">
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost" @click="closeCreate()">取消</button>
+        <button class="b-pri" :disabled="form.busy" @click="save()"
+          x-text="form.busy ? '处理中…' : '创建版本'"></button>
+      </div>
+    </div>
+  </div>
+</div>

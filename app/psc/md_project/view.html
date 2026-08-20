@@ -1,0 +1,259 @@
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>项目台账</b>
+    <span class="muted">阶段单向流转 · 进行中 → SOP → EOP</span>
+    <div class="right tagline" style="gap:8px; flex-wrap:wrap">
+      <div class="chips">
+        <template x-for="s in ['', '进行中', 'SOP', 'EOP']" :key="s || '全部'">
+          <span class="fchip" :class="{on: fStage === s}"
+            @click="fStage = s; list.load(1)" x-text="s || '全部'"></span>
+        </template>
+      </div>
+      <input x-model="fNo" @keydown.enter="search()" placeholder="项目号" style="width:130px">
+      <input x-model="fName" @keydown.enter="search()" placeholder="项目名称" style="width:160px">
+      <button class="b-ghost b-sm" @click="search()">查询</button>
+      <button class="b-pri b-sm" @click="openCreate()">+ 新建项目</button>
+      <button class="b-ghost b-sm" @click="openImport()">批量导入</button>
+    </div>
+  </div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr><th>项目号</th><th>项目名称</th><th>阶段</th><th class="mono">SOP 时间</th><th class="mono">EOP 时间</th><th>责任销售</th><th>车型</th><th class="mono">份额</th><th class="right">操作</th></tr>
+      <template x-if="!list.items.length">
+        <tr><td colspan="9" class="empty"
+          x-text="(fNo || fName || fStage) ? '无符合条件的项目' : '暂无项目 —— 点「新建项目」创建'"></td></tr>
+      </template>
+      <template x-for="d in list.items" :key="d.project_no">
+        <tr class="data">
+          <td><button class="b-link mono" @click="viewProject(d)" x-text="d.project_no"></button></td>
+          <td style="max-width:240px"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="dash(d.project_name)"></div></td>
+          <td><span class="st" :class="'st-' + stageHue(d.stage)" x-text="d.stage"></span></td>
+          <td class="mono" x-text="dash(d.sop_date)"></td>
+          <td class="mono" x-text="dash(d.eop_date)"></td>
+          <td x-text="dash(d.owner)"></td>
+          <td x-text="dash(d.veh_model)"></td>
+          <td class="mono" x-text="sharePct(d.share)"></td>
+          <td class="right rowact" style="white-space:nowrap">
+            <button class="b-pri b-sm" x-show="d.stage === '进行中'" @click="openAdvance(d, 'SOP')">推进至 SOP</button>
+            <button class="b-pri b-sm" x-show="d.stage === 'SOP'" @click="openAdvance(d, 'EOP')">推进至 EOP</button>
+            <button class="b-ghost b-sm" @click="openEdit(d)">编辑</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:10px 16px">
+    <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+    <div class="right tagline" style="gap:8px">
+      <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+      <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+      <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- 详情模态：点项目号 → md_project.get 全量 6 字段 -->
+<div class="modal-mask" x-show="modalX.open" @click.self="closeModal()"
+     @keydown.escape.window="closeModal()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div>
+        <div class="docno" x-text="modalX.d ? '项目详情 · ' + modalX.d.project_no : '项目详情'"></div>
+        <div class="sub">项目生命周期台账 · PROJECT LEDGER</div>
+      </div>
+      <template x-if="modalX.d">
+        <span class="st" :class="'st-' + stageHue(modalX.d.stage)" x-text="modalX.d.stage"></span>
+      </template>
+      <button class="x" @click="closeModal()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <template x-if="modalX.loading">
+        <div class="loadbox"><span class="spin">◌</span><br>载入项目明细…</div>
+      </template>
+      <template x-if="!modalX.loading && modalX.d">
+        <div>
+          <div class="sec">基本信息</div>
+          <div class="kv">
+            <div><div class="k">项目号</div><div class="v mono" x-text="dash(modalX.d.project_no)"></div>
+              <div class="muted" style="font-size:11px;margin-top:4px">全局唯一主键 · 创建后不可变更</div></div>
+            <div><div class="k">项目名称</div><div class="v" x-text="dash(modalX.d.project_name)"></div></div>
+            <div><div class="k">阶段</div><div class="v"><span class="st" :class="'st-' + stageHue(modalX.d.stage)" x-text="dash(modalX.d.stage)"></span></div></div>
+            <div><div class="k">车型</div><div class="v" x-text="dash(modalX.d.veh_model)"></div>
+              <div class="muted" style="font-size:11px;margin-top:4px">项目对应的整车车型</div></div>
+            <div><div class="k">份额</div><div class="v mono" x-text="sharePct(modalX.d.share)"></div>
+              <div class="muted" style="font-size:11px;margin-top:4px">我公司供应份额</div></div>
+          </div>
+          <div class="sec">生命周期</div>
+          <div class="kv">
+            <div><div class="k">SOP 时间</div><div class="v mono" x-text="dash(modalX.d.sop_date)"></div></div>
+            <div><div class="k">EOP 时间</div><div class="v mono" x-text="dash(modalX.d.eop_date)"></div>
+              <div class="muted" style="font-size:11px;margin-top:4px">须晚于 SOP 时间</div></div>
+          </div>
+          <div class="sec">责任人</div>
+          <div class="kv">
+            <div><div class="k">责任销售</div><div class="v mono" x-text="dash(modalX.d.owner)"></div>
+              <div class="muted" style="font-size:11px;margin-top:4px">责任销售姓名/工号 · 纯文本字段</div></div>
+          </div>
+          <details class="raw"><summary>原始数据</summary>
+            <pre class="json" x-text="JSON.stringify(modalX.d, null, 2)"></pre></details>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft" x-show="modalX.d">
+      <template x-if="modalX.d">
+        <div class="tagline" style="gap:8px">
+          <button class="b-pri" x-show="modalX.d.stage === '进行中'" @click="advanceFromDetail('SOP')">推进至 SOP</button>
+          <button class="b-pri" x-show="modalX.d.stage === 'SOP'" @click="advanceFromDetail('EOP')">推进至 EOP</button>
+          <span class="muted" x-show="modalX.d.stage === 'EOP'">EOP 终态 · 阶段不可推进</span>
+          <button class="b-ghost" @click="editFromDetail()">编辑</button>
+          <button class="b-ghost right" @click="closeModal()">关闭</button>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<!-- 创建 / 编辑 / 阶段推进 共用表单模态 -->
+<div class="modal-mask" x-show="form.open" @click.self="closeForm()"
+     @keydown.escape.window="closeForm()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div>
+        <div class="docno" x-text="formTitle()"></div>
+        <div class="sub">阶段单向流转 · 进行中 → SOP → EOP · 回退/跳级由后端拦截</div>
+      </div>
+      <button class="x" @click="closeForm()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="frow">
+        <div>
+          <label class="f">项目号 <span class="req" x-show="form.mode === 'create'">*</span></label>
+          <input x-model="form.project_no" :disabled="form.mode !== 'create'" maxlength="50" placeholder="如 PRJ-001">
+          <div class="muted" style="font-size:11px;margin-top:4px" x-show="form.mode !== 'create'">主键 · 创建后不可变更</div>
+        </div>
+        <div>
+          <label class="f">项目名称 <span class="req">*</span></label>
+          <input x-model="form.project_name" maxlength="100" placeholder="项目名称">
+        </div>
+      </div>
+      <div class="frow">
+        <div>
+          <label class="f">责任销售 <span class="req">*</span></label>
+          <input x-model="form.owner" maxlength="50" placeholder="责任销售姓名/工号">
+        </div>
+        <div>
+          <label class="f">阶段</label>
+          <select x-model="form.stage" x-show="form.mode === 'edit'">
+            <template x-for="s in editStageOptions()" :key="s">
+              <option :value="s" x-text="s"></option>
+            </template>
+          </select>
+          <input x-model="form.stage" :disabled="true" x-show="form.mode !== 'edit'">
+        </div>
+        <div style="display:flex; align-items:flex-end">
+          <button class="b-ghost b-sm" @click="form.more = !form.more"
+            x-text="form.more ? '收起字段 ▴' : '更多字段 ▾'"></button>
+        </div>
+      </div>
+      <div class="collapse" :class="{open: form.more}">
+        <div class="frow" style="padding-top:10px">
+          <div>
+            <label class="f">SOP 时间 <span class="req" x-show="form.mode === 'advance' && form.advanceTo === 'SOP'">*</span></label>
+            <input type="date" x-model="form.sop_date">
+          </div>
+          <div>
+            <label class="f">EOP 时间 <span class="req" x-show="form.mode === 'advance' && form.advanceTo === 'EOP'">*</span></label>
+            <input type="date" x-model="form.eop_date">
+            <div class="muted" style="font-size:11px;margin-top:4px">须晚于 SOP 时间</div>
+          </div>
+          <div>
+            <label class="f">车型</label>
+            <input x-model="form.veh_model" maxlength="100" placeholder="如 车型A / 多车型用逗号分隔">
+            <div class="muted" style="font-size:11px;margin-top:4px">项目对应的整车车型</div>
+          </div>
+          <div>
+            <label class="f">份额</label>
+            <input type="number" min="0" max="1" step="0.01" x-model="form.share" placeholder="0~1，如 0.3">
+            <div class="muted" style="font-size:11px;margin-top:4px">我公司供应份额（0~1 小数，如 0.3=30%）</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-ft">
+      <div class="tagline" style="gap:8px">
+        <span class="muted"
+          x-text="form.mode === 'advance' ? ('推进至 ' + form.advanceTo + ' 需填写对应日期') : '项目号 / 项目名称 / 责任销售为必填'"></span>
+        <div class="right tagline" style="gap:8px">
+          <button class="b-ghost" @click="closeForm()">取消</button>
+          <button class="b-pri" :disabled="form.busy" @click="save()"
+            x-text="form.busy ? '处理中…' : (form.mode === 'create' ? '创建' : (form.mode === 'advance' ? '确认推进' : '保存修改'))"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 批量导入模态 -->
+<div class="modal-mask" x-show="importForm.open" @click.self="closeImport()"
+     @keydown.escape.window="closeImport()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div>
+        <div class="docno">批量导入项目台账</div>
+        <div class="sub">CSV · 逐行校验 + upsert · IMPORT</div>
+      </div>
+      <button class="x" @click="closeImport()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="tagline" style="gap:8px; margin-bottom:10px">
+        <a class="b-ghost b-sm" :href="importTemplateHref()" download="md_project_template.csv">下载模板</a>
+        <span class="muted" style="font-size:12px">表头：project_no, project_name, stage, sop_date, eop_date, owner</span>
+      </div>
+      <div class="frow">
+        <div>
+          <label class="f">选择 CSV 文件</label>
+          <input type="file" accept=".csv,.txt,.tsv" @change="onImportFile($event)">
+          <div class="muted" style="font-size:11px;margin-top:4px" x-show="importForm.fileName"
+            x-text="'已读取：' + importForm.fileName"></div>
+        </div>
+      </div>
+      <div class="frow" style="padding-top:6px">
+        <div>
+          <label class="f">或直接粘贴 CSV</label>
+          <textarea x-model="importForm.text" rows="6" placeholder="project_no,project_name,stage,sop_date,eop_date,owner&#10;PRJ-2,项目2,进行中,,,"></textarea>
+        </div>
+      </div>
+      <template x-if="importForm.result">
+        <div class="mt12">
+          <div class="sec">导入结果</div>
+          <div class="kv">
+            <div><div class="k">总行数</div><div class="v" x-text="importForm.result.total"></div></div>
+            <div><div class="k">成功</div><div class="v" x-text="importForm.result.success"></div></div>
+            <div><div class="k">失败</div><div class="v" x-text="importForm.result.fail"></div></div>
+            <div><div class="k">新增 / 更新</div><div class="v" x-text="importForm.result.created + ' / ' + importForm.result.updated"></div></div>
+          </div>
+          <template x-if="(importForm.result.errors || []).length">
+            <div class="scroll-x mt12">
+              <table class="tbl tight">
+                <tr><th>行号</th><th>错误信息</th></tr>
+                <template x-for="e in importForm.result.errors" :key="e.row">
+                  <tr class="data"><td class="mono" x-text="e.row"></td><td x-text="e.message"></td></tr>
+                </template>
+              </table>
+            </div>
+          </template>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft">
+      <div class="tagline" style="gap:8px">
+        <span class="muted">已存在项目号将更新 · 新项目号新增</span>
+        <div class="right tagline" style="gap:8px">
+          <button class="b-ghost" @click="closeImport()">关闭</button>
+          <button class="b-pri" :disabled="importForm.busy" @click="submitImport()"
+            x-text="importForm.busy ? '导入中…' : '导入'"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

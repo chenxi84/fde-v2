@@ -3,6 +3,9 @@
 *.db-shm
 *.db-wal
 
+# 应用运行时上传/产出文件（resource/import-file、resource/export-file）
+resource/
+
 # 本地配置文件
 config/.env
 config/mock.env

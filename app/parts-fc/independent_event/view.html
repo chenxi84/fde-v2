@@ -1,0 +1,475 @@
+<div>
+  <!-- 新建表单区域：两个折叠卡片 -->
+  <!-- Single Event Form -->
+  <div class="collapse" :class="{open: formSingle.show}">
+    <div class="card mb0">
+      <div class="hd">
+        <h3>新建独立事件</h3>
+        <span class="hint">水位脉冲 / 断点旧件截断 / 断点新件启动 / 其他</span>
+        <button class="b-ghost b-sm right" @click="formSingle.show = false; resetSingle()">收起</button>
+      </div>
+      <div class="bd">
+        <div class="frow">
+          <div><label class="f">事件类型 <span class="req">*</span></label>
+            <select x-model="formSingle.event_type">
+              <option value="">— 选择类型 —</option>
+              <option>水位脉冲</option><option>断点旧件截断</option><option>断点新件启动</option><option>其他</option>
+            </select></div>
+          <div><label class="f">零件号 <span class="req">*</span></label>
+            <div style="position:relative; flex:1">
+              <input x-model="formSingle.part_no"
+                     @click.stop="toggleAuto('fs_part_no','part_no')"
+                     @input="autoShow = 'fs_part_no'; filterAuto('part_no', formSingle.part_no)"
+                     placeholder="搜索零件号或名称..."
+                     autocomplete="off"
+                     style="width:100%">
+              <div class="auto-drop" x-show="autoShow==='fs_part_no'" @click.away="autoShow=''"
+                   style="position:absolute; top:100%; left:0; right:0; max-height:240px; overflow-y:auto;
+                          background:#fff; border:1px solid #ccc; border-radius:4px; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,.1)">
+                <div x-show="!autoFiltered.length" style="padding:8px; color:#999">无匹配结果</div>
+                <template x-for="item in autoFiltered" :key="item['part_no']">
+                  <div @mousedown.prevent="selectAuto(item, formSingle, 'part_no')"
+                       style="padding:6px 12px; cursor:pointer; border-bottom:1px solid #f0f0f0"
+                       @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+                    <div style="font-weight:500" x-text="item['part_no']"></div>
+                    <div style="font-size:12px; color:#888" x-text="autoDisplay[item['part_no']] || '—'"></div>
+                  </div>
+                </template>
+              </div>
+            </div></div>
+          <div><label class="f">归属期间 <span class="req">*</span></label>
+            <div style="position:relative; flex:1">
+              <input x-model="formSingle.period"
+                     @click.stop="toggleAuto('s_period','version_code')"
+                     @input="autoShow='s_period'; filterAuto('version_code', formSingle.period)"
+                     placeholder="搜索版本号或期间..."
+                     autocomplete="off" style="width:100%">
+              <div class="auto-drop" x-show="autoShow==='s_period'" @click.away="autoShow=''"
+                   style="position:absolute; top:100%; left:0; right:0; max-height:200px; overflow-y:auto;
+                          background:#fff; border:1px solid #ccc; border-radius:4px; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,.1)">
+                <div x-show="!autoFiltered.length" style="padding:8px; color:#999">无匹配版本</div>
+                <template x-for="item in autoFiltered" :key="item['version_code']">
+                  <div @mousedown.prevent="selectAuto(item, formSingle, 'period', 'period')"
+                       style="padding:6px 12px; cursor:pointer; border-bottom:1px solid #f0f0f0"
+                       @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+                    <div style="font-weight:500" x-text="item['version_code']"></div>
+                    <div style="font-size:12px; color:#888" x-text="item['period']"></div>
+                  </div>
+                </template>
+              </div>
+            </div></div>
+          <div><label class="f">事件量 <span class="req">*</span></label>
+            <input x-model="formSingle.event_qty" placeholder="数量"></div>
+          <div><label class="f">来源依据 <span class="req">*</span></label>
+            <select x-model="formSingle.source_basis">
+              <option value="">— 选择来源 —</option>
+              <option>阶跃检测</option><option>发运结算倒推</option><option>设变通知</option><option>人工登记说明</option>
+            </select></div>
+          <div><label class="f">OEM编码 <span class="req">*</span></label>
+            <div style="position:relative; flex:1">
+              <input x-model="formSingle.oem_code"
+                     @click.stop="toggleAuto('fs_oem_code','customer_code')"
+                     @input="autoShow = 'fs_oem_code'; filterAuto('customer_code', formSingle.oem_code)"
+                     placeholder="搜索OEM编码或名称..."
+                     autocomplete="off"
+                     style="width:100%">
+              <div class="auto-drop" x-show="autoShow==='fs_oem_code'" @click.away="autoShow=''"
+                   style="position:absolute; top:100%; left:0; right:0; max-height:240px; overflow-y:auto;
+                          background:#fff; border:1px solid #ccc; border-radius:4px; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,.1)">
+                <div x-show="!autoFiltered.length" style="padding:8px; color:#999">无匹配结果</div>
+                <template x-for="item in autoFiltered" :key="item['customer_code']">
+                  <div @mousedown.prevent="selectAuto(item, formSingle, 'oem_code', 'customer_code')"
+                       style="padding:6px 12px; cursor:pointer; border-bottom:1px solid #f0f0f0"
+                       @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+                    <div style="font-weight:500" x-text="item['customer_code']"></div>
+                    <div style="font-size:12px; color:#888" x-text="autoDisplay[item['customer_code']] || '—'"></div>
+                  </div>
+                </template>
+              </div>
+            </div></div>
+          <div><label class="f">车型 <span class="req">*</span></label>
+            <div style="position:relative; flex:1">
+              <input x-model="formSingle.veh_model"
+                     @click.stop="toggleAuto('fs_veh_model','vehicle_code')"
+                     @input="autoShow = 'fs_veh_model'; filterAuto('vehicle_code', formSingle.veh_model)"
+                     placeholder="搜索车型代码或名称..."
+                     autocomplete="off"
+                     style="width:100%">
+              <div class="auto-drop" x-show="autoShow==='fs_veh_model'" @click.away="autoShow=''"
+                   style="position:absolute; top:100%; left:0; right:0; max-height:240px; overflow-y:auto;
+                          background:#fff; border:1px solid #ccc; border-radius:4px; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,.1)">
+                <div x-show="!autoFiltered.length" style="padding:8px; color:#999">无匹配结果</div>
+                <template x-for="item in autoFiltered" :key="item['vehicle_code']">
+                  <div @mousedown.prevent="selectAuto(item, formSingle, 'veh_model', 'vehicle_code')"
+                       style="padding:6px 12px; cursor:pointer; border-bottom:1px solid #f0f0f0"
+                       @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+                    <div style="font-weight:500" x-text="item['vehicle_code']"></div>
+                    <div style="font-size:12px; color:#888" x-text="autoDisplay[item['vehicle_code']] || '—'"></div>
+                  </div>
+                </template>
+              </div>
+            </div></div>
+          <div><label class="f">来源引用（可选）</label>
+            <input x-model="formSingle.source_ref" placeholder="设变编号 / 工单"></div>
+          <div x-show="formSingle.event_type && (formSingle.event_type.includes('断点') || formSingle.event_type === '断点旧件截断' || formSingle.event_type === '断点新件启动')">
+            <label class="f">断点批次</label>
+            <input x-model="formSingle.bp_batch" placeholder="批次"></div>
+          <div x-show="formSingle.event_type && (formSingle.event_type.includes('断点') || formSingle.event_type === '断点旧件截断' || formSingle.event_type === '断点新件启动')">
+            <label class="f">断点日期</label>
+            <input x-model="formSingle.bp_date" placeholder="如 2025-07-01"></div>
+        </div>
+        <div class="mt12 tagline">
+          <button class="b-pri right" :disabled="formSingle.busy" @click="saveSingle()"
+            x-text="formSingle.busy ? '处理中…' : '创建事件'"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BP Pair Form -->
+  <div class="collapse" :class="{open: formBp.show}">
+    <div class="card mb0" style="margin-top:12px">
+      <div class="hd">
+        <h3>新建断点配对事件</h3>
+        <span class="hint">旧件截断 + 新件启动 · 来源自动锁定"设变通知"</span>
+        <button class="b-ghost b-sm right" @click="formBp.show = false; resetBp()">收起</button>
+      </div>
+      <div class="bd">
+        <div class="frow">
+          <div><label class="f">旧件号 <span class="req">*</span></label>
+            <div style="position:relative; flex:1">
+              <input x-model="formBp.old_part_no"
+                     @click.stop="toggleAuto('bp_old_part_no','part_no')"
+                     @input="autoShow = 'bp_old_part_no'; filterAuto('part_no', formBp.old_part_no)"
+                     placeholder="搜索零件号或名称..."
+                     autocomplete="off"
+                     style="width:100%">
+              <div class="auto-drop" x-show="autoShow==='bp_old_part_no'" @click.away="autoShow=''"
+                   style="position:absolute; top:100%; left:0; right:0; max-height:240px; overflow-y:auto;
+                          background:#fff; border:1px solid #ccc; border-radius:4px; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,.1)">
+                <div x-show="!autoFiltered.length" style="padding:8px; color:#999">无匹配结果</div>
+                <template x-for="item in autoFiltered" :key="item['part_no']">
+                  <div @mousedown.prevent="selectAuto(item, formBp, 'old_part_no')"
+                       style="padding:6px 12px; cursor:pointer; border-bottom:1px solid #f0f0f0"
+                       @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+                    <div style="font-weight:500" x-text="item['part_no']"></div>
+                    <div style="font-size:12px; color:#888" x-text="autoDisplay[item['part_no']] || '—'"></div>
+                  </div>
+                </template>
+              </div>
+            </div></div>
+          <div><label class="f">新件号 <span class="req">*</span></label>
+            <div style="position:relative; flex:1">
+              <input x-model="formBp.new_part_no"
+                     @click.stop="toggleAuto('bp_new_part_no','part_no')"
+                     @input="autoShow = 'bp_new_part_no'; filterAuto('part_no', formBp.new_part_no)"
+                     placeholder="搜索零件号或名称..."
+                     autocomplete="off"
+                     style="width:100%">
+              <div class="auto-drop" x-show="autoShow==='bp_new_part_no'" @click.away="autoShow=''"
+                   style="position:absolute; top:100%; left:0; right:0; max-height:240px; overflow-y:auto;
+                          background:#fff; border:1px solid #ccc; border-radius:4px; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,.1)">
+                <div x-show="!autoFiltered.length" style="padding:8px; color:#999">无匹配结果</div>
+                <template x-for="item in autoFiltered" :key="item['part_no']">
+                  <div @mousedown.prevent="selectAuto(item, formBp, 'new_part_no')"
+                       style="padding:6px 12px; cursor:pointer; border-bottom:1px solid #f0f0f0"
+                       @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+                    <div style="font-weight:500" x-text="item['part_no']"></div>
+                    <div style="font-size:12px; color:#888" x-text="autoDisplay[item['part_no']] || '—'"></div>
+                  </div>
+                </template>
+              </div>
+            </div></div>
+          <div><label class="f">断点日期 <span class="req">*</span></label>
+            <input x-model="formBp.bp_date" placeholder="如 2025-07-01"></div>
+          <div><label class="f">旧件量 <span class="req">*</span></label>
+            <input x-model="formBp.old_qty" placeholder="截断前数量"></div>
+          <div><label class="f">新件量 <span class="req">*</span></label>
+            <input x-model="formBp.new_qty" placeholder="启动后数量"></div>
+          <div><label class="f">OEM编码 <span class="req">*</span></label>
+            <div style="position:relative; flex:1">
+              <input x-model="formBp.oem_code"
+                     @click.stop="toggleAuto('bp_oem_code','customer_code')"
+                     @input="autoShow = 'bp_oem_code'; filterAuto('customer_code', formBp.oem_code)"
+                     placeholder="搜索OEM编码或名称..."
+                     autocomplete="off"
+                     style="width:100%">
+              <div class="auto-drop" x-show="autoShow==='bp_oem_code'" @click.away="autoShow=''"
+                   style="position:absolute; top:100%; left:0; right:0; max-height:240px; overflow-y:auto;
+                          background:#fff; border:1px solid #ccc; border-radius:4px; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,.1)">
+                <div x-show="!autoFiltered.length" style="padding:8px; color:#999">无匹配结果</div>
+                <template x-for="item in autoFiltered" :key="item['customer_code']">
+                  <div @mousedown.prevent="selectAuto(item, formBp, 'oem_code', 'customer_code')"
+                       style="padding:6px 12px; cursor:pointer; border-bottom:1px solid #f0f0f0"
+                       @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+                    <div style="font-weight:500" x-text="item['customer_code']"></div>
+                    <div style="font-size:12px; color:#888" x-text="autoDisplay[item['customer_code']] || '—'"></div>
+                  </div>
+                </template>
+              </div>
+            </div></div>
+          <div><label class="f">车型 <span class="req">*</span></label>
+            <div style="position:relative; flex:1">
+              <input x-model="formBp.veh_model"
+                     @click.stop="toggleAuto('bp_veh_model','vehicle_code')"
+                     @input="autoShow = 'bp_veh_model'; filterAuto('vehicle_code', formBp.veh_model)"
+                     placeholder="搜索车型代码或名称..."
+                     autocomplete="off"
+                     style="width:100%">
+              <div class="auto-drop" x-show="autoShow==='bp_veh_model'" @click.away="autoShow=''"
+                   style="position:absolute; top:100%; left:0; right:0; max-height:240px; overflow-y:auto;
+                          background:#fff; border:1px solid #ccc; border-radius:4px; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,.1)">
+                <div x-show="!autoFiltered.length" style="padding:8px; color:#999">无匹配结果</div>
+                <template x-for="item in autoFiltered" :key="item['vehicle_code']">
+                  <div @mousedown.prevent="selectAuto(item, formBp, 'veh_model', 'vehicle_code')"
+                       style="padding:6px 12px; cursor:pointer; border-bottom:1px solid #f0f0f0"
+                       @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+                    <div style="font-weight:500" x-text="item['vehicle_code']"></div>
+                    <div style="font-size:12px; color:#888" x-text="autoDisplay[item['vehicle_code']] || '—'"></div>
+                  </div>
+                </template>
+              </div>
+            </div></div>
+          <div><label class="f">归属期间 <span class="req">*</span></label>
+            <div style="position:relative; flex:1">
+              <input x-model="formBp.period"
+                     @click.stop="toggleAuto('bp_period','version_code')"
+                     @input="autoShow='bp_period'; filterAuto('version_code', formBp.period)"
+                     placeholder="搜索版本号或期间..."
+                     autocomplete="off" style="width:100%">
+              <div class="auto-drop" x-show="autoShow==='bp_period'" @click.away="autoShow=''"
+                   style="position:absolute; top:100%; left:0; right:0; max-height:200px; overflow-y:auto;
+                          background:#fff; border:1px solid #ccc; border-radius:4px; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,.1)">
+                <div x-show="!autoFiltered.length" style="padding:8px; color:#999">无匹配版本</div>
+                <template x-for="item in autoFiltered" :key="item['version_code']">
+                  <div @mousedown.prevent="selectAuto(item, formBp, 'period', 'period')"
+                       style="padding:6px 12px; cursor:pointer; border-bottom:1px solid #f0f0f0"
+                       @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+                    <div style="font-weight:500" x-text="item['version_code']"></div>
+                    <div style="font-size:12px; color:#888" x-text="item['period']"></div>
+                  </div>
+                </template>
+              </div>
+            </div></div>
+          <div><label class="f">来源依据</label>
+            <input x-model="formBp.source_basis" disabled value="设变通知"></div>
+          <div><label class="f">来源引用（可选）</label>
+            <input x-model="formBp.source_ref" placeholder="设变编号"></div>
+        </div>
+        <div class="mt12 tagline">
+          <button class="b-pri right" :disabled="formBp.busy" @click="saveBp()"
+            x-text="formBp.busy ? '处理中…' : '创建断点配对'"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 列表 -->
+  <div class="card" :class="(formSingle.show || formBp.show) ? 'mt12' : ''"><div class="bd" style="padding:0">
+    <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+      <b>独立事件台账</b>
+      <div class="tagline" style="gap:6px">
+        <button class="b-pri b-sm" @click="resetSingle(); formSingle.show = !formSingle.show; formBp.show = false">＋ 新建事件</button>
+        <button class="b-pri b-sm" @click="resetBp(); formBp.show = !formBp.show; formSingle.show = false">＋ 断点配对</button>
+      </div>
+      <div class="right tagline" style="gap:8px; flex-wrap:wrap">
+        <div class="chips">
+          <template x-for="s in ['', '待确认', '生效', '持续中', '已回落', '已关闭', '已取消']" :key="s || '全部状态'">
+            <span class="fchip" :class="{on: fStatus === s}"
+              @click="fStatus = s; list.load(1)" x-text="s || '全部状态'"></span>
+          </template>
+        </div>
+        <select x-model="fEventType" @change="search()" style="width:140px">
+          <option value="">全部类型</option>
+          <option value="水位脉冲">水位脉冲</option>
+          <option value="断点旧件截断">断点旧件截断</option>
+          <option value="断点新件启动">断点新件启动</option>
+          <option value="其他">其他</option>
+        </select>
+        <input x-model="fPartNo" @keydown.enter="search()" placeholder="零件号" style="width:110px">
+        <input x-model="fPeriod" @keydown.enter="search()" placeholder="期间" style="width:90px">
+        <button class="b-ghost b-sm" @click="search()">查询</button>
+      </div>
+    </div>
+    <div class="scroll-x">
+      <table class="tbl tight">
+        <tr>
+          <th>事件编号</th><th>事件类型</th><th>零件号</th><th>OEM编码</th><th>车型</th><th>期间</th><th>事件量</th><th>来源依据</th><th>来源引用</th><th>断点批次</th><th>断点日期</th><th>状态</th><th>创建人</th><th>创建日期</th><th>关闭依据</th><th class="right">操作</th>
+        </tr>
+        <template x-if="!list.items.length"><tr><td colspan="16" class="empty">无匹配数据</td></tr></template>
+        <template x-for="d in list.items" :key="d.event_no">
+          <tr class="data">
+            <td><button class="b-link mono" @click="viewX(d)" x-text="d.event_no"></button></td>
+            <td><span class="st" :class="'st-' + hue(d.event_type)" x-text="eventTypeLabel(d.event_type)"></span></td>
+            <td class="mono" x-text="dash(d.part_no)"></td>
+            <td class="mono" x-text="dash(d.oem_code)"></td>
+            <td x-text="dash(d.veh_model)"></td>
+            <td class="mono" x-text="dash(d.period)"></td>
+            <td class="mono" x-text="fmt(d.event_qty)"></td>
+            <td x-text="dash(d.source_basis)"></td>
+            <td class="mono" x-text="dash(d.source_ref)"></td>
+            <td class="mono" x-text="dash(d.bp_batch)"></td>
+            <td class="mono" x-text="dash(d.bp_date)"></td>
+            <td><span class="st" :class="'st-' + hue(d.status)" x-text="statusLabel(d.status)"></span></td>
+            <td x-text="dash(d.creator)"></td>
+            <td class="mono" x-text="dash(d.create_date)"></td>
+            <td x-text="dash(d.close_basis)"></td>
+            <td class="right rowact" style="white-space:nowrap">
+              <button class="b-pri b-sm" x-show="d.status === '待确认'" @click="act(d, 'confirm')">确认</button>
+              <button class="b-pri b-sm" x-show="d.status === '生效' && d.event_type === '水位脉冲'" @click="act(d, 'mark_sustained')">标记持续</button>
+              <button class="b-pri b-sm" x-show="(d.status === '生效' || d.status === '持续中')" @click="act(d, 'mark_subsided')">标记回落</button>
+              <button class="b-ghost b-sm" x-show="(d.status === '已回落' || d.status === '生效' || d.status === '持续中')" @click="act(d, 'close')">关闭</button>
+              <button class="b-dng b-sm" x-show="d.status !== '已关闭' && d.status !== '已取消'" @click="act(d, 'cancel')">取消</button>
+              <button class="b-ghost b-sm" @click="viewX(d)">详情</button>
+            </td>
+          </tr>
+        </template>
+      </table>
+    </div>
+    <div class="tagline" style="padding:10px 16px">
+      <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+        <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+        <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+      </div>
+    </div>
+  </div></div>
+
+  <!-- 详情模态 -->
+  <div class="modal-mask" x-show="modalX.open" @click.self="closeX()"
+       @keydown.escape.window="closeX()" x-cloak>
+    <div class="modal">
+      <div class="modal-hd">
+        <div>
+          <div class="docno" x-text="modalX.d ? modalX.d.event_no : '事件详情'"></div>
+          <div class="sub">独立事件详情 · INDEPENDENT EVENT</div>
+        </div>
+        <template x-if="modalX.d">
+          <span class="st" :class="'st-' + hue(modalX.d.status)" x-text="statusLabel(modalX.d.status)"></span>
+        </template>
+        <button class="x" @click="closeX()">✕</button>
+      </div>
+      <div class="modal-bd">
+        <template x-if="modalX.loading">
+          <div class="loadbox"><span class="spin">◌</span><br>载入事件明细…</div>
+        </template>
+        <template x-if="!modalX.loading && modalX.d">
+          <div>
+            <!-- 基本信息 -->
+            <div class="sec">基本信息</div>
+            <div class="kv">
+              <div><div class="k">事件编号</div><div class="v mono" x-text="dash(modalX.d.event_no)"></div></div>
+              <div><div class="k">事件类型</div><div class="v"><span class="st" :class="'st-' + hue(modalX.d.event_type)" x-text="eventTypeLabel(modalX.d.event_type)"></span></div></div>
+              <div><div class="k">零件号</div><div class="v mono" x-text="dash(modalX.d.part_no)"></div></div>
+              <div><div class="k">OEM编码</div><div class="v mono" x-text="dash(modalX.d.oem_code)"></div></div>
+              <div><div class="k">车型</div><div class="v" x-text="dash(modalX.d.veh_model)"></div></div>
+              <div><div class="k">归属期间</div><div class="v mono" x-text="dash(modalX.d.period)"></div></div>
+            </div>
+
+            <!-- 事件量 -->
+            <div class="sec">事件量</div>
+            <div class="kv">
+              <div><div class="k">事件量</div><div class="v mono" x-text="fmt(modalX.d.event_qty)"></div></div>
+            </div>
+
+            <!-- 系统常量 -->
+            <div class="sec">系统常量</div>
+            <div class="kv">
+              <div><div class="k">计入需求</div><div class="v" x-text="modalX.d.in_demand === true || modalX.d.in_demand === 'true' || modalX.d.in_demand === 1 ? '是 ✓' : '否'"></div></div>
+              <div><div class="k">计入趋势</div><div class="v" x-text="modalX.d.in_trend === true || modalX.d.in_trend === 'true' || modalX.d.in_trend === 1 ? '是' : '否 ✗'"></div></div>
+            </div>
+
+            <!-- 来源信息 -->
+            <div class="sec">来源信息</div>
+            <div class="kv">
+              <div><div class="k">来源依据</div><div class="v" x-text="dash(modalX.d.source_basis)"></div></div>
+              <div><div class="k">来源引用</div><div class="v mono" x-text="dash(modalX.d.source_ref)"></div></div>
+            </div>
+
+            <!-- 断点信息（x-show for bp types） -->
+            <template x-if="isBpType(modalX.d.event_type)">
+              <div>
+                <div class="sec">断点信息</div>
+                <div class="kv">
+                  <div><div class="k">断点批次</div><div class="v mono" x-text="dash(modalX.d.bp_batch)"></div></div>
+                  <div><div class="k">断点日期</div><div class="v mono" x-text="dash(modalX.d.bp_date)"></div></div>
+                </div>
+              </div>
+            </template>
+
+            <!-- 登记信息 -->
+            <div class="sec">登记信息</div>
+            <div class="kv">
+              <div><div class="k">创建人</div><div class="v" x-text="dash(modalX.d.creator)"></div></div>
+              <div><div class="k">创建日期</div><div class="v mono" x-text="dash(modalX.d.create_date)"></div></div>
+            </div>
+
+            <!-- 关闭回落信息 -->
+            <div class="sec">关闭 / 回落信息</div>
+            <div class="kv">
+              <div><div class="k">关闭依据</div><div class="v" x-text="dash(modalX.d.close_basis)"></div></div>
+            </div>
+
+            <!-- 审计时间 -->
+            <div class="sec">审计时间</div>
+            <div class="kv">
+              <div><div class="k">创建时间</div><div class="v mono" x-text="fmtTime(modalX.d.create_date)"></div></div>
+            </div>
+
+            <details class="raw"><summary>原始数据</summary>
+              <pre class="json" x-text="JSON.stringify(modalX.d, null, 2)"></pre></details>
+          </div>
+        </template>
+      </div>
+      <div class="modal-ft" x-show="modalX.d">
+        <template x-if="modalX.d">
+          <div class="tagline" style="gap:8px">
+            <!-- 待确认: 确认, 取消 -->
+            <button class="b-pri" x-show="modalX.d.status === '待确认'" @click="act(modalX.d, 'confirm')">确认</button>
+            <button class="b-dng" x-show="modalX.d.status === '待确认'" @click="act(modalX.d, 'cancel')">取消</button>
+            <!-- 生效+水位脉冲: 标记持续中, 标记已回落, 关闭 -->
+            <button class="b-pri" x-show="modalX.d.status === '生效' && modalX.d.event_type === '水位脉冲'" @click="act(modalX.d, 'mark_sustained')">标记持续中</button>
+            <button class="b-pri" x-show="modalX.d.status === '生效'" @click="act(modalX.d, 'mark_subsided')">标记回落</button>
+            <button class="b-ghost" x-show="modalX.d.status === '生效'" @click="act(modalX.d, 'close')">关闭</button>
+            <button class="b-dng" x-show="modalX.d.status === '生效'" @click="act(modalX.d, 'cancel')">取消</button>
+            <!-- 持续中: 标记已回落 -->
+            <button class="b-pri" x-show="modalX.d.status === '持续中'" @click="act(modalX.d, 'mark_subsided')">标记回落</button>
+            <!-- 已回落: 关闭 -->
+            <button class="b-ghost" x-show="modalX.d.status === '已回落'" @click="act(modalX.d, 'close')">关闭</button>
+            <!-- 已关闭/已取消: readonly -->
+            <span class="muted" x-show="['已关闭', '已取消'].includes(modalX.d.status)"
+              x-text="'当前状态：' + statusLabel(modalX.d.status)"></span>
+            <button class="b-ghost right" @click="closeX()">关闭</button>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- 关闭/取消/回落弹窗（共用） -->
+  <div class="modal-mask" x-show="closeForm.open" @click.self="closeCloseForm()"
+       @keydown.escape.window="closeCloseForm()" x-cloak>
+    <div class="modal">
+      <div class="modal-hd">
+        <div>
+          <div class="docno" x-text="closeForm.actionLabel + ' · ' + closeForm.event_no"></div>
+          <div class="sub">填写依据 · BASIS REQUIRED</div>
+        </div>
+        <button class="x" @click="closeCloseForm()">✕</button>
+      </div>
+      <div class="modal-bd">
+        <label class="f" x-text="(closeForm.action === 'mark_subsided' ? '回落依据' : closeForm.action === 'close' ? '关闭依据' : '取消原因') + ' *'"></label>
+        <textarea x-model="closeForm.close_basis" rows="4"
+          :placeholder="closeForm.action === 'mark_subsided' ? '水位达标证明' : closeForm.action === 'close' ? '关闭依据' : '复盘结论：误判/误登记原因'"></textarea>
+      </div>
+      <div class="modal-ft">
+        <div class="right tagline" style="gap:8px">
+          <button class="b-ghost" @click="closeCloseForm()">取消</button>
+          <button class="b-dng" :disabled="closeForm.busy" @click="submitClose()"
+            x-text="closeForm.busy ? '处理中…' : '确认' + closeForm.actionLabel"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

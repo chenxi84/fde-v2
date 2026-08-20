@@ -33,7 +33,6 @@
     </template>
     <div class="foot">
       <div><span class="livedot"></span><b x-text="brand.foot"></b></div>
-      <div>平台 127.0.0.1 · 同源托管</div>
     </div>
   </aside>
 
@@ -48,6 +47,8 @@
           <span class="muted" x-text="me ? '· ' + me.role_label : ''"></span></span>
         <a href="/logout">退出</a>
       </div>
+      <button class="agent-toggle" :class="{ on: agentOpen }" @click="toggleAgent()"
+        title="打开/收起 Agent 右栏">✦ Agent</button>
     </header>
 
     <main>
@@ -58,6 +59,11 @@
       </template>
     </main>
   </div>
+
+  <!-- ── Agent 右栏（平台级跨应用；默认展开、header 按钮可收起，状态持久化）── -->
+  <aside class="agent-rail" x-show="agentOpen" x-cloak>
+    <div x-data="agentRail()" x-html="tpl"></div>
+  </aside>
 
   <!-- ── Toast ── -->
   <div class="toasts">

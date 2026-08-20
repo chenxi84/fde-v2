@@ -1,0 +1,108 @@
+<div class="card mt12"><div class="bd" style="padding:0">
+  <!-- ══ 过滤区：物料/客户/期间 + 查询/批量导入（无新建：数据源=导入/ERP） ══ -->
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>历史台账</b>
+    <span class="muted" style="font-size:12px">物料×客户×月度 干净需求 · 由 ERP 经导入/upsert 冗余回写</span>
+    <div class="right tagline" style="gap:8px; flex-wrap:wrap">
+      <input x-model="fMaterial" @keydown.enter="search()" placeholder="物料号" style="width:120px">
+      <input x-model="fCustomer" @keydown.enter="search()" placeholder="客户号" style="width:120px">
+      <input type="month" x-model="fPeriod" @change="search()" style="width:150px">
+      <button class="b-ghost b-sm" @click="search()">查询</button>
+      <button class="b-ghost b-sm" @click="resetFilters()">重置</button>
+      <button class="b-pri b-sm" @click="openImport()">批量导入</button>
+    </div>
+  </div>
+  <!-- ══ 表格 ══ -->
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr>
+        <th>期间</th><th>物料号</th><th>客户号</th><th class="right">数量（干净需求）</th><th class="right">原始预测</th>
+      </tr>
+      <template x-if="!list.items.length"><tr><td colspan="5" class="empty">暂无历史台账数据 —— 由 ERP 经 import_batch / upsert 冗余回写</td></tr></template>
+      <template x-for="d in list.items" :key="d.material_no + '|' + d.customer_no + '|' + d.period">
+        <tr class="data">
+          <td class="mono" x-text="d.period"></td>
+          <td>
+            <span class="mono" x-text="dash(d.material_no)"></span>
+            <template x-if="materialName(d.material_no)">
+              <div class="muted" style="font-size:11px" x-text="materialName(d.material_no)"></div>
+            </template>
+          </td>
+          <td>
+            <span class="mono" x-text="dash(d.customer_no)"></span>
+            <template x-if="customerName(d.customer_no)">
+              <div class="muted" style="font-size:11px" x-text="customerName(d.customer_no)"></div>
+            </template>
+          </td>
+          <td class="right mono" x-text="fmt(d.qty)"></td>
+          <td class="right mono" x-text="fmt(d.forecast_qty)"></td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <!-- ══ 分页条 ══ -->
+  <div class="tagline" style="padding:10px 16px">
+    <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+    <div class="right tagline" style="gap:8px">
+      <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+      <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+      <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- ══ 批量导入模态 ══ -->
+<div class="modal-mask" x-show="imp.open" @click.self="closeImport()"
+     @keydown.escape.window="closeImport()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div>
+        <div class="docno">批量导入历史台账</div>
+        <div class="sub">upsert 语义 · 列：material_no, customer_no, period, qty</div>
+      </div>
+      <button class="x" @click="closeImport()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="muted" style="font-size:12px;line-height:1.6">
+        每行一条：material_no,customer_no,period(YYYY-MM),qty。同 物料+客户+期间 覆盖更新。
+      </div>
+      <div class="tagline" style="gap:8px;margin-top:8px">
+        <button class="b-ghost b-sm" @click="downloadTemplate()">下载 CSV 模板</button>
+        <label class="b-ghost b-sm" style="cursor:pointer">选择文件
+          <input type="file" accept=".csv,.txt" style="display:none" @change="onImportFile($event)">
+        </label>
+      </div>
+      <textarea x-model="imp.text" rows="8" style="width:100%;font-family:monospace;font-size:12px;margin-top:8px"
+        placeholder="每行一条：M1,C001,2026-01,900"></textarea>
+      <template x-if="imp.result">
+        <div class="mt12">
+          <div class="tagline" style="gap:8px">
+            <span class="st st-green" x-text="'成功 ' + imp.result.success + ' 条'"></span>
+            <span class="st st-red" x-text="'失败 ' + imp.result.fail + ' 条'"></span>
+            <span class="muted" x-text="'共 ' + imp.result.total + ' 条'"></span>
+          </div>
+          <template x-if="imp.result.errors && imp.result.errors.length">
+            <div class="scroll-x mt8">
+              <table class="tbl tight">
+                <tr><th>行号</th><th>字段</th><th>错误信息</th></tr>
+                <template x-for="e in imp.result.errors" :key="e.row + '-' + e.field">
+                  <tr><td class="mono" x-text="e.row"></td><td class="mono" x-text="dash(e.field)"></td><td x-text="e.message"></td></tr>
+                </template>
+              </table>
+            </div>
+          </template>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft">
+      <div class="tagline" style="gap:8px">
+        <span class="muted">导入完成后刷新列表</span>
+        <div class="right tagline" style="gap:8px">
+          <button class="b-ghost" @click="closeImport()">关闭</button>
+          <button class="b-pri" :disabled="imp.busy" @click="runImport()"
+            x-text="imp.busy ? '导入中…' : '批量导入'"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

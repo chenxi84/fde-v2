@@ -79,6 +79,7 @@ const HUES = {
   待回调: "amber", 回调完成: "green",
   待审批: "amber", 已通过: "green", 已审批: "green", 处理中: "amber",
   已冻结: "red", 已核注: "teal",
+  冻结: "red", "发布（锁定）": "blue",
   有效: "green", 已过期: "red", 已核销: "teal", 已注销: "slate",
   待发: "amber", 成功: "green",
   // ── demo 组业务态（公共层演进 · 2026-08-02 第⑦步收尾补录）──
@@ -90,11 +91,21 @@ const HUES = {
   已完工: "green", 已取消: "slate", 待入库: "amber",
   预测转单: "blue", SO直接下单: "teal",
   审批驳回: "red", 部分交货: "blue",
+  // ── psc 组业务态（2026-08-14 第⑦步 md_part_replace 补录）──
+  生效: "green", 失效: "slate",
+  // ── psc 组业务态（库存策略品种分层 · 第⑦步补录）──
+  库存: "teal", 速度: "blue",
+  // ── psc 组业务态（需求池补库单 · 第⑦步补录）──
+  缺货补库: "red", 最低库存补库: "amber", 安全库存补库: "blue",
+  待下达: "slate", 已下达: "teal", 生产中: "amber",
   // 英文状态码（return_order 状态机按英文码原样展示；settlement_result 双值）
   draft: "slate", submitted: "blue", approved: "green",
   sap_processing: "amber", completed: "green", sap_failed: "red",
   rejected: "red", withdrawn: "red",
   COMPLETED: "green", SAP_REJECTED: "red",
+  // ── psc 组策略拟合业务态（第⑦步补录：三态状态机 + 预测方法四类）──
+  待复核: "amber", 已否决: "slate",
+  移动平均: "blue", 指数平滑: "teal", 阶跃检测: "amber", 借用参考: "slate",
 };
 export const hue = (status) => HUES[status] || "slate";
 export const liveStatus = new Set(["审批中", "执行中", "待重试", "申请中", "待回调"]);

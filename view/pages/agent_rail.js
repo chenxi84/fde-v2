@@ -1,0 +1,212 @@
+/* Agent 右栏（平台级跨应用，复用 /api/agent/* 端点）。
+   服务级授权由后端 AgentSession 保证：工具清单 = 当前用户被授权的服务，
+   执行时 fail-closed；本组件只是换个窄栏入口，不新增任何授权逻辑。 */
+import { get, post, del, toast } from "../lib/api.js";
+
+/* 工具名提取：兼容 live 扁平 {tool} 与存储历史 OpenAI 形 {function:{name}} */
+function toolNameOf(t) {
+  if (!t) return "";
+  if (typeof t === "string") return t;
+  return t.tool || (t.function && t.function.name) || t.name || "";
+}
+/* qualname 美化：demo__sales_order__create → sales_order.create（同后端 _tool_disp 口径） */
+function toolDisp(name) {
+  const parts = String(name).split("__");
+  return parts.length >= 3 ? parts.slice(-2).join(".") : name;
+}
+
+export function agentRail() {
+  const self = Alpine.reactive({
+    tpl: "",
+    sessions: [],
+    sid: "",          // 空 = 未选会话（发送时自动创建）
+    msgs: [],
+    input: "",
+    sending: false,
+    progress: "",     // 「执行中」阶段文案
+    uploading: false, // 附件上传中
+
+    async init() {
+      self.tpl = await fetch(new URL("agent_rail.html", import.meta.url)).then((r) => r.text());
+      await self.loadSessions();
+      // 默认选中最近一次历史会话（sessions 按 updated_at 降序，[0] 即最新）；无历史则保持新对话
+      if (!self.sid && self.sessions.length) self.sid = self.sessions[0].session_id;
+      await self.loadMsgs();
+      /* 其他页面（如流程总览）注入 prompt 并触发分析 */
+      window.addEventListener("fde:agent-prompt", (e) => {
+        const msg = e.detail && e.detail.message;
+        if (msg) { self.input = msg; self.send(); }
+      });
+    },
+
+    async loadSessions() {
+      self.sessions = (await get("/api/agent/sessions").catch(() => [])) || [];
+    },
+
+    async loadMsgs() {
+      if (!self.sid) { self.msgs = []; return; }
+      const r = await get(`/api/agent/sessions/${encodeURIComponent(self.sid)}/messages`,
+        { quiet: true }).catch(() => []);
+      self.msgs = self.toDisplayMsgs(r || []);
+      self.scrollEnd();
+    },
+
+    /* 存储历史（OpenAI 对话格式）→ 展示消息：过滤 system/tool；tool_calls 规整为服务名；
+       无正文的工具调用轮并入最近 reply 气泡（与整页 Agent 同形）。 */
+    toDisplayMsgs(raw) {
+      const out = [];
+      let pending = [];
+      const flushPending = () => {
+        if (pending.length) {
+          out.push({ role: "assistant", content: "", tool_calls: pending });
+          pending = [];
+        }
+      };
+      for (const m of raw || []) {
+        if (!m || m.role === "system" || m.role === "tool") continue;
+        if (m.role === "user") {
+          flushPending();
+          out.push({ role: "user", content: m.content || "" });
+          continue;
+        }
+        pending.push(...(m.tool_calls || []).map(toolNameOf).filter(Boolean).map(toolDisp));
+        if ((m.content || "").trim()) {
+          out.push({ role: "assistant", content: m.content, tool_calls: pending });
+          pending = [];
+        }
+      }
+      flushPending();
+      return out;
+    },
+
+    scrollEnd() {
+      setTimeout(() => {
+        const el = document.querySelector(".agent-rail .chatbox");
+        if (el) el.scrollTop = el.scrollHeight;
+      }, 30);
+    },
+
+    visible(m) { return m.role === "user" || m.role === "assistant"; },
+
+    async send() {
+      const m = self.input.trim();
+      if (!m || self.sending) return;
+      self.input = "";
+      self.sending = true;
+      self.progress = "思考中…";
+      try {
+        if (!self.sid) {
+          const s = await post("/api/agent/sessions", {});
+          self.sid = s.session_id;
+          await self.loadSessions();
+        }
+        self.msgs.push({ role: "user", content: m });
+        self.scrollEnd();
+        const sid = self.sid;
+        // 「执行中」进度轮询（阶段信号，不含工具返回数据）
+        const poller = setInterval(async () => {
+          try {
+            const pr = await fetch(`/api/agent/progress?session_id=${encodeURIComponent(sid)}`);
+            const pj = await pr.json();
+            const p = pj && pj.data;
+            if (!p) return;
+            if (p.phase === "tool" && p.tool) {
+              self.progress = `正在调用 ${toolDisp(p.tool)}` + (p.tools_done ? `（已完成 ${p.tools_done} 个）` : "");
+            } else if (p.phase === "llm") {
+              self.progress = `第 ${p.round || 1} 轮推理`;
+            }
+          } catch { /* 轮询失败不影响主流程 */ }
+        }, 1200);
+        const r = await post("/api/agent/chat", { message: m, session_id: sid });
+        clearInterval(poller);
+        const names = (r.tool_calls || []).map(toolNameOf).filter(Boolean).map(toolDisp);
+        self.msgs.push({
+          role: "assistant",
+          content: r.reply || "",
+          tool_calls: names.length ? names : undefined,
+        });
+        self.progress = "";
+        await self.loadSessions();
+      } catch { self.progress = ""; } finally {
+        self.sending = false;
+        self.scrollEnd();
+      }
+    },
+
+    async newSession() {
+      const r = await post("/api/agent/sessions", {});
+      self.sid = r.session_id;
+      self.msgs = [];
+      self.progress = "";
+      await self.loadSessions();
+    },
+
+    async onSessionChange() { await self.loadMsgs(); },
+
+    async delSession() {
+      if (!self.sid) return;
+      if (!confirm("删除当前会话及其全部历史？")) return;
+      await del(`/api/agent/sessions/${encodeURIComponent(self.sid)}`).catch(() => {});
+      self.sid = "";
+      self.msgs = [];
+      self.progress = "";
+      await self.loadSessions();
+    },
+
+    /* ---- 附件上传（跟随当前页应用 → resource/import-file/） ---- */
+
+    /* 从 window.__fdePage 解析目标应用 qualname（如 psc:sales_forecast → psc/sales_forecast）；
+       平台页 / 组级无对应应用页时返回 null */
+    resolveUploadApp() {
+      const page = window.__fdePage || "";
+      const idx = page.indexOf(":");
+      if (idx < 0) return null;
+      const grp = page.slice(0, idx);
+      const key = page.slice(idx + 1);
+      if (!grp || grp === "_platform" || !key) return null;
+      return `${grp}/${key}`;
+    },
+
+    /* 触发隐藏 file input */
+    attachFile() {
+      const el = document.getElementById("agent-rail-file");
+      if (el) el.click();
+    },
+
+    /* 文件选择 → 逐个上传到目标应用 resource/import-file/；成功后注入消息 + 预填解析导入提示 */
+    async onAttachChange(evt) {
+      const files = evt.target && evt.target.files;
+      if (!files || !files.length) return;
+      const target = self.resolveUploadApp();
+      if (!target) {
+        toast("当前页面无对应应用，请先进入某个应用页再上传附件", "warn");
+        evt.target.value = "";
+        return;
+      }
+      self.uploading = true;
+      const uploaded = [];
+      try {
+        for (const f of files) {
+          const fd = new FormData();
+          fd.append("files", f);
+          const r = await fetch(`/api/apps/${target}/files`, { method: "POST", body: fd });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok || j.status === "error") {
+            throw new Error(j.message || `上传失败（HTTP ${r.status}）`);
+          }
+          uploaded.push(f.name);
+        }
+        const names = uploaded.join("、");
+        self.msgs.push({ role: "assistant", content: `📎 已上传附件：${names} → ${target}/resource/import-file/` });
+        self.input = `请解析 ${names}（${target}/resource/import-file/）并导入客户预测，列为 material_no、customer_no、rolling_month、orig_qty（版本为当前草稿版本）`;
+        self.scrollEnd();
+      } catch (e) {
+        toast((e && e.message) || "上传失败", "err");
+      } finally {
+        self.uploading = false;
+        evt.target.value = "";
+      }
+    },
+  });
+  return self;
+}

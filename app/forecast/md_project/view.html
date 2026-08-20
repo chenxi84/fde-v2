@@ -1,0 +1,119 @@
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px;flex-wrap:wrap">
+    <b>项目台账</b>
+    <div class="right tagline" style="gap:8px">
+      <input x-model="filterProj" @keydown.enter="search()" placeholder="项目号…" style="width:100px">
+      <input x-model="filterOem" @keydown.enter="search()" placeholder="客户编码…" style="width:100px">
+      <input x-model="filterPlant" @keydown.enter="search()" placeholder="工厂编码…" style="width:100px">
+      <div class="chips">
+        <template x-for="s in ['', '待定点', '定点中', '进行中', 'EOP关闭']" :key="s || '全部'">
+          <span class="fchip" :class="{on: filterStage === s}" @click="filterStage = s; search()" x-text="s || '全部'"></span>
+        </template>
+      </div>
+      <button class="b-ghost b-sm" @click="search()">搜索</button>
+    </div>
+  </div>
+  <div style="padding:0 16px 8px"><button class="b-pri b-sm" @click="showCreate()">+ 新建项目</button></div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr><th>项目号</th><th>名称</th><th>阶段</th><th>客户/工厂</th><th>车型</th><th>SOP</th><th>EOP</th><th>责任人</th><th class="right">操作</th></tr>
+      <template x-if="!list.items.length"><tr><td colspan="9" class="empty">无匹配数据</td></tr></template>
+      <template x-for="d in list.items" :key="d.project_no">
+        <tr class="data">
+          <td><button class="b-link mono" @click="view(d)" x-text="d.project_no"></button></td>
+          <td x-text="d.project_name" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></td>
+          <td><span class="st" :class="'st-' + hue(d.stage)" x-text="d.stage"></span></td>
+          <td style="font-size:11px"><div x-text="d.oem_code"></div><div style="color:var(--muted)" x-text="d.plant_code"></div></td>
+          <td x-text="dash(d.veh_model)"></td>
+          <td x-text="dash(d.sop)"></td>
+          <td x-text="dash(d.eop)"></td>
+          <td x-text="dash(d.owner)"></td>
+          <td class="right rowact">
+            <button class="b-pri b-sm" @click="view(d)">详情</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:8px 16px" x-show="list.total > 0">
+    <span style="font-size:12px;color:var(--muted)">共 <span x-text="list.total"></span> 条</span>
+    <div class="right tagline" style="gap:4px">
+      <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">上一页</button>
+      <span style="font-size:12px" x-text="list.page + ' / ' + Math.ceil(list.total / list.size)"></span>
+      <button class="b-ghost b-sm" :disabled="list.page * list.size >= list.total" @click="list.load(list.page + 1)">下一页</button>
+    </div>
+  </div>
+</div></div>
+
+<div class="modal-mask" x-show="modal.open" @click.self="closeModal()">
+  <div class="modal" style="max-width:520px">
+    <template x-if="modal.loading"><div class="loadbox" style="padding:40px;text-align:center">加载中…</div></template>
+    <template x-if="!modal.loading && modal.d">
+      <div>
+        <div class="modal-hd" style="background:var(--ink);color:#fff">
+          <span><b x-text="modal.d.project_no"></b></span>
+          <span class="st" :class="'st-' + hue(modal.d.stage)" x-text="modal.d.stage" style="margin-left:8px"></span>
+          <button class="b-ghost" style="color:#fff" @click="closeModal()">✕</button>
+        </div>
+        <div class="modal-bd" style="padding:16px">
+          <div class="sec">基本信息</div>
+          <div class="kv"><label>项目号</label><span x-text="modal.d.project_no"></span></div>
+          <div class="kv"><label>项目名称</label><span x-text="modal.d.project_name"></span></div>
+          <div class="kv"><label>阶段</label><span class="st" :class="'st-' + hue(modal.d.stage)" x-text="modal.d.stage"></span></div>
+          <div class="sec">客户归属</div>
+          <div class="kv"><label>客户编码</label><span x-text="modal.d.oem_code"></span></div>
+          <div class="kv"><label>工厂编码</label><span x-text="modal.d.plant_code"></span></div>
+          <div class="sec">项目属性</div>
+          <div class="kv"><label>车型</label><span x-text="dash(modal.d.veh_model)"></span></div>
+          <div class="kv"><label>平台</label><span x-text="dash(modal.d.platform)"></span></div>
+          <div class="sec">生命周期</div>
+          <div class="kv"><label>SOP</label><span x-text="dash(modal.d.sop)"></span></div>
+          <div class="kv"><label>EOP</label><span x-text="dash(modal.d.eop)"></span></div>
+          <div class="kv"><label>责任人</label><span x-text="dash(modal.d.owner)"></span></div>
+          <details class="mt12"><summary style="font-size:12px;color:var(--muted);cursor:pointer">原始数据</summary>
+            <pre style="font-size:11px;max-height:200px;overflow:auto" x-text="JSON.stringify(modal.d, null, 2)"></pre>
+          </details>
+        </div>
+        <div class="modal-ft"><button class="b-pri" @click="showEdit()">编辑</button><button class="b-ghost" @click="closeModal()">关闭</button></div>
+      </div>
+    </template>
+  </div>  <!-- /.modal -->
+</div>
+
+<div class="modal-mask" x-show="form.open" @click.self="form.open = false">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-hd"><b x-text="form.mode === 'create' ? '新建项目' : '编辑项目'"></b><button class="b-ghost" @click="form.open = false">✕</button></div>
+    <div class="modal-bd" style="padding:16px">
+      <div class="kv"><label>项目号 ★</label><span><input x-model="form.project_no" :disabled="form.mode === 'edit'" style="width:100%"></span></div>
+      <div class="kv"><label>项目名称 ★</label><span><input x-model="form.project_name" style="width:100%"></span></div>
+      <div class="kv"><label>阶段 ★</label><span>
+        <select x-model="form.stage"><option value="待定点">待定点</option><option value="定点中">定点中</option><option value="进行中">进行中</option><option value="EOP关闭">EOP关闭</option></select>
+      </span></div>
+      <div class="kv"><label>客户 ★</label>
+        <span style="position:relative">
+          <input x-model="custQuery" @focus="custOpen = true" @click.stop="custOpen = true" @input="custOpen = true" placeholder="搜索客户…" style="width:100%">
+          <div class="autocomplete-drop" x-show="custOpen && custOptions.length" @click.away="custOpen = false" style="position:absolute;top:100%;left:0;right:0;background:var(--card);border:1px solid var(--line);max-height:200px;overflow:auto;z-index:100;border-radius:4px">
+            <template x-for="c in filteredCusts" :key="c.oem_code + c.plant_code">
+              <div @click="selectCust(c)" style="padding:6px 8px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--line-sub)">
+                <div x-text="c.oem_code + ' - ' + c.oem_name"></div>
+                <div style="font-size:11px;color:var(--muted)" x-text="c.plant_code + ' - ' + c.plant_name"></div>
+              </div>
+            </template>
+            <div x-show="!filteredCusts.length" style="padding:6px 8px;color:var(--muted);font-size:12px">暂无可选客户</div>
+          </div>
+        </span>
+      </div>
+      <div class="kv" x-show="form.oem_code"><label>已选</label><span style="font-size:13px" x-text="form.oem_code + ' / ' + form.plant_code"></span></div>
+      <details class="mt12"><summary style="font-size:12px;color:var(--muted);cursor:pointer">更多字段 ▾</summary>
+        <div class="mt8" style="display:flex;flex-direction:column;gap:8px">
+          <div class="kv"><label>车型</label><span><input x-model="form.veh_model" style="width:100%"></span></div>
+          <div class="kv"><label>平台</label><span><input x-model="form.platform" style="width:100%"></span></div>
+          <div class="kv"><label>SOP</label><span><input type="date" x-model="form.sop" style="width:100%"></span></div>
+          <div class="kv"><label>EOP</label><span><input type="date" x-model="form.eop" style="width:100%"></span></div>
+          <div class="kv"><label>责任人</label><span><input x-model="form.owner" style="width:100%"></span></div>
+        </div>
+      </details>
+    </div>
+    <div class="modal-ft"><button class="b-pri" @click="save()">保存</button><button class="b-ghost" @click="form.open = false">取消</button></div>
+  </div>  <!-- /.modal -->
+</div>

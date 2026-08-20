@@ -97,6 +97,13 @@ CREATE TABLE IF NOT EXISTS role_page_grants (
     granted_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
     PRIMARY KEY (role_name, page_id)
 );
+CREATE TABLE IF NOT EXISTS user_prefs (
+    user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    pref_key  TEXT NOT NULL,               -- 如 cols:psc:md_customer（列表自定义显示列）
+    pref_value TEXT NOT NULL,              -- JSON 串
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    PRIMARY KEY (user_id, pref_key)
+);
 """
 
 # users 行统一投影：LEFT JOIN roles 带出 is_admin / role_label（角色被删等异常时兜底）
@@ -480,6 +487,40 @@ def is_page_granted(user_id: int, page_id: str) -> bool:
 
 
 # ── 会话感知的可见性（web 渲染过滤用）────────────────────
+
+
+# ── 用户偏好（per-user 持久化，如列表自定义显示列）─────────
+
+
+def get_pref(user_id: int, pref_key: str, default=None):
+    """读某用户偏好（JSON 解包）；不存在返回 default。"""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT pref_value FROM user_prefs WHERE user_id = ? AND pref_key = ?",
+        (user_id, pref_key),
+    ).fetchone()
+    conn.close()
+    if row is None:
+        return default
+    try:
+        import json
+        return json.loads(row["pref_value"])
+    except (ValueError, TypeError):
+        return default
+
+
+def set_pref(user_id: int, pref_key: str, value) -> None:
+    """写某用户偏好（JSON 序列化，upsert）。"""
+    import json
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO user_prefs (user_id, pref_key, pref_value) VALUES (?, ?, ?)"
+        " ON CONFLICT(user_id, pref_key) DO UPDATE SET pref_value = excluded.pref_value,"
+        " updated_at = datetime('now', 'localtime')",
+        (user_id, pref_key, json.dumps(value, ensure_ascii=False)),
+    )
+    conn.commit()
+    conn.close()
 
 
 def session_user():

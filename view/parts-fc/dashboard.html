@@ -1,0 +1,88 @@
+<!-- 需求预测工作台 · 组级看板 -->
+<div class="card mt12" x-show="loading">
+  <div class="bd"><div class="loadbox"><span class="spin">◌</span><br>加载工作台数据…</div></div>
+</div>
+
+<template x-if="!loading">
+<div>
+
+  <!-- ═══ 1. KPI 指标卡 ═══ -->
+  <div class="kpis">
+    <template x-for="(k, idx) in kpis" :key="k.label">
+      <div class="kpi rv" :style="'--kc:#0e7490;animation-delay:' + (idx * 0.05) + 's'" style="cursor:pointer" @click="navigate(k.app)">
+        <div class="v" x-text="k.val"></div>
+        <div class="k" x-text="k.label"></div>
+      </div>
+    </template>
+  </div>
+
+  <!-- ═══ 2. 主链管道 ═══ -->
+  <div class="overline mt12">主链管道 · 状态分布</div>
+  <div class="pipe">
+    <template x-for="(p, i) in pipes" :key="p.app">
+      <div class="pipe-col rv" :style="'animation-delay:' + (i * 0.06) + 's'" style="cursor:pointer" @click="navigate(p.app)">
+        <h4>
+          <span class="idx" x-text="p.num"></span>
+          <span x-text="p.name"></span>
+          <span class="right mono" x-text="p.total"></span>
+        </h4>
+        <template x-for="(cnt, st) in p.by" :key="st">
+          <div class="sline">
+            <span class="st" :class="'st-' + hue(st)" x-text="st"></span>
+            <b x-text="cnt"></b>
+          </div>
+        </template>
+        <div x-show="!Object.keys(p.by || {}).length" class="sline">
+          <span class="muted" style="font-size:12px">暂无数据</span>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <!-- ═══ 3. 待办队列 ═══ -->
+  <div class="overline mt12">待办队列 · 按角色</div>
+  <div style="display:flex;gap:12px">
+    <!-- 销售待办 -->
+    <div class="card rv" style="flex:1">
+      <div class="hd"><h3>销售待办</h3></div>
+      <div class="bd" style="padding:8px 12px">
+        <template x-for="t in todos.sales" :key="t.label">
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--c-bd);cursor:pointer" @click="navigate(t.app)">
+            <span style="font-size:13px" x-text="t.label"></span>
+            <span class="st st-amber" style="font-weight:700;min-width:32px;text-align:center;border-radius:10px" x-text="t.count"></span>
+          </div>
+        </template>
+      </div>
+    </div>
+    <!-- 计划待办 -->
+    <div class="card rv" style="flex:1;animation-delay:.05s">
+      <div class="hd"><h3>计划待办</h3></div>
+      <div class="bd" style="padding:8px 12px">
+        <template x-for="t in todos.plan" :key="t.label">
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--c-bd);cursor:pointer" @click="navigate(t.app)">
+            <span style="font-size:13px" x-text="t.label"></span>
+            <span class="st st-amber" style="font-weight:700;min-width:32px;text-align:center;border-radius:10px" x-text="t.count"></span>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 4. 快捷入口 ═══ -->
+  <div class="overline mt12">快捷入口</div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap">
+    <template x-for="(e, idx) in entries" :key="e.app">
+      <div class="card rv" :style="'animation-delay:' + (idx * 0.05) + 's'" style="flex:1;min-width:150px;cursor:pointer;text-align:center" @click="navigate(e.app)">
+        <div class="bd" style="padding:16px">
+          <div style="font-size:28px" x-text="e.ic"></div>
+          <div style="font-size:13px;font-weight:600;margin:6px 0 2px" x-text="e.name"></div>
+          <div class="muted" style="font-size:12px">
+            <span class="mono" x-text="e.count"></span> 条记录
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+
+</div>
+</template>

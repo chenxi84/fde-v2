@@ -1,0 +1,168 @@
+<div class="card mt12"><div class="bd" style="padding:0">
+  <!-- 过滤区 -->
+  <div class="tagline" style="padding:12px 16px;flex-wrap:wrap">
+    <b>零件级处理</b>
+    <div class="right tagline" style="gap:8px">
+      <select x-model="filterFcstVersion" @change="search()" style="width:120px">
+        <option value="">全部版本</option>
+        <template x-for="v in versionOptions" :key="v.fcst_version">
+          <option :value="v.fcst_version" x-text="v.fcst_version"></option>
+        </template>
+      </select>
+      <div class="chips">
+        <template x-for="s in ['', '通用件合并', '替换件合并', '断点处理']" :key="s || '全部'">
+          <span class="fchip" :class="{on: filterFuncType === s}" @click="filterFuncType = s; search()" x-text="s || '全部功能'"></span>
+        </template>
+      </div>
+      <input x-model="filterPart" @keydown.enter="search()" placeholder="零件号…" style="width:110px">
+      <button class="b-ghost b-sm" @click="search()">搜索</button>
+    </div>
+  </div>
+
+  <!-- 操作栏 -->
+  <div style="padding:0 16px 8px;display:flex;gap:8px;flex-wrap:wrap">
+    <button class="b-pri b-sm" @click="showCreate('generic')">通用件合并</button>
+    <button class="b-pri b-sm" @click="showCreate('replace')">替换件合并</button>
+    <button class="b-pri b-sm" @click="showCreate('breakpoint')">断点处理</button>
+    <button class="b-ghost b-sm" @click="showSummary()">查看汇总</button>
+  </div>
+
+  <!-- 表格 -->
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr><th>处理单号</th><th>功能</th><th>物料</th><th>期间</th><th>调整量</th><th>依据</th><th>配对号</th><th>处理人</th><th>时间</th></tr>
+      <template x-if="!list.items.length"><tr><td colspan="9" class="empty">无匹配数据</td></tr></template>
+      <template x-for="d in list.items" :key="d.adj_no">
+        <tr class="data">
+          <td><button class="b-link mono" @click="view(d)" x-text="d.adj_no"></button></td>
+          <td><span class="st" :class="'st-' + hue(d.func_type)" x-text="d.func_type"></span></td>
+          <td x-text="d.part_no"></td>
+          <td x-text="d.period"></td>
+          <td><span :style="{color: d.adj_qty > 0 ? 'var(--green)' : d.adj_qty < 0 ? 'var(--red)' : ''}" x-text="d.adj_qty ? (d.adj_qty > 0 ? '+' : '') + fmt(d.adj_qty) : dash(d.adj_qty)"></span></td>
+          <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;font-size:11px;color:var(--muted)" :title="d.basis" x-text="dash(d.basis)"></td>
+          <td x-text="dash(d.pair_no)" style="font-size:11px;color:var(--muted)"></td>
+          <td x-text="dash(d.owner)"></td>
+          <td x-text="fmtTime(d.created_at)" style="font-size:11px;color:var(--muted)"></td>
+        </tr>
+      </template>
+    </table>
+  </div>
+
+  <!-- 分页 -->
+  <div class="tagline" style="padding:8px 16px" x-show="list.total > 0">
+    <span style="font-size:12px;color:var(--muted)">共 <span x-text="list.total"></span> 条</span>
+    <div class="right tagline" style="gap:4px">
+      <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">上一页</button>
+      <span style="font-size:12px" x-text="list.page + ' / ' + Math.ceil(list.total / list.size)"></span>
+      <button class="b-ghost b-sm" :disabled="list.page * list.size >= list.total" @click="list.load(list.page + 1)">下一页</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- ====== 创建表单弹窗 ====== -->
+<div class="modal-mask" x-show="createModal.open" @click.self="createModal.open = false" @keydown.escape.window="createModal.open = false">
+  <div class="modal">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-hd">
+      <b x-text="createModal.mode === 'generic' ? '通用件合并' : createModal.mode === 'replace' ? '替换件合并' : '断点处理'"></b>
+      <button class="x" @click="createModal.open = false">✕</button>
+    </div>
+    <div class="modal-bd" style="padding:16px">
+      <div class="kv"><label>版本号 <span style="color:var(--red)">*</span></label><span><input x-model="createModal.fcst_version" placeholder="如 202601" style="width:100%"></span></div>
+      <div class="kv mt8"><label>期间 <span style="color:var(--red)">*</span></label><span><input x-model="createModal.period" placeholder="如 2026-01" style="width:100%"></span></div>
+
+      <!-- 通用件合并 / 替换件合并 字段 -->
+      <template x-if="createModal.mode !== 'breakpoint'">
+        <div>
+          <div class="kv mt8"><label>零件号 <span style="color:var(--red)">*</span></label><span><input x-model="createModal.part_no" placeholder="零件号" style="width:100%"></span></div>
+          <div class="kv mt8"><label>调整量</label><span><input type="number" x-model="createModal.adj_qty" step="any" style="width:150px"></span></div>
+          <div class="kv mt8"><label>依据 <span style="color:var(--red)">*</span></label><span><input x-model="createModal.basis" placeholder="调整原因/依据" style="width:100%"></span></div>
+        </div>
+      </template>
+
+      <!-- 断点处理 字段 -->
+      <template x-if="createModal.mode === 'breakpoint'">
+        <div>
+          <div class="sec mt8">旧件（截断）</div>
+          <div class="kv"><label>旧件零件号 <span style="color:var(--red)">*</span></label><span><input x-model="createModal.old_part" placeholder="旧件" style="width:100%"></span></div>
+          <div class="kv mt8"><label>旧件调整量（负=截断）</label><span><input type="number" x-model="createModal.old_adj" step="any" style="width:150px"></span></div>
+          <div class="sec mt8">新件（启动）</div>
+          <div class="kv"><label>新件零件号 <span style="color:var(--red)">*</span></label><span><input x-model="createModal.new_part" placeholder="新件" style="width:100%"></span></div>
+          <div class="kv mt8"><label>新件调整量（正=启动）</label><span><input type="number" x-model="createModal.new_adj" step="any" style="width:150px"></span></div>
+          <div class="kv mt8"><label>ECN号 <span style="color:var(--red)">*</span></label><span><input x-model="createModal.ecn_no" placeholder="断点依据" style="width:100%"></span></div>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft"><button class="b-pri" @click="doCreate()">创建</button></div>
+  </div>  <!-- /.modal -->
+</div>
+
+<!-- ====== 详情模态 ====== -->
+<div class="modal-mask" x-show="modal.open" @click.self="closeModal()" @keydown.escape.window="closeModal()" x-cloak>
+  <div class="modal">
+  <div class="modal" style="max-width:540px">
+    <template x-if="modal.loading"><div class="loadbox" style="padding:40px;text-align:center">载入明细…</div></template>
+    <template x-if="!modal.loading && modal.d">
+      <div>
+        <div class="modal-hd" style="background:var(--ink);color:#fff">
+          <div><div class="docno" x-text="modal.d.adj_no"></div>
+            <div class="sub" x-text="modal.d.func_type"></div></div>
+          <span class="st" :class="'st-' + hue(modal.d.func_type)" x-text="modal.d.func_type"></span>
+          <button class="x" @click="closeModal()" style="color:#fff">✕</button>
+        </div>
+        <div class="modal-bd" style="padding:16px">
+          <div class="sec">处理信息</div>
+          <div class="kv"><label>处理单号</label><span x-text="modal.d.adj_no"></span></div>
+          <div class="kv"><label>功能</label><span class="st" :class="'st-' + hue(modal.d.func_type)" x-text="modal.d.func_type"></span></div>
+          <div class="kv"><label>物料</label><span x-text="modal.d.part_no"></span></div>
+          <div class="kv"><label>版本</label><span x-text="modal.d.fcst_version"></span></div>
+          <div class="kv"><label>期间</label><span x-text="modal.d.period"></span></div>
+          <div class="sec mt12">调整数据</div>
+          <div class="kv"><label>调整量</label><span :style="{color: modal.d.adj_qty > 0 ? 'var(--green)' : modal.d.adj_qty < 0 ? 'var(--red)' : ''}" x-text="modal.d.adj_qty ? (modal.d.adj_qty > 0 ? '+' : '') + fmt(modal.d.adj_qty) : fmt(modal.d.adj_qty)"></span></div>
+          <div class="kv"><label>依据</label><span x-text="dash(modal.d.basis)"></span></div>
+          <div class="kv" x-show="modal.d.pair_no"><label>配对号</label><span x-text="modal.d.pair_no"></span></div>
+          <div class="sec mt12">元数据</div>
+          <div class="kv"><label>处理人</label><span x-text="dash(modal.d.owner)"></span></div>
+          <div class="kv"><label>创建时间</label><span x-text="dash(modal.d.created_at)"></span></div>
+          <details class="mt12"><summary style="font-size:12px;color:var(--muted);cursor:pointer">原始数据</summary>
+            <pre style="font-size:11px;max-height:200px;overflow:auto" x-text="JSON.stringify(modal.d, null, 2)"></pre></details>
+        </div>
+        <div class="modal-ft">
+          <button class="b-ghost" @click="closeModal()">关闭</button>
+        </div>
+      </div>
+    </template>
+  </div>  <!-- /.modal -->
+</div>
+
+<!-- ====== 汇总弹窗 ====== -->
+<div class="modal-mask" x-show="summaryModal.open" @click.self="summaryModal.open = false" @keydown.escape.window="summaryModal.open = false">
+  <div class="modal">
+  <div class="modal" style="max-width:640px">
+    <div class="modal-hd"><b>汇总视图</b><button class="x" @click="summaryModal.open = false">✕</button></div>
+    <div class="modal-bd" style="padding:16px">
+      <div class="kv"><label>版本号 <span style="color:var(--red)">*</span></label>
+        <span style="display:flex;gap:8px"><input x-model="summaryModal.fcst_version" placeholder="如 202601" style="flex:1"><button class="b-pri b-sm" @click="doSummarize()">查询</button></span></div>
+      <template x-if="summaryModal.loading"><div class="loadbox" style="padding:20px;text-align:center">加载中…</div></template>
+      <template x-if="!summaryModal.loading && summaryModal.rows.length">
+        <div class="scroll-x mt12">
+          <table class="tbl tight">
+            <tr><th>物料</th><th>期间</th><th>功能</th><th>汇总调整量</th><th>依据</th></tr>
+            <template x-for="r in summaryModal.rows" :key="r.part_no + r.period + r.func_type">
+              <tr class="data">
+                <td x-text="r.part_no"></td>
+                <td x-text="r.period"></td>
+                <td><span class="st" :class="'st-' + hue(r.func_type)" x-text="r.func_type"></span></td>
+                <td><span :style="{color: r.total_adj > 0 ? 'var(--green)' : r.total_adj < 0 ? 'var(--red)' : ''}" x-text="r.total_adj ? (r.total_adj > 0 ? '+' : '') + fmt(r.total_adj) : fmt(r.total_adj)"></span></td>
+                <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;font-size:11px;color:var(--muted)" x-text="dash(r.reasons)"></td>
+              </tr>
+            </template>
+          </table>
+        </div>
+      </template>
+      <template x-if="!summaryModal.loading && summaryModal.rows && !summaryModal.rows.length">
+        <div class="empty mt12">该版本暂无零件级处理数据</div>
+      </template>
+    </div>
+  </div>  <!-- /.modal -->
+</div>

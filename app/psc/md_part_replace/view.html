@@ -1,0 +1,213 @@
+<div class="card mt12"><div class="bd" style="padding:0">
+  <!-- ══ 过滤区：标题 + 原/替换物料号输入 + 状态 chips（与 md_part_replace.list 参数一一对应；契约无 keyword，不设关键字搜索框） ══ -->
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>替换关系台账</b>
+    <span class="muted" style="font-size:12px">状态机 · 生效 → 失效（单向）</span>
+    <div class="right tagline" style="gap:8px; flex-wrap:wrap">
+      <input x-model="fOld" @keydown.enter="search()" placeholder="原物料号" style="width:140px">
+      <input x-model="fNew" @keydown.enter="search()" placeholder="替换物料号" style="width:140px">
+      <div class="chips">
+        <template x-for="s in ['', '生效', '失效']" :key="s || '全部'">
+          <span class="fchip" :class="{on: fStatus === s}"
+            @click="fStatus = s; list.load(1)" x-text="s || '全部'"></span>
+        </template>
+      </div>
+      <button class="b-ghost b-sm" @click="search()">查询</button>
+      <button class="b-ghost b-sm" @click="resetFilters()">重置</button>
+      <button class="b-pri b-sm" @click="openCreate()">＋ 新建替换关系</button>
+    </div>
+  </div>
+  <!-- ══ 表格：列 ⊆ 详情字段集；序 = 关系号 → 原物料 → 替换物料 → ECN → 状态 → 操作 ══ -->
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr>
+        <th>关系号</th><th>原物料号</th><th>替换物料号</th><th>ECN 依据</th><th>状态</th>
+        <th class="right">操作</th>
+      </tr>
+      <template x-if="!list.items.length"><tr><td colspan="6" class="empty">无匹配数据</td></tr></template>
+      <template x-for="d in list.items" :key="d.rel_no">
+        <tr class="data">
+          <td class="mono" x-text="dash(d.rel_no)"></td>
+          <td>
+            <span class="mono" x-text="dash(d.old_material_no)"></span>
+            <template x-if="materialName(d.old_material_no)">
+              <div class="muted" style="font-size:11px" x-text="materialName(d.old_material_no)"></div>
+            </template>
+          </td>
+          <td>
+            <button class="b-link mono" @click="viewX(d)" x-text="dash(d.new_material_no)"></button>
+            <template x-if="materialName(d.new_material_no)">
+              <div class="muted" style="font-size:11px" x-text="materialName(d.new_material_no)"></div>
+            </template>
+          </td>
+          <td x-text="dash(d.ecn_no)"></td>
+          <td><span class="st" :class="'st-' + hue(d.status)" x-text="dash(d.status)"></span></td>
+          <td class="right rowact">
+            <button class="b-pri b-sm" @click="openEdit(d)">编辑</button>
+            <button class="b-ghost b-sm" x-show="d.status === '生效'" @click="disable(d)">设为失效</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <!-- ══ 分页条 ══ -->
+  <div class="tagline" style="padding:10px 16px">
+    <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+    <div class="right tagline" style="gap:8px">
+      <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+      <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+      <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- ════════════ 详情模态（查全：md_part_replace.get 全字段） ════════════ -->
+<div class="modal-mask" x-show="modalX.open" @click.self="closeX()"
+     @keydown.escape.window="closeX()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div><div class="docno" x-text="modalX.d ? modalX.d.rel_no : '替换关系'"></div>
+        <div class="sub">替换关系 · PART REPLACE</div></div>
+      <template x-if="modalX.d">
+        <span class="st" :class="'st-' + hue(modalX.d.status)" x-text="modalX.d.status"></span>
+      </template>
+      <button class="x" @click="closeX()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <template x-if="modalX.loading">
+        <div class="loadbox"><span class="spin">◌</span><br>载入明细…</div>
+      </template>
+      <template x-if="!modalX.loading && modalX.d">
+        <div>
+          <div class="sec">基本信息</div>
+          <div class="kv">
+            <div><div class="k">关系号</div><div class="v mono" x-text="dash(modalX.d.rel_no)"></div>
+              <div class="muted" style="font-size:11px">系统生成 · 全局唯一</div></div>
+            <div><div class="k">状态</div><div class="v"><span class="st" :class="'st-' + hue(modalX.d.status)" x-text="dash(modalX.d.status)"></span></div>
+              <div class="muted" style="font-size:11px">生效 / 失效，失效关系在替换件合并中被排除</div></div>
+          </div>
+
+          <div class="sec">零件关系</div>
+          <div class="kv">
+            <div><div class="k">原物料号</div>
+              <div class="v mono" x-text="dash(modalX.d.old_material_no)"></div>
+              <template x-if="materialName(modalX.d.old_material_no)">
+                <div class="muted" style="font-size:11px" x-text="materialName(modalX.d.old_material_no)"></div>
+              </template>
+              <div class="muted" style="font-size:11px">引用 md_material · 创建/变更时经 md_material.get 校验存在</div></div>
+            <div><div class="k">替换物料号</div>
+              <div class="v mono" x-text="dash(modalX.d.new_material_no)"></div>
+              <template x-if="materialName(modalX.d.new_material_no)">
+                <div class="muted" style="font-size:11px" x-text="materialName(modalX.d.new_material_no)"></div>
+              </template>
+              <div class="muted" style="font-size:11px">引用 md_material · 创建/变更时经 md_material.get 校验存在</div></div>
+          </div>
+
+          <div class="sec">变更依据</div>
+          <div class="kv">
+            <div><div class="k">ECN 依据</div><div class="v mono" x-text="dash(modalX.d.ecn_no)"></div>
+              <div class="muted" style="font-size:11px">最大 50 字符</div></div>
+          </div>
+
+          <details class="raw"><summary>原始数据</summary>
+            <pre class="json" x-text="JSON.stringify(modalX.d, null, 2)"></pre></details>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft" x-show="modalX.d">
+      <template x-if="modalX.d">
+        <div class="tagline" style="gap:8px">
+          <button class="b-pri" @click="openEdit(modalX.d)">编辑</button>
+          <button class="b-ghost" x-show="modalX.d.status === '生效'" @click="disable(modalX.d)">设为失效</button>
+          <button class="b-ghost" @click="closeX()">关闭</button>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ 创建 / 编辑表单模态（md_part_replace.create / update 全可写参数：old_material_no / new_material_no / ecn_no） ════════════ -->
+<div class="modal-mask" x-show="form.open" @click.self="closeForm()"
+     @keydown.escape.window="closeForm()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div><div class="docno" x-text="form.mode === 'edit' ? ('编辑 · ' + form.rel_no) : '新建替换关系'"></div>
+        <div class="sub">替换关系 · PART REPLACE</div></div>
+      <template x-if="form.mode === 'edit'">
+        <span class="st st-slate">编辑</span>
+      </template>
+      <button class="x" @click="closeForm()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <template x-if="form.mode === 'edit'">
+        <div class="kv" style="margin-bottom:12px">
+          <div><div class="k">关系号</div><div class="v mono" x-text="form.rel_no"></div>
+            <div class="muted" style="font-size:11px">主键 · 只读</div></div>
+        </div>
+      </template>
+      <div class="frow">
+        <!-- 原物料号 autocomplete（必填） -->
+        <div style="position:relative"><label class="f">原物料号 <span class="req">*</span></label>
+          <input x-model="oldQuery" @focus="oldOpen = true"
+                 @click.stop="oldOpen = true; newOpen = false"
+                 @input="oldOpen = true"
+                 :placeholder="form.old_material_no || '搜索物料号 / 名称…'">
+          <div class="autocomplete-drop" x-show="oldOpen" @click.away="oldOpen = false"
+               style="position:absolute;top:100%;left:0;right:0;background:var(--card);border:1px solid var(--line);max-height:200px;overflow:auto;z-index:100;border-radius:4px">
+            <template x-if="!materialOptions.length">
+              <div style="padding:6px 8px;color:var(--muted);font-size:12px">暂无可选物料</div>
+            </template>
+            <template x-for="p in oldFiltered" :key="p.material_no">
+              <div @click="selectOld(p)" style="padding:6px 8px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--line-sub)">
+                <div class="mono" x-text="p.material_no"></div>
+                <div class="muted" style="font-size:11px" x-text="p.material_name || ''"></div>
+              </div>
+            </template>
+            <template x-if="materialOptions.length && !oldFiltered.length">
+              <div style="padding:6px 8px;color:var(--muted);font-size:12px">无匹配物料</div>
+            </template>
+          </div>
+          <div class="muted" style="font-size:11px" x-show="form.old_material_no" x-text="'已选：' + form.old_material_no + (materialName(form.old_material_no) ? ' · ' + materialName(form.old_material_no) : '')"></div>
+        </div>
+        <!-- 替换物料号 autocomplete（必填） -->
+        <div style="position:relative"><label class="f">替换物料号 <span class="req">*</span></label>
+          <input x-model="newQuery" @focus="newOpen = true"
+                 @click.stop="newOpen = true; oldOpen = false"
+                 @input="newOpen = true"
+                 :placeholder="form.new_material_no || '搜索物料号 / 名称…'">
+          <div class="autocomplete-drop" x-show="newOpen" @click.away="newOpen = false"
+               style="position:absolute;top:100%;left:0;right:0;background:var(--card);border:1px solid var(--line);max-height:200px;overflow:auto;z-index:100;border-radius:4px">
+            <template x-if="!materialOptions.length">
+              <div style="padding:6px 8px;color:var(--muted);font-size:12px">暂无可选物料</div>
+            </template>
+            <template x-for="p in newFiltered" :key="p.material_no">
+              <div @click="selectNew(p)" style="padding:6px 8px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--line-sub)">
+                <div class="mono" x-text="p.material_no"></div>
+                <div class="muted" style="font-size:11px" x-text="p.material_name || ''"></div>
+              </div>
+            </template>
+            <template x-if="materialOptions.length && !newFiltered.length">
+              <div style="padding:6px 8px;color:var(--muted);font-size:12px">无匹配物料</div>
+            </template>
+          </div>
+          <div class="muted" style="font-size:11px" x-show="form.new_material_no" x-text="'已选：' + form.new_material_no + (materialName(form.new_material_no) ? ' · ' + materialName(form.new_material_no) : '')"></div>
+        </div>
+      </div>
+      <div class="l more" style="margin-top:14px; cursor:pointer" @click="form.more = !form.more"
+        x-text="'更多字段 ' + (form.more ? '▴' : '▾')"></div>
+      <div class="collapse" :class="{open: form.more}">
+        <div style="padding-top:12px">
+          <label class="f">ECN 依据 <span class="muted" style="font-weight:400; font-size:11px">可选</span></label>
+          <input x-model="form.ecn_no" maxlength="50" placeholder="可选 · 最多 50 字符">
+        </div>
+      </div>
+    </div>
+    <div class="modal-ft">
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost" @click="closeForm()">取消</button>
+        <button class="b-pri" :disabled="form.busy" @click="save()"
+          x-text="form.busy ? '处理中…' : (form.mode === 'edit' ? '保存修改' : '创建')"></button>
+      </div>
+    </div>
+  </div>
+</div>

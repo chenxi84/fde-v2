@@ -1,0 +1,95 @@
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px;flex-wrap:wrap">
+    <b>达成率与置信度</b>
+    <div class="right tagline" style="gap:8px">
+      <input x-model="filterOem" @keydown.enter="search()" placeholder="客户编码…" style="width:100px">
+      <input x-model="filterPeriod" @keydown.enter="search()" placeholder="期间如2026-09…" style="width:120px">
+      <div class="chips">
+        <template x-for="h in ['', 'H1', 'H2', 'H3']" :key="h || '全部'">
+          <span class="fchip" :class="{on: filterHorizon === h}" @click="filterHorizon = h; search()" x-text="h || '全部'"></span>
+        </template>
+      </div>
+      <button class="b-ghost b-sm" @click="search()">搜索</button>
+    </div>
+  </div>
+  <div style="padding:0 16px 8px"><button class="b-pri b-sm" @click="showCompute()">批量计算</button></div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr><th>客户</th><th>期间</th><th>预测提前期</th><th>快照原始量</th><th>结算实际量</th><th>达成率</th><th>置信系数</th><th>生成批次</th></tr>
+      <template x-if="!list.items.length"><tr><td colspan="8" class="empty">暂无达成率数据</td></tr></template>
+      <template x-for="d in list.items" :key="d.oem_code + d.period + d.horizon">
+        <tr class="data" :style="isLowRate(d) ? 'background:#fff0f0' : ''">
+          <td>
+            <button class="b-link mono" @click="view(d)" x-text="d.oem_code"></button>
+            <div x-show="custName(d.oem_code)" style="font-size:11px;color:var(--muted)" x-text="custName(d.oem_code)"></div>
+          </td>
+          <td x-text="d.period"></td>
+          <td><span class="st" :class="'st-' + hue(d.horizon)" x-text="d.horizon"></span></td>
+          <td x-text="d.snap_qty != null ? fmt(d.snap_qty) : dash()"></td>
+          <td x-text="d.settle_qty != null && d.settle_qty > 0 ? fmt(d.settle_qty) : dash()"></td>
+          <td x-text="d.attain_rate != null && d.attain_rate > 0 ? fmt(d.attain_rate) : dash()"></td>
+          <td x-text="d.conf_factor != null ? fmt(d.conf_factor) : dash()"></td>
+          <td x-text="dash(d.gen_batch)"></td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:8px 16px" x-show="list.total > 0">
+    <span style="font-size:12px;color:var(--muted)">共 <span x-text="list.total"></span> 条</span>
+    <div class="right tagline" style="gap:4px">
+      <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">上一页</button>
+      <span style="font-size:12px" x-text="list.page + ' / ' + Math.ceil(list.total / list.size)"></span>
+      <button class="b-ghost b-sm" :disabled="list.page * list.size >= list.total" @click="list.load(list.page + 1)">下一页</button>
+    </div>
+  </div>
+</div></div>
+
+<div class="modal-mask" x-show="modal.open" @click.self="closeModal()">
+  <div class="modal" style="max-width:600px">
+    <template x-if="modal.loading"><div class="loadbox" style="padding:40px;text-align:center">加载中…</div></template>
+    <template x-if="!modal.loading && modal.rows.length">
+      <div>
+        <div class="modal-hd" style="background:var(--ink);color:#fff">
+          <span><b x-text="modal.d.oem_code + ' · ' + modal.d.period"></b></span>
+          <button class="b-ghost" style="color:#fff" @click="closeModal()">✕</button>
+        </div>
+        <div class="modal-bd" style="padding:16px">
+          <div class="sec">分Horizon达成率详情</div>
+          <div class="scroll-x">
+            <table class="tbl tight">
+              <tr><th>预测提前期</th><th>快照原始量</th><th>结算实际量</th><th>达成率</th><th>置信系数</th><th>批次</th></tr>
+              <template x-for="r in modal.rows" :key="r.horizon">
+                <tr>
+                  <td><span class="st" :class="'st-' + hue(r.horizon)" x-text="r.horizon"></span></td>
+                  <td x-text="r.snap_qty != null ? fmt(r.snap_qty) : dash()"></td>
+                  <td x-text="r.settle_qty != null && r.settle_qty > 0 ? fmt(r.settle_qty) : dash()"></td>
+                  <td x-text="r.attain_rate != null && r.attain_rate > 0 ? fmt(r.attain_rate) : dash()"></td>
+                  <td x-text="r.conf_factor != null ? fmt(r.conf_factor) : dash()"></td>
+                  <td x-text="dash(r.gen_batch)"></td>
+                </tr>
+              </template>
+            </table>
+          </div>
+          <details class="mt12"><summary style="font-size:12px;color:var(--muted);cursor:pointer">原始数据</summary>
+            <pre style="font-size:11px;max-height:200px;overflow:auto" x-text="JSON.stringify(modal.rows, null, 2)"></pre>
+          </details>
+        </div>
+        <div class="modal-ft"><button class="b-ghost" @click="closeModal()">关闭</button></div>
+      </div>
+    </template>
+  </div>  <!-- /.modal -->
+</div>
+
+<div class="modal-mask" x-show="computeForm.open" @click.self="computeForm.open = false">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-hd"><b>批量计算达成率</b><button class="b-ghost" @click="computeForm.open = false">✕</button></div>
+    <div class="modal-bd" style="padding:16px">
+      <p style="font-size:12px;color:var(--muted);margin-bottom:12px">此操作将触发月度闭环计算：遍历指定版本下所有有快照数据的客户，分 horizon 计算达成率与置信系数。</p>
+      <div class="kv"><label>版本号 ★</label><span><input x-model="computeForm.fcst_version" placeholder="如 202608" style="width:100%"></span></div>
+    </div>
+    <div class="modal-ft">
+      <button class="b-pri" :disabled="computeForm.busy" @click="doCompute()" x-text="computeForm.busy ? '正在计算…' : '确认计算'"></button>
+      <button class="b-ghost" @click="computeForm.open = false">取消</button>
+    </div>
+  </div>  <!-- /.modal -->
+</div>

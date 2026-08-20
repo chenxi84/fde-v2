@@ -1,0 +1,198 @@
+<div class="card mt12"><div class="bd" style="padding:0">
+  <!-- ══ 过滤区：标题 + 物料 autocomplete + 补库类型/状态 chips（与 demand_pool.list 参数一一对应；契约无 keyword，不设搜索框） ══ -->
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>需求池台账</b>
+    <span class="muted" style="font-size:12px">状态机 · 待下达 → 已下达 → 生产中 → 已完成 / 已取消</span>
+    <div class="right tagline" style="gap:8px; flex-wrap:wrap">
+      <div style="position:relative">
+        <input :value="materialOpen ? materialQuery : fMaterial"
+               @focus="materialQuery = ''; materialOpen = true"
+               @click.stop="materialQuery = ''; materialOpen = true"
+               @input="materialQuery = $event.target.value; materialOpen = true"
+               placeholder="全部物料…" autocomplete="off" style="width:200px">
+        <template x-if="fMaterial && !materialOpen">
+          <button class="b-ghost b-sm" style="position:absolute; right:4px; top:50%; transform:translateY(-50%)"
+                  @click="clearMaterial()">✕</button>
+        </template>
+        <div x-show="materialOpen" @click.away="materialOpen = false"
+             style="position:absolute; top:100%; left:0; right:0; max-height:240px; overflow-y:auto;
+                    background:#fff; border:1px solid var(--line); border-radius:4px; z-index:100;
+                    box-shadow:0 4px 12px rgba(0,0,0,.1)">
+          <div x-show="!filteredMaterials.length" style="padding:8px; color:var(--muted); font-size:12px">暂无物料</div>
+          <template x-for="m in filteredMaterials" :key="m.material_no">
+            <div @mousedown.prevent="selectMaterial(m)"
+                 style="padding:6px 12px; cursor:pointer; border-bottom:1px solid var(--line-sub)">
+              <div class="mono" style="font-weight:500" x-text="m.material_no"></div>
+              <div style="font-size:12px; color:var(--muted)" x-text="m.material_name || '—'"></div>
+            </div>
+          </template>
+        </div>
+      </div>
+      <div class="chips">
+        <template x-for="t in ['', '缺货补库', '最低库存补库', '安全库存补库']" :key="t || '全部类型'">
+          <span class="fchip" :class="{on: fType === t}"
+            @click="fType = t; search()" x-text="t || '全部类型'"></span>
+        </template>
+      </div>
+      <div class="chips">
+        <template x-for="s in ['', '待下达', '已下达', '生产中', '已完成', '已取消']" :key="s || '全部状态'">
+          <span class="fchip" :class="{on: fStatus === s}"
+            @click="fStatus = s; search()" x-text="s || '全部状态'"></span>
+        </template>
+      </div>
+    </div>
+  </div>
+  <!-- ══ 表格：列 ⊆ 详情字段集；序 = 单号 → 类型 → 状态 → 物料 → 数量 → 时间 ══ -->
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr>
+        <th>补库单号</th><th>补库类型</th><th>状态</th><th>物料号</th><th>补库数量</th>
+        <th>要求入库时间</th><th>承诺入库时间</th><th class="right">操作</th>
+      </tr>
+      <template x-if="!list.items.length"><tr><td colspan="8" class="empty">无匹配数据</td></tr></template>
+      <template x-for="d in list.items" :key="d.replenish_no">
+        <tr class="data">
+          <td><button class="b-link mono" @click="viewX(d)" x-text="d.replenish_no"></button></td>
+          <td><span class="st" :class="'st-' + hue(d.replenish_type)" x-text="d.replenish_type"></span></td>
+          <td><span class="st" :class="'st-' + hue(d.status)" x-text="d.status"></span></td>
+          <td>
+            <span class="mono" x-text="dash(d.material_no)"></span>
+            <template x-if="materialName(d.material_no)">
+              <div class="muted" style="font-size:11px" x-text="materialName(d.material_no)"></div>
+            </template>
+          </td>
+          <td class="mono" x-text="fmt(d.replenish_qty)"></td>
+          <td class="mono" x-text="dash(d.required_inbound)"></td>
+          <td class="mono" x-text="dash(d.promised_inbound)"></td>
+          <td class="right rowact">
+            <button class="b-pri b-sm" x-show="d.status === '待下达'" @click="openRelease(d)">下达</button>
+            <button class="b-dng b-sm" x-show="d.status === '待下达' || d.status === '已下达'" @click="openCancel(d)">取消</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <!-- ══ 分页条 ══ -->
+  <div class="tagline" style="padding:10px 16px">
+    <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+    <div class="right tagline" style="gap:8px">
+      <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+      <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+      <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- ════════════ 详情模态（查全：demand_pool.get 全字段） ════════════ -->
+<div class="modal-mask" x-show="modalX.open" @click.self="closeX()"
+     @keydown.escape.window="closeX()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div><div class="docno" x-text="modalX.d ? modalX.d.replenish_no : '需求池详情'"></div>
+        <div class="sub">补库单详情 · REPLENISH ORDER</div></div>
+      <template x-if="modalX.d">
+        <span class="st" :class="'st-' + hue(modalX.d.status)" x-text="modalX.d.status"></span>
+      </template>
+      <button class="x" @click="closeX()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <template x-if="modalX.loading">
+        <div class="loadbox"><span class="spin">◌</span><br>载入明细…</div>
+      </template>
+      <template x-if="!modalX.loading && modalX.d">
+        <div>
+          <div class="sec">基本信息</div>
+          <div class="kv">
+            <div><div class="k">补库单号</div><div class="v mono" x-text="dash(modalX.d.replenish_no)"></div>
+              <div class="muted" style="font-size:11px">系统生成 · 全局唯一</div></div>
+            <div><div class="k">状态</div><div class="v"><span class="st" :class="'st-' + hue(modalX.d.status)" x-text="dash(modalX.d.status)"></span></div>
+              <div class="muted" style="font-size:11px">系统按状态机维护</div></div>
+            <div><div class="k">补库类型</div><div class="v"><span class="st" :class="'st-' + hue(modalX.d.replenish_type)" x-text="dash(modalX.d.replenish_type)"></span></div>
+              <div class="muted" style="font-size:11px">触发条件判定</div></div>
+            <div><div class="k">物料号</div><div class="v">
+                <span class="mono" x-text="dash(modalX.d.material_no)"></span>
+                <template x-if="materialName(modalX.d.material_no)">
+                  <span class="muted" style="margin-left:8px" x-text="materialName(modalX.d.material_no)"></span>
+                </template>
+              </div>
+              <div class="muted" style="font-size:11px">主数据引用 md_material · 禁止手工录入</div></div>
+          </div>
+
+          <div class="sec">数量与时间</div>
+          <div class="kv">
+            <div><div class="k">补库数量</div><div class="v mono" x-text="fmt(modalX.d.replenish_qty)"></div>
+              <div class="muted" style="font-size:11px">按产能松紧分档确定</div></div>
+            <div><div class="k">要求入库时间</div><div class="v mono" x-text="dash(modalX.d.required_inbound)"></div>
+              <div class="muted" style="font-size:11px">击穿时点 · 须在此之前入库</div></div>
+            <div><div class="k">承诺入库时间</div><div class="v mono" x-text="dash(modalX.d.promised_inbound)"></div>
+              <div class="muted" style="font-size:11px">产能平衡后承诺 · 回填时点待确认</div></div>
+          </div>
+
+          <details class="raw"><summary>原始数据</summary>
+            <pre class="json" x-text="JSON.stringify(modalX.d, null, 2)"></pre></details>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft" x-show="modalX.d">
+      <template x-if="modalX.d">
+        <div class="tagline" style="gap:8px">
+          <span class="muted" x-show="modalX.d.status === '生产中' || modalX.d.status === '已完成' || modalX.d.status === '已取消'"
+                x-text="'当前状态：' + modalX.d.status + ' · 无可用操作'"></span>
+          <button class="b-pri" x-show="modalX.d.status === '待下达'" @click="openRelease(modalX.d)">下达</button>
+          <button class="b-dng" x-show="modalX.d.status === '待下达' || modalX.d.status === '已下达'" @click="openCancel(modalX.d)">取消</button>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ 下达确认对话框（release 可选回填承诺入库时间） ════════════ -->
+<div class="modal-mask" x-show="releaseForm.open" @click.self="closeRelease()"
+     @keydown.escape.window="closeRelease()" x-cloak>
+  <div class="modal" style="max-width:480px">
+    <div class="modal-hd">
+      <div><div class="docno">下达生产</div>
+        <div class="sub">待下达 → 已下达 · RELEASE TO ERP</div></div>
+      <button class="x" @click="closeRelease()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="kv">
+        <div><div class="k">补库单号</div><div class="v mono" x-text="releaseForm.replenish_no"></div></div>
+      </div>
+      <label class="f" style="margin-top:12px">承诺入库时间 <span class="muted" style="font-weight:400; font-size:11px">可选 · 留空传空</span></label>
+      <input type="date" x-model="releaseForm.promised_inbound">
+    </div>
+    <div class="modal-ft">
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost" @click="closeRelease()">取消</button>
+        <button class="b-pri" :disabled="releaseForm.busy" @click="confirmRelease()"
+          x-text="releaseForm.busy ? '下达中…' : '确认下达'"></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ 取消确认对话框 ════════════ -->
+<div class="modal-mask" x-show="cancelForm.open" @click.self="closeCancel()"
+     @keydown.escape.window="closeCancel()" x-cloak>
+  <div class="modal" style="max-width:480px">
+    <div class="modal-hd">
+      <div><div class="docno">取消补库单</div>
+        <div class="sub">待下达 / 已下达 → 已取消 · CANCEL REPLENISH ORDER</div></div>
+      <button class="x" @click="closeCancel()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="kv">
+        <div><div class="k">补库单号</div><div class="v mono" x-text="cancelForm.replenish_no"></div></div>
+      </div>
+      <div class="muted" style="margin-top:12px">确认取消该补库单？取消后不可恢复（终态「已取消」）。</div>
+    </div>
+    <div class="modal-ft">
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost" @click="closeCancel()">返回</button>
+        <button class="b-dng" :disabled="cancelForm.busy" @click="confirmCancel()"
+          x-text="cancelForm.busy ? '取消中…' : '确认取消'"></button>
+      </div>
+    </div>
+  </div>
+</div>

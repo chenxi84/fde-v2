@@ -1,0 +1,439 @@
+<div>
+  <!-- 列表 -->
+  <div class="card"><div class="bd" style="padding:0">
+    <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+      <b>需求加工台账</b>
+      <span class="muted">批次由毛需求收集拆解确认时自动创建 · 基线生成 · 销售修正 · 核对</span>
+      <div class="right tagline" style="gap:8px; flex-wrap:wrap">
+        <select x-model="fOemCode" @change="list.load(1)" style="width:140px">
+          <option value="">全部OEM</option>
+          <template x-for="o in oemOptions" :key="o"><option x-text="o" :value="o"></option></template>
+        </select>
+        <div class="chips">
+          <template x-for="s in ['', '进行中', '全部核定', '已锁定']" :key="s || '全部'">
+            <span class="fchip" :class="{on: fStatus === s}"
+              @click="fStatus = s; list.load(1)" x-text="s || '全部'"></span>
+          </template>
+        </div>
+        <button class="b-ghost b-sm" @click="search()">刷新</button>
+      </div>
+    </div>
+    <div class="scroll-x">
+      <table class="tbl tight">
+        <tr>
+          <th>加工批次</th><th>收集单号</th><th>OEM</th><th>工厂</th><th>版本</th><th>状态</th><th class="right">操作</th>
+        </tr>
+        <template x-if="!list.items.length"><tr><td colspan="7" class="empty">无匹配数据</td></tr></template>
+        <template x-for="d in list.items" :key="d.proc_batch">
+          <tr class="data">
+            <td><button class="b-link mono" @click="viewX(d)" x-text="d.proc_batch"></button></td>
+            <td class="mono" x-text="dash(d.collect_no)"></td>
+            <td x-text="dash(d.oem_code)"></td>
+            <td x-text="dash(d.plant_code)"></td>
+            <td class="mono" x-text="dash(d.fcst_version)"></td>
+            <td><span class="st" :class="'st-' + hue(d.status)" x-text="statusLabel(d.status)"></span></td>
+            <td class="right rowact">
+              <button class="b-pri b-sm" x-show="d.status === '进行中'" @click="openGenBaseline(d)">① 生成基线</button>
+              <button class="b-ghost b-sm" x-show="d.status === '进行中'" @click="openBaseline(d)">基线确认</button>
+              <button class="b-pri b-sm" x-show="d.status === '进行中'" @click="openAdj(d)">② 销售修正</button>
+              <button class="b-pri b-sm" x-show="d.status === '进行中'" @click="openChk(d)">③ 核对</button>
+              <button class="b-dng b-sm" x-show="d.status === '全部核定'" @click="lockBatch(d)">④ 锁定</button>
+            </td>
+          </tr>
+        </template>
+      </table>
+    </div>
+    <div class="tagline" style="padding:10px 16px">
+      <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+        <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+        <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+      </div>
+    </div>
+  </div></div>
+
+  <!-- 详情模态 -->
+  <div class="modal-mask" x-show="modalX.open" @click.self="closeX()"
+       @keydown.escape.window="closeX()" x-cloak>
+    <div class="modal">
+      <div class="modal-hd">
+        <div>
+          <div class="docno" x-text="modalX.d ? modalX.d.header.proc_batch : '加工批次详情'"></div>
+          <div class="sub">需求加工详情 · DEMAND PROCESSING</div>
+        </div>
+        <template x-if="modalX.d">
+          <span class="st" :class="'st-' + hue(modalX.d.header.status)" x-text="statusLabel(modalX.d.header.status)"></span>
+        </template>
+        <button class="x" @click="closeX()">✕</button>
+      </div>
+      <div class="modal-bd">
+        <template x-if="modalX.loading">
+          <div class="loadbox"><span class="spin">◌</span><br>载入批次明细…</div>
+        </template>
+        <template x-if="!modalX.loading && modalX.d">
+          <div>
+            <div class="sec">批次头信息</div>
+            <div class="kv">
+              <div><div class="k">加工批次</div><div class="v mono" x-text="dash(modalX.d.header.proc_batch)"></div></div>
+              <div><div class="k">来源收集单</div><div class="v mono" x-text="dash(modalX.d.header.collect_no)"></div></div>
+              <div><div class="k">状态</div><div class="v"><span class="st" :class="'st-' + hue(modalX.d.header.status)" x-text="statusLabel(modalX.d.header.status)"></span></div></div>
+              <div><div class="k">OEM编码</div><div class="v mono" x-text="dash(modalX.d.header.oem_code)"></div></div>
+              <div><div class="k">工厂编码</div><div class="v mono" x-text="dash(modalX.d.header.plant_code)"></div></div>
+              <div><div class="k">预测版本</div><div class="v mono" x-text="dash(modalX.d.header.fcst_version)"></div></div>
+              <div><div class="k">开始时间</div><div class="v mono" x-text="dash(modalX.d.header.start_time)"></div></div>
+              <div><div class="k">完成时间</div><div class="v mono" x-text="dash(modalX.d.header.finish_time)"></div></div>
+            </div>
+
+            <!-- 合并明细：基线 + 修正 + 核对 -->
+            <div class="sec">明细（<span x-text="modalX.d._merged ? modalX.d._merged.length : 0"></span> 行 · 基线/修正/核对合并视图）</div>
+            <div class="scroll-x">
+              <table class="tbl tight">
+                <tr>
+                  <th>零件号</th><th>车型</th><th>期间</th>
+                  <th>基线量</th><th>因果量</th><th>路径</th>
+                  <th class="split">修正量</th><th>偏离</th><th>偏离率</th><th>原因</th>
+                  <th class="split">结论</th><th>核定调整量</th><th>核定后量</th>
+                </tr>
+                <template x-if="!modalX.d._merged || !modalX.d._merged.length">
+                  <tr><td colspan="14" class="empty">暂无基线数据，请先生成基线</td></tr>
+                </template>
+                <template x-for="m in modalX.d._merged" :key="m.part_no + '-' + m.veh_model + '-' + m.period">
+                  <tr>
+                    <td class="mono" x-text="dash(m.part_no)"></td>
+                    <td x-text="dash(m.veh_model)"></td>
+                    <td class="mono" x-text="dash(m.period)"></td>
+                    <!-- 基线 -->
+                    <td class="mono" x-text="fmt(m.base_qty)"></td>
+                    <td class="mono" x-text="fmt(m.causal_qty)"></td>
+                    <td style="font-size:11px"><span x-text="m.base_path"></span> <span class="muted" x-text="m.base_method"></span></td>
+                    <!-- 修正 -->
+                    <td class="mono" :class="m._adj && m._adj.adj_qty !== m.base_qty ? 'fg-bold' : ''"
+                        x-text="m._adj ? fmt(m._adj.adj_qty) : '—'"></td>
+                    <td class="mono" :class="(m._adj||{}).adj_delta > 0 ? 'fg-green' : (m._adj||{}).adj_delta < 0 ? 'fg-red' : ''"
+                        x-text="m._adj ? ((m._adj.adj_delta > 0 ? '+' : '') + fmt(m._adj.adj_delta)) : ''"></td>
+                    <td class="mono" :class="(m._adj||{}).adj_pct > 20 ? 'fg-red' : ''"
+                        x-text="m._adj && m._adj.adj_pct ? m._adj.adj_pct + '%' : ''"></td>
+                    <td style="font-size:11px" x-text="dash((m._adj||{}).adj_reason_cat)"></td>
+                    <!-- 核对 -->
+                    <td><span x-show="m._chk" class="st" :class="m._chk.chk_result === '通过' ? 'st-info' : 'st-dng'"
+                        x-text="m._chk ? m._chk.chk_result : '—'"></span></td>
+                    <td class="mono" x-text="m._chk ? fmt(m._chk.chk_adj_qty) : ''"></td>
+                    <td class="mono fg-bold" x-text="m._chk ? fmt(m._chk.approved_qty) : ''"></td>
+                  </tr>
+                </template>
+              </table>
+            </div>
+
+            <!-- D04-L 调整日志 -->
+            <div class="sec">调整日志（D04-L · <span x-text="modalX.d.logs ? modalX.d.logs.length : 0"></span> 行）</div>
+            <div class="scroll-x">
+              <table class="tbl tight">
+                <tr><th>零件号</th><th>车型</th><th>期间</th><th>序号</th><th>角色</th><th>调整前</th><th>调整后</th><th>原因类别</th><th>证据</th><th>操作人</th><th>时间</th></tr>
+                <template x-if="!modalX.d.logs || !modalX.d.logs.length">
+                  <tr><td colspan="11" class="empty">暂无调整日志</td></tr>
+                </template>
+                <template x-for="lg in modalX.d.logs" :key="lg.part_no + '-' + lg.veh_model + '-' + lg.period + '-' + lg.adj_seq">
+                  <tr>
+                    <td class="mono" x-text="dash(lg.part_no)"></td>
+                    <td x-text="dash(lg.veh_model)"></td>
+                    <td class="mono" x-text="dash(lg.period)"></td>
+                    <td class="mono" x-text="lg.adj_seq"></td>
+                    <td x-text="dash(lg.actor_role)"></td>
+                    <td class="mono" x-text="fmt(lg.before_qty)"></td>
+                    <td class="mono" x-text="fmt(lg.after_qty)"></td>
+                    <td x-text="dash(lg.reason_cat)"></td>
+                    <td x-text="dash(lg.evidence)"></td>
+                    <td x-text="dash(lg.actor)"></td>
+                    <td class="mono" x-text="dash(lg.action_time)"></td>
+                  </tr>
+                </template>
+              </table>
+            </div>
+
+            <details class="raw"><summary>原始数据</summary>
+              <pre class="json" x-text="JSON.stringify(modalX.d, null, 2)"></pre></details>
+          </div>
+        </template>
+      </div>
+      <div class="modal-ft" x-show="modalX.d">
+        <template x-if="modalX.d">
+          <div class="tagline" style="gap:8px">
+            <span class="muted" x-show="modalX.d.header.status !== '进行中'" x-text="'当前状态：' + statusLabel(modalX.d.header.status)"></span>
+            <button class="b-pri" x-show="modalX.d.header.status === '进行中'" @click="openGenBaseline(modalX.d)">① 生成基线</button>
+            <button class="b-ghost" x-show="modalX.d.header.status === '进行中'" @click="openBaseline(modalX.d)">基线确认</button>
+            <button class="b-pri" x-show="modalX.d.header.status === '进行中'" @click="openAdj(modalX.d)">② 销售修正</button>
+            <button class="b-pri" x-show="modalX.d.header.status === '进行中'" @click="openChk(modalX.d)">③ 核对</button>
+            <button class="b-dng" x-show="modalX.d.header.status === '全部核定'" @click="lockBatch(modalX.d)">④ 锁定</button>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- 基线确认弹窗（批量列表模式）-->
+  <div class="modal-mask" x-show="baselineForm.open" @click.self="closeBaseline()"
+       @keydown.escape.window="closeBaseline()" x-cloak>
+    <div class="modal" style="max-width:960px">
+      <div class="modal-hd">
+        <div>
+          <div class="docno" x-text="'基线确认 · ' + baselineForm.proc_batch"></div>
+          <div class="sub" x-text="'共 ' + baselineForm.rows.length + ' 行 · 审核基线 vs 因果量偏离 · 可覆盖基线值'"></div>
+        </div>
+        <button class="x" @click="closeBaseline()">✕</button>
+      </div>
+      <div class="modal-bd">
+        <template x-if="baselineForm.busy">
+          <div class="loadbox"><span class="spin">◌</span><br>加载基线数据…</div>
+        </template>
+        <template x-if="!baselineForm.busy && !baselineForm.rows.length">
+          <div class="empty">暂无基线数据，请先生成基线</div>
+        </template>
+        <template x-if="!baselineForm.busy && baselineForm.rows.length">
+          <div class="scroll-x">
+            <table class="tbl tight">
+              <tr>
+                <th>零件号</th><th>车型</th><th>期间</th><th>基线量</th><th>因果量</th><th>路径</th><th>方法</th>
+                <th>覆盖量</th><th>偏差原因</th>
+              </tr>
+              <template x-for="r in baselineForm.rows" :key="r.part_no + '|' + r.veh_model + '|' + r.period">
+                <tr :class="r.deviation_reason || r.override_qty ? 'data' : ''">
+                  <td class="mono" x-text="r.part_no"></td>
+                  <td x-text="dash(r.veh_model)"></td>
+                  <td class="mono" x-text="r.period"></td>
+                  <td class="mono" x-text="fmt(r.base_qty)"></td>
+                  <td class="mono" x-text="fmt(r.causal_qty)"></td>
+                  <td style="font-size:11px" x-text="r.base_path"></td>
+                  <td style="font-size:11px" x-text="r.base_method"></td>
+                  <td><input type="number" step="0.01" x-model="r.override_qty" style="width:80px; font-size:12px" placeholder="覆盖"></td>
+                  <td><input x-model="r.deviation_reason" style="width:160px; font-size:11px" placeholder="偏差原因"></td>
+                </tr>
+              </template>
+            </table>
+          </div>
+        </template>
+      </div>
+      <div class="modal-ft">
+        <div class="tagline" style="gap:8px">
+          <span class="muted" style="font-size:11px">填写"覆盖量"可替换系统基线 · 仅提交有变更的行</span>
+          <div class="right tagline" style="gap:8px">
+            <button class="b-ghost" @click="closeBaseline()">取消</button>
+            <button class="b-pri" :disabled="baselineForm.busy" @click="submitBaseline()"
+              x-text="baselineForm.busy ? '提交中…' : '批量确认基线'"></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 销售修正弹窗（批量列表模式）-->
+  <div class="modal-mask" x-show="adjForm.open" @click.self="closeAdj()"
+       @keydown.escape.window="closeAdj()" x-cloak>
+    <div class="modal" style="max-width:960px">
+      <div class="modal-hd">
+        <div>
+          <div class="docno" x-text="'销售修正 · ' + adjForm.proc_batch"></div>
+          <div class="sub" x-text="'共 ' + adjForm.rows.length + ' 行 · 可直接在列表中修改 · 仅提交有变更的行'"></div>
+        </div>
+        <button class="x" @click="closeAdj()">✕</button>
+      </div>
+      <div class="modal-bd">
+        <template x-if="adjForm.busy">
+          <div class="loadbox"><span class="spin">◌</span><br>加载基线数据…</div>
+        </template>
+        <template x-if="!adjForm.busy && !adjForm.rows.length">
+          <div class="empty">暂无基线数据，请先生成基线</div>
+        </template>
+        <template x-if="!adjForm.busy && adjForm.rows.length">
+          <div class="scroll-x">
+            <table class="tbl tight">
+              <tr>
+                <th>零件号</th><th>车型</th><th>期间</th><th>基线量</th><th>因果量</th>
+                <th>修正量</th><th>偏离</th><th>偏离率</th><th>原因类别</th><th>举证</th><th>状态</th>
+              </tr>
+              <template x-for="(r, i) in adjForm.rows" :key="r.part_no + '|' + r.veh_model + '|' + r.period">
+                <tr :class="Math.abs(r.adj_delta) > 0.001 ? 'data' : ''">
+                  <td class="mono" x-text="r.part_no"></td>
+                  <td x-text="dash(r.veh_model)"></td>
+                  <td class="mono" x-text="r.period"></td>
+                  <td class="mono" x-text="fmt(r.base_qty)"></td>
+                  <td class="mono" x-text="fmt(r.causal_qty)"></td>
+                  <td><input type="number" step="0.01" x-model.number="r.adj_qty"
+                       @input="onAdjQtyChange(r)" style="width:80px; font-size:12px"
+                       :style="Math.abs(r.adj_delta) > 0.001 ? 'font-weight:600' : ''"></td>
+                  <td class="mono" :class="r.adj_delta > 0 ? 'fg-green' : r.adj_delta < 0 ? 'fg-red' : ''"
+                      x-text="r.adj_delta ? (r.adj_delta > 0 ? '+' : '') + fmt(r.adj_delta) : ''"></td>
+                  <td class="mono" :class="r.adj_pct > 20 ? 'fg-red fg-bold' : ''"
+                      x-text="r.adj_pct ? r.adj_pct + '%' : ''"></td>
+                  <td><select x-model="r.adj_reason_cat" style="width:110px; font-size:11px">
+                    <option value="">—</option>
+                    <template x-for="opt in reasonOptions" :key="opt">
+                      <option :value="opt" x-text="opt"></option>
+                    </template>
+                  </select></td>
+                  <td><input x-model="r.adj_evidence" placeholder="超20%须举证" style="width:120px; font-size:11px"
+                       :style="r.adj_pct > 20 && !r.adj_evidence ? 'border-color:#dc2626' : ''"></td>
+                  <td x-text="dash(r.submit_status)" style="font-size:11px"></td>
+                </tr>
+              </template>
+            </table>
+          </div>
+        </template>
+      </div>
+      <div class="modal-ft">
+        <div class="tagline" style="gap:8px">
+          <span class="muted" style="font-size:11px">超20%偏离须举证明，红字提醒 · 全部行统一提交供核对</span>
+          <div class="right tagline" style="gap:8px">
+            <button class="b-ghost" @click="closeAdj()">取消</button>
+            <button class="b-pri" :disabled="adjForm.busy" @click="submitAdj()"
+              x-text="adjForm.busy ? '提交中…' : '批量提交修正 (' + adjForm.rows.length + '行)'"></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 核对弹窗（批量列表模式）-->
+  <div class="modal-mask" x-show="chkForm.open" @click.self="closeChk()"
+       @keydown.escape.window="closeChk()" x-cloak>
+    <div class="modal" style="max-width:960px">
+      <div class="modal-hd">
+        <div>
+          <div class="docno" x-text="'核对 · ' + chkForm.proc_batch"></div>
+          <div class="sub" x-text="'共 ' + chkForm.rows.length + ' 条修正 · 逐行审核通过或退回'"></div>
+        </div>
+        <button class="x" @click="closeChk()">✕</button>
+      </div>
+      <div class="modal-bd">
+        <template x-if="chkForm.busy">
+          <div class="loadbox"><span class="spin">◌</span><br>加载修正数据…</div>
+        </template>
+        <template x-if="!chkForm.busy && !chkForm.rows.length">
+          <div class="empty">暂无修正数据，请先完成销售修正</div>
+        </template>
+        <template x-if="!chkForm.busy && chkForm.rows.length">
+          <div class="scroll-x">
+            <table class="tbl tight">
+              <tr>
+                <th>零件号</th><th>车型</th><th>期间</th><th>基线量</th><th>修正量</th><th>偏离率</th><th>原因</th>
+                <th>结论</th><th>核定调整量</th><th>理由</th><th>已审?</th>
+              </tr>
+              <template x-for="r in chkForm.rows" :key="r.part_no + '|' + r.veh_model + '|' + r.period">
+                <tr :class="r.chk_result ? 'data' : ''">
+                  <td class="mono" x-text="r.part_no"></td>
+                  <td x-text="dash(r.veh_model)"></td>
+                  <td class="mono" x-text="r.period"></td>
+                  <td class="mono" x-text="fmt(r.base_qty)"></td>
+                  <td class="mono" x-text="fmt(r.adj_qty)"></td>
+                  <td class="mono" :class="r.adj_pct > 20 ? 'fg-red fg-bold' : ''" x-text="r.adj_pct ? r.adj_pct + '%' : ''"></td>
+                  <td style="font-size:11px" x-text="r.adj_reason_cat"></td>
+                  <td><select x-model="r.chk_result" style="width:80px; font-size:12px">
+                    <option value="">—</option><option>通过</option><option>退回</option>
+                  </select></td>
+                  <td><input type="number" step="0.01" x-model="r.chk_adj_qty" style="width:80px; font-size:12px" placeholder="可选"></td>
+                  <td><input x-model="r.chk_reason" style="width:140px; font-size:11px"
+                       :style="r.chk_result === '退回' && !r.chk_reason ? 'border-color:#dc2626' : ''"
+                       :placeholder="r.chk_result === '退回' ? '退回必填理由' : ''"></td>
+                  <td><span x-show="r.chk_result && r.submit_status" class="st" :class="r.chk_result === '通过' ? 'st-info' : 'st-dng'" x-text="r.chk_result === '通过' ? '已审' : '退回'"></span>
+                    <span x-show="!r.submit_status" class="muted" style="font-size:11px">未提交</span></td>
+                </tr>
+              </template>
+            </table>
+          </div>
+        </template>
+      </div>
+      <div class="modal-ft">
+        <div class="tagline" style="gap:8px">
+          <span class="muted" style="font-size:11px">退回须附书面理由，红色边框提醒</span>
+          <div class="right tagline" style="gap:8px">
+            <button class="b-ghost" @click="closeChk()">取消</button>
+            <button class="b-pri" :disabled="chkForm.busy" @click="submitChk()"
+              x-text="chkForm.busy ? '提交中…' : '批量提交核对'"></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 生成基线弹窗 -->
+  <div class="modal-mask" x-show="baselineGenForm.open" @click.self="closeGenBaseline()" x-cloak>
+    <div class="modal" style="max-width:700px">
+      <div class="modal-hd">
+        <div>
+          <div class="docno" x-text="'生成基线 · ' + baselineGenForm.proc_batch"></div>
+          <div class="sub">从 D03 拆解快照获取 true_qty，按推荐方法外推基线值 · GENERATE BASELINE</div>
+        </div>
+        <button class="x" @click="closeGenBaseline()">✕</button>
+      </div>
+      <div class="modal-bd">
+        <!-- 加载中 -->
+        <template x-if="baselineGenForm.loading">
+          <div class="loadbox"><span class="spin">◌</span><br>分析 D03 快照数据，匹配外推方法…</div>
+        </template>
+
+        <template x-if="!baselineGenForm.loading">
+          <div>
+            <div class="tagline mb8" x-show="baselineGenForm.groups.length">
+              <b x-text="'共 ' + baselineGenForm.groups.length + ' 个零件分组'"></b>
+              <span class="muted" x-text="'方法分布：' + baselineGenForm.summary"></span>
+              <button class="b-ghost b-sm right" @click="acceptAllBaselineRecommends()">采纳全部推荐</button>
+            </div>
+            <div x-show="!baselineGenForm.groups.length" class="empty" style="padding:20px">
+              未找到关联的收集单数据。<br>
+              <span class="muted">此批次可能是旧数据（缺少 collect_no），请重新在需求收集页面执行「拆解确认」以创建新批次。</span>
+            </div>
+            <div class="scroll-x">
+              <table class="tbl tight">
+                <tr>
+                  <th>零件号</th><th>车型</th><th>行数</th><th>D03拆解方法</th>
+                  <th>推荐外推</th><th style="width:120px">选用方法</th>
+                </tr>
+                <template x-for="g in baselineGenForm.groups" :key="g.part_no + '|' + g.veh_model">
+                  <tr>
+                    <td class="mono" x-text="g.part_no"></td>
+                    <td x-text="dash(g.veh_model)"></td>
+                    <td class="mono" x-text="g.line_count"></td>
+                    <td><span class="st" :class="g.decomp_method==='未拆解'?'st-dng':'st-info'" x-text="g.decomp_method"></span></td>
+                    <td><span class="st st-info" x-text="g.recommend"></span></td>
+                    <td>
+                      <select x-model="g.selected" style="width:110px; font-size:12px">
+                        <option>移动平均</option><option>指数平滑</option><option>阶跃外推</option>
+                      </select>
+                    </td>
+                  </tr>
+                </template>
+              </table>
+            </div>
+
+            <div class="mt12" style="font-size:12px; color:#666; padding:10px 14px; background:#fafafa; border-radius:4px; line-height:1.8">
+              <b style="font-size:13px">方法说明</b><br>
+              <b>移动平均</b> — 最近 N 期简单平均，适合平稳需求<br>
+              <b>指数平滑</b> — α=0.3 加权，近期权重高，适合趋势衰减<br>
+              <b>阶跃外推</b> — 检出永久跳变后用最新值，适合产能切换/爬坡
+            </div>
+          </div>
+        </template>
+
+        <!-- 执行结果 -->
+        <template x-if="baselineGenForm.result">
+          <div class="card mb0 mt12" style="background:#f0fdf4; border:1px solid #86efac">
+            <div class="bd" style="padding:12px 16px">
+              <div class="tagline">
+                <b style="color:#166534">基线生成完成</b>
+              </div>
+              <div x-text="'已生成 ' + baselineGenForm.result.lines_generated + ' 条基线明细'"></div>
+            </div>
+          </div>
+        </template>
+      </div>
+      <div class="modal-ft">
+        <div class="right tagline" style="gap:8px">
+          <button class="b-ghost" @click="closeGenBaseline()">关闭</button>
+          <button class="b-pri" :disabled="baselineGenForm.busy || baselineGenForm.loading" @click="runGenBaseline()"
+            x-text="baselineGenForm.busy ? '生成中…' : '开始生成基线'"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>

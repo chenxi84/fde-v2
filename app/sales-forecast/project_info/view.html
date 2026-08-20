@@ -1,0 +1,203 @@
+<div>
+  <!-- ══ 创建/编辑表单 ══ -->
+  <div class="collapse" :class="{open: form.show}">
+    <div class="card mb0">
+      <div class="hd">
+        <h3 x-text="form.mode === 'edit' ? ('编辑项目 · ' + form.edit_project_no) : '新建项目'"></h3>
+        <span class="hint">待定点 → 定点中 → 进行中 → EOP关闭</span>
+        <button class="b-ghost b-sm right" @click="closeForm()">收起</button>
+      </div>
+      <div class="bd">
+        <div class="frow">
+          <div><label class="f">项目编号 <span class="req">*</span></label>
+            <input x-model="form.project_no" :disabled="form.mode === 'edit'" placeholder="如 P2024-001"></div>
+          <div><label class="f">零件号 <span class="req">*</span></label>
+            <input x-model="form.part_no" :disabled="form.mode === 'edit'" placeholder="零件号"></div>
+          <div><label class="f">阶段</label>
+            <select x-model="form.stage">
+              <template x-for="s in stageOptions" :key="s">
+                <option :value="s" x-text="s"></option>
+              </template>
+            </select></div>
+          <div><label class="f">OEM 代码</label>
+            <input x-model="form.oem_code" placeholder="OEM 代码"></div>
+          <div style="display:flex; align-items:flex-end">
+            <button class="b-ghost b-sm" @click="form.more = !form.more"
+              x-text="form.more ? '收起字段 ▴' : '更多字段 ▾'"></button></div>
+        </div>
+        <div class="collapse" :class="{open: form.more}">
+          <div class="frow" style="padding-top:10px">
+            <div><label class="f">工厂代码</label>
+              <input x-model="form.plant_code" placeholder="工厂代码"></div>
+            <div><label class="f">车型</label>
+              <input x-model="form.veh_model" placeholder="车型"></div>
+            <div><label class="f">零件类型</label>
+              <input x-model="form.part_kind" placeholder="零件类型"></div>
+            <div><label class="f">SOP</label>
+              <input type="date" x-model="form.sop"></div>
+            <div><label class="f">EOP</label>
+              <input type="date" x-model="form.eop"></div>
+            <div><label class="f">销售负责人</label>
+              <input x-model="form.owner_sales" placeholder="负责人编号"></div>
+            <div><label class="f">生命周期状态</label>
+              <input x-model="form.lc_shape" placeholder="LC Shape"></div>
+          </div>
+        </div>
+        <div class="mt12 tagline">
+          <button class="b-pri right" :disabled="form.busy" @click="saveForm()"
+            x-text="form.busy ? '处理中…' : (form.mode === 'edit' ? '保存修改' : '创建项目')"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ 列表 ══ -->
+  <div class="card" :class="form.show ? 'mt12' : ''"><div class="bd" style="padding:0">
+    <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+      <b>项目清单</b>
+      <button class="b-pri b-sm" @click="openCreate()">＋ 新建项目</button>
+      <div class="right tagline" style="gap:8px; flex-wrap:wrap">
+        <div class="chips">
+          <template x-for="s in ['', '待定点', '定点中', '进行中', 'EOP关闭']" :key="s || '全部'">
+            <span class="fchip" :class="{on: fStage === s}"
+              @click="fStage = s; list.load(1)" x-text="s || '全部'"></span>
+          </template>
+        </div>
+        <input x-model="keyword" @keydown.enter="search()" placeholder="项目编号 / 零件号 / 车型" style="width:200px">
+        <button class="b-ghost b-sm" @click="search()">搜索</button>
+      </div>
+    </div>
+    <div class="scroll-x">
+      <table class="tbl tight">
+        <tr><th>项目编号</th><th>零件号</th><th>阶段</th><th>OEM</th><th>车型</th>
+          <th>零件类型</th><th>负责人</th><th class="mono">SOP</th><th class="mono">EOP</th><th class="right">操作</th></tr>
+        <template x-if="!list.items.length">
+          <tr><td colspan="10" class="empty" x-text="(fStage || keyword) ? '无匹配项目' : '暂无项目数据'"></td></tr>
+        </template>
+        <template x-for="d in list.items" :key="d.project_no + '|' + d.part_no">
+          <tr class="data">
+            <td><button class="b-link mono" @click="viewProject(d)" x-text="d.project_no"></button></td>
+            <td class="mono" x-text="dash(d.part_no)"></td>
+            <td><span class="st" :class="'st-' + hue(d.stage)" x-text="d.stage"></span></td>
+            <td x-text="dash(d.oem_code)"></td>
+            <td x-text="dash(d.veh_model)"></td>
+            <td x-text="dash(d.part_kind)"></td>
+            <td x-text="dash(d.owner_sales)"></td>
+            <td class="mono" x-text="dash(d.sop)"></td>
+            <td class="mono" x-text="dash(d.eop)"></td>
+            <td class="right rowact" style="white-space:nowrap">
+              <button class="b-ghost b-sm" @click="openEdit(d)">编辑</button>
+              <button class="b-ghost b-sm" @click="viewProject(d); openStageForm()">转阶段</button>
+            </td>
+          </tr>
+        </template>
+      </table>
+    </div>
+    <div class="tagline" style="padding:10px 16px">
+      <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+        <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+        <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+      </div>
+    </div>
+  </div></div>
+
+  <!-- ══ 详情模态 ══ -->
+  <div class="modal-mask" x-show="modal.open" @click.self="closeModal()"
+       @keydown.escape.window="closeModal()" x-cloak>
+    <div class="modal">
+      <div class="modal-hd">
+        <div><div class="docno" x-text="modal.d ? modal.d.project_no : '项目详情'"></div>
+          <div class="sub">量产项目生命周期 · PROJECT INFO</div></div>
+        <template x-if="modal.d">
+          <span class="st" :class="'st-' + hue(modal.d.stage)" x-text="modal.d.stage"></span>
+        </template>
+        <button class="x" @click="closeModal()">✕</button>
+      </div>
+      <div class="modal-bd">
+        <template x-if="modal.loading">
+          <div class="loadbox"><span class="spin">◌</span><br>载入项目明细…</div>
+        </template>
+        <template x-if="!modal.loading && modal.d">
+          <div>
+            <div class="sec">基本信息</div>
+            <div class="kv">
+              <div><div class="k">项目编号</div><div class="v mono" x-text="dash(modal.d.project_no)"></div></div>
+              <div><div class="k">零件号</div><div class="v mono" x-text="dash(modal.d.part_no)"></div></div>
+              <div><div class="k">阶段</div><div class="v"><span class="st" :class="'st-' + hue(modal.d.stage)" x-text="dash(modal.d.stage)"></span></div></div>
+              <div><div class="k">OEM 代码</div><div class="v mono" x-text="dash(modal.d.oem_code)"></div></div>
+              <div><div class="k">工厂代码</div><div class="v mono" x-text="dash(modal.d.plant_code)"></div></div>
+              <div><div class="k">车型</div><div class="v" x-text="dash(modal.d.veh_model)"></div></div>
+              <div><div class="k">零件类型</div><div class="v" x-text="dash(modal.d.part_kind)"></div></div>
+              <div><div class="k">销售负责人</div><div class="v mono" x-text="dash(modal.d.owner_sales)"></div></div>
+              <div><div class="k">生命周期状态</div><div class="v" x-text="dash(modal.d.lc_shape)"></div></div>
+            </div>
+
+            <div class="sec">时间节点</div>
+            <div class="kv">
+              <div><div class="k">SOP</div><div class="v mono" x-text="dash(modal.d.sop)"></div></div>
+              <div><div class="k">EOP</div><div class="v mono" x-text="dash(modal.d.eop)"></div></div>
+              <div><div class="k">创建时间</div><div class="v mono" x-text="fmtTime(modal.d.created_at)"></div></div>
+              <div><div class="k">更新时间</div><div class="v mono" x-text="fmtTime(modal.d.updated_at)"></div></div>
+            </div>
+
+            <!-- 阶段流转子模态 -->
+            <template x-if="stageForm.show">
+              <div>
+                <div class="sec">阶段流转</div>
+                <div class="frow">
+                  <div><label class="f">目标阶段 <span class="req">*</span></label>
+                    <select x-model="stageForm.new_stage">
+                      <option value="">— 选择目标阶段 —</option>
+                      <template x-for="s in stageOptions" :key="s">
+                        <option :value="s" x-text="s" :disabled="s === modal.d.stage"></option>
+                      </template>
+                    </select></div>
+                  <div style="grid-column: span 2"><label class="f">变更原因 <span class="req">*</span></label>
+                    <input x-model="stageForm.reason" placeholder="请填写阶段变更原因"></div>
+                  <div style="display:flex; align-items:flex-end">
+                    <button class="b-pri b-sm" :disabled="stageForm.busy" @click="saveStage()"
+                      x-text="stageForm.busy ? '处理中…' : '确认流转'"></button></div>
+                </div>
+              </div>
+            </template>
+
+            <!-- 变更日志 -->
+            <div class="sec" x-text="'变更日志 · ' + ((modal.d.change_log || []).length) + ' 条'"></div>
+            <div class="scroll-x">
+              <table class="tbl tight">
+                <tr><th>时间</th><th>操作</th><th>旧值</th><th>新值</th><th>原因</th><th>操作人</th></tr>
+                <template x-if="!(modal.d.change_log || []).length">
+                  <tr><td colspan="6" class="empty">暂无变更记录</td></tr>
+                </template>
+                <template x-for="l in modal.d.change_log || []" :key="l.change_at || ''">
+                  <tr>
+                    <td class="mono" x-text="fmtTime(l.change_at)"></td>
+                    <td x-text="dash(l.operation)"></td>
+                    <td x-text="dash(l.old_value)"></td>
+                    <td x-text="dash(l.new_value)"></td>
+                    <td x-text="dash(l.reason)"></td>
+                    <td x-text="dash(l.operator)"></td>
+                  </tr>
+                </template>
+              </table>
+            </div>
+
+            <details class="raw"><summary>原始数据</summary>
+              <pre class="json" x-text="JSON.stringify(modal.d, null, 2)"></pre></details>
+          </div>
+        </template>
+      </div>
+      <div class="modal-ft" x-show="modal.d">
+        <template x-if="modal.d">
+          <div class="tagline" style="gap:8px">
+            <button class="b-ghost" @click="openEdit(modal.d)">编辑</button>
+            <button class="b-pri" @click="openStageForm()" x-show="!stageForm.show">阶段流转</button>
+            <button class="b-ghost right" @click="closeModal()">关闭</button>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+</div>

@@ -293,7 +293,9 @@ def register(app):
     app.register_blueprint(users.bp)
     app.register_blueprint(auth_bp)
     app.before_request(gate)
-    app.after_request(inject_userbar)
+    # 右下角悬浮用户条（登录用户/用户管理/退出）按需求移除，不再注入；
+    # 用户名与退出仍在视图壳头部 .uchip 提供，用户管理经 /auth/users 或控制台进入。
+    # app.after_request(inject_userbar)
 
     logger.info("鉴权已启用 · 用户库 %s", users.DB_PATH)
     return app

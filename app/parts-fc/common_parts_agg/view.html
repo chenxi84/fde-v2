@@ -1,0 +1,302 @@
+<div>
+  <!-- 新建表单 -->
+  <div class="collapse" :class="{open: form.show}">
+    <div class="card mb0">
+      <div class="hd">
+        <h3>新建汇总单</h3>
+        <span class="hint">创建后需逐客户添加明细（add_detail），然后执行去重修正</span>
+        <button class="b-ghost b-sm right" @click="form.show = false; resetForm()">收起</button>
+      </div>
+      <div class="bd">
+        <div class="frow">
+          <div><label class="f">通用件号 <span class="req">*</span></label>
+            <div style="position:relative; flex:1">
+              <input x-model="form.part_no"
+                     @click.stop="toggleAuto('form_part_no','part_no')"
+                     @input="autoShow = 'form_part_no'; filterAuto('part_no', form.part_no)"
+                     placeholder="搜索零件号或名称..."
+                     autocomplete="off"
+                     style="width:100%">
+              <div class="auto-drop" x-show="autoShow==='form_part_no'" @click.away="autoShow=''"
+                   style="position:absolute; top:100%; left:0; right:0; max-height:240px; overflow-y:auto;
+                          background:#fff; border:1px solid #ccc; border-radius:4px; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,.1)">
+                <div x-show="!autoFiltered.length" style="padding:8px; color:#999">无匹配结果</div>
+                <template x-for="item in autoFiltered" :key="item['part_no']">
+                  <div @mousedown.prevent="selectAuto(item, form, 'part_no')"
+                       style="padding:6px 12px; cursor:pointer; border-bottom:1px solid #f0f0f0"
+                       @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+                    <div style="font-weight:500" x-text="item['part_no']"></div>
+                    <div style="font-size:12px; color:#888" x-text="autoDisplay[item['part_no']] || '—'"></div>
+                  </div>
+                </template>
+              </div>
+            </div></div>
+          <div><label class="f">期间 <span class="req">*</span></label>
+            <input x-model="form.period" placeholder="YYYY-MM"></div>
+        </div>
+        <div class="muted mt8">仅通用件进入（按 D01/D02 标记自动分流），专用件跳过</div>
+        <div class="mt12 tagline">
+          <button class="b-pri right" :disabled="form.busy" @click="saveForm()"
+            x-text="form.busy ? '处理中…' : '创建汇总单'"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 列表 -->
+  <div class="card" :class="form.show ? 'mt12' : ''"><div class="bd" style="padding:0">
+    <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+      <b>汇总单列表</b>
+      <button class="b-pri b-sm" @click="resetForm(); form.show = !form.show">＋ 新建汇总单</button>
+      <div class="right tagline" style="gap:8px; flex-wrap:wrap">
+        <div class="chips">
+          <template x-for="s in ['', '待汇总', '待修正', '已修正', '已确认']" :key="s || '全部'">
+            <span class="fchip" :class="{on: fStatus === s}"
+              @click="fStatus = s; list.load(1)" x-text="s || '全部'"></span>
+          </template>
+        </div>
+        <input x-model="fPartNo" @keydown.enter="search()" placeholder="零件号" style="width:120px">
+        <input x-model="fPeriod" @keydown.enter="search()" placeholder="YYYY-MM" style="width:100px">
+        <button class="b-ghost b-sm" @click="search()">查询</button>
+      </div>
+    </div>
+    <div class="scroll-x">
+      <table class="tbl tight">
+        <tr><th>汇总单号</th><th>零件号</th><th>期间</th><th class="num">汇总总量</th><th class="num">去重量</th><th class="num">去重率</th><th class="num">拆回量</th><th>状态</th><th>修正人</th><th>修正时间</th></tr>
+        <template x-if="!list.items.length">
+          <tr><td colspan="10" class="empty"
+            x-text="(fStatus || fPartNo || fPeriod) ? '无符合条件的汇总单' : '暂无汇总单 —— 点「新建汇总单」创建'"></td></tr>
+        </template>
+        <template x-for="d in list.items" :key="d.agg_no">
+          <tr class="data">
+            <td><button class="b-link mono" @click="viewAgg(d)" x-text="d.agg_no"></button></td>
+            <td class="mono" x-text="dash(d.part_no)"></td>
+            <td x-text="dash(d.period)"></td>
+            <td class="num" x-text="fmt(d.sum_qty)"></td>
+            <td class="num" x-text="fmt(d.dedup_qty)"></td>
+            <td class="num" x-text="d.dedup_pct != null ? (d.dedup_pct * 100).toFixed(1) + '%' : '—'"></td>
+            <td class="num" x-text="fmt(d.split_qty)"></td>
+            <td><span class="st" :class="'st-' + hue(d.status)" x-text="statusLabel(d.status)"></span></td>
+            <td x-text="dash(d.reviser)"></td>
+            <td class="mono" x-text="fmtTime(d.revise_time)"></td>
+          </tr>
+        </template>
+      </table>
+    </div>
+    <div class="tagline" style="padding:10px 16px">
+      <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+        <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+        <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+      </div>
+    </div>
+  </div></div>
+
+  <!-- 详情模态 -->
+  <div class="modal-mask" x-show="modal.open" @click.self="closeModal()"
+       @keydown.escape.window="closeModal()" x-cloak>
+    <div class="modal">
+      <div class="modal-hd">
+        <div>
+          <div class="docno" x-text="modal.d ? modal.d.header.agg_no : '通用件汇总单'"></div>
+          <div class="sub">通用件汇总修正 · COMMON PARTS AGGREGATION</div>
+        </div>
+        <template x-if="modal.d">
+          <span class="st" :class="'st-' + hue(modal.d.header.status)" x-text="statusLabel(modal.d.header.status)"></span>
+        </template>
+        <button class="x" @click="closeModal()">✕</button>
+      </div>
+      <div class="modal-bd">
+        <template x-if="modal.loading">
+          <div class="loadbox"><span class="spin">◌</span><br>载入汇总单明细…</div>
+        </template>
+        <template x-if="!modal.loading && modal.d">
+          <div>
+            <div class="sec">基本信息</div>
+            <div class="kv">
+              <div><div class="k">汇总单号</div><div class="v mono" x-text="dash(modal.d.header.agg_no)"></div></div>
+              <div><div class="k">零件号</div><div class="v mono" x-text="dash(modal.d.header.part_no)"></div></div>
+              <div><div class="k">期间</div><div class="v" x-text="dash(modal.d.header.period)"></div></div>
+            </div>
+
+            <div class="sec">汇总数据</div>
+            <div class="kv">
+              <div><div class="k">汇总总量</div><div class="v" x-text="fmt(modal.d.header.sum_qty)"></div></div>
+              <div><div class="k">锚参照</div><div class="v mono" style="max-height:120px;overflow:auto" x-text="tryParse(modal.d.header.anchor_ref) ? JSON.stringify(tryParse(modal.d.header.anchor_ref), null, 2) : dash()"></div></div>
+            </div>
+
+            <div class="sec">修正数据</div>
+            <div class="kv">
+              <div><div class="k">去重修正量</div><div class="v" x-text="fmt(modal.d.header.dedup_qty)"></div></div>
+              <div><div class="k">去重率</div><div class="v" x-text="modal.d.header.dedup_pct != null ? (modal.d.header.dedup_pct * 100).toFixed(1) + '%' : '—'"></div></div>
+              <div style="grid-column: span 2"><div class="k">折减依据</div><div class="v" x-text="dash(modal.d.header.dedup_reason)"></div></div>
+            </div>
+
+            <div class="sec">拆回分配</div>
+            <div class="kv">
+              <div style="grid-column: span 2"><div class="k">拆回分配</div><div class="v mono" style="max-height:120px;overflow:auto" x-text="tryParse(modal.d.header.split_qty) ? JSON.stringify(tryParse(modal.d.header.split_qty), null, 2) : dash()"></div></div>
+            </div>
+
+            <div class="sec">修正信息</div>
+            <div class="kv">
+              <div><div class="k">修正人</div><div class="v" x-text="dash(modal.d.header.reviser)"></div></div>
+              <div><div class="k">修正时间</div><div class="v mono" x-text="fmtTime(modal.d.header.revise_time)"></div></div>
+            </div>
+
+            <div class="sec">审计时间</div>
+            <div class="kv">
+              <div><div class="k">创建时间</div><div class="v mono" x-text="fmtTime(modal.d.header.created_at)"></div></div>
+              <div><div class="k">更新时间</div><div class="v mono" x-text="fmtTime(modal.d.header.updated_at)"></div></div>
+            </div>
+
+            <div class="sec" x-text="'客户份额明细 · ' + (modal.d.details || []).length + ' 条'"></div>
+            <div class="scroll-x">
+              <table class="tbl tight">
+                <tr><th>OEM 代码</th><th>归属销售</th><th class="num">核定值</th><th class="num">函件加码</th><th class="num">口头加码</th></tr>
+                <template x-if="!(modal.d.details || []).length">
+                  <tr><td colspan="5" class="empty">暂无客户明细</td></tr>
+                </template>
+                <template x-for="t in modal.d.details || []" :key="t.oem_code">
+                  <tr>
+                    <td class="mono" x-text="dash(t.oem_code)"></td>
+                    <td x-text="dash(t.owner_sales)"></td>
+                    <td class="num" x-text="fmt(t.approved_qty)"></td>
+                    <td class="num" x-text="fmt(t.evidence_qty)"></td>
+                    <td class="num" x-text="fmt(t.verbal_qty)"></td>
+                  </tr>
+                </template>
+              </table>
+            </div>
+
+            <!-- 添加明细表单 -->
+            <template x-if="detailForm.show && (modal.d.header.status === '待汇总' || modal.d.header.status === '待修正')">
+              <div>
+                <div class="sec">添加客户明细</div>
+                <div class="frow">
+                  <div><label class="f">OEM代码 <span class="req">*</span></label>
+                    <div style="position:relative; flex:1">
+                      <input x-model="detailForm.oem_code"
+                             @click.stop="toggleAuto('detail_oem_code','customer_code')"
+                             @input="autoShow = 'detail_oem_code'; filterAuto('customer_code', detailForm.oem_code)"
+                             placeholder="搜索OEM编码或名称..."
+                             autocomplete="off"
+                             style="width:100%">
+                      <div class="auto-drop" x-show="autoShow==='detail_oem_code'" @click.away="autoShow=''"
+                           style="position:absolute; top:100%; left:0; right:0; max-height:240px; overflow-y:auto;
+                                  background:#fff; border:1px solid #ccc; border-radius:4px; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,.1)">
+                        <div x-show="!autoFiltered.length" style="padding:8px; color:#999">无匹配结果</div>
+                        <template x-for="item in autoFiltered" :key="item['customer_code']">
+                          <div @mousedown.prevent="selectAuto(item, detailForm, 'oem_code', 'customer_code')"
+                               style="padding:6px 12px; cursor:pointer; border-bottom:1px solid #f0f0f0"
+                               @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+                            <div style="font-weight:500" x-text="item['customer_code']"></div>
+                            <div style="font-size:12px; color:#888" x-text="autoDisplay[item['customer_code']] || '—'"></div>
+                          </div>
+                        </template>
+                      </div>
+                    </div></div>
+                  <div><label class="f">归属销售 <span class="req">*</span></label>
+                    <div style="position:relative; flex:1">
+                      <input x-model="detailForm.owner_sales"
+                             @click.stop="toggleAuto('detail_owner_sales','user_code')"
+                             @input="autoShow = 'detail_owner_sales'; filterAuto('user_code', detailForm.owner_sales)"
+                             placeholder="搜索用户编码或名称..."
+                             autocomplete="off"
+                             style="width:100%">
+                      <div class="auto-drop" x-show="autoShow==='detail_owner_sales'" @click.away="autoShow=''"
+                           style="position:absolute; top:100%; left:0; right:0; max-height:240px; overflow-y:auto;
+                                  background:#fff; border:1px solid #ccc; border-radius:4px; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,.1)">
+                        <div x-show="!autoFiltered.length" style="padding:8px; color:#999">无匹配结果</div>
+                        <template x-for="item in autoFiltered" :key="item['user_code']">
+                          <div @mousedown.prevent="selectAuto(item, detailForm, 'owner_sales')"
+                               style="padding:6px 12px; cursor:pointer; border-bottom:1px solid #f0f0f0"
+                               @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+                            <div style="font-weight:500" x-text="item['user_code']"></div>
+                            <div style="font-size:12px; color:#888" x-text="autoDisplay[item['user_code']] || '—'"></div>
+                          </div>
+                        </template>
+                      </div>
+                    </div></div>
+                  <div><label class="f">核定值 <span class="req">*</span></label>
+                    <input type="number" x-model="detailForm.approved_qty"></div>
+                  <div><label class="f">函件加码</label>
+                    <input type="number" x-model="detailForm.evidence_qty"></div>
+                  <div><label class="f">口头加码</label>
+                    <input type="number" x-model="detailForm.verbal_qty"></div>
+                  <div style="display:flex; align-items:flex-end">
+                    <button class="b-pri b-sm" :disabled="detailForm.busy" @click="submitDetail()"
+                      x-text="detailForm.busy ? '提交中…' : '添加'"></button></div>
+                </div>
+              </div>
+            </template>
+
+            <!-- 去重修正表单 -->
+            <template x-if="dedup.show && (modal.d.header.status === '待汇总' || modal.d.header.status === '待修正' || modal.d.header.status === '已修正')">
+              <div>
+                <div class="sec">去重修正（差异化折减 + 三件套登记）</div>
+                <div class="frow">
+                  <div><label class="f">修正后总量 <span class="req">*</span></label>
+                    <input type="number" x-model="dedup.dedup_qty"></div>
+                  <div><label class="f">锚参照 (JSON)</label>
+                    <input x-model="dedup.anchor_ref" placeholder='{"ref_period":"2026-07","ref_qty":30000}'></div>
+                  <div style="grid-column: span 2"><label class="f">折减逻辑与依据 <span class="req">*</span>（至少50字）</label>
+                    <input x-model="dedup.dedup_reason" placeholder="登记三件套：锚对比 / 虚高判别 / 差异化折减逻辑，至少50字"></div>
+                  <div style="display:flex; align-items:flex-end">
+                    <button class="b-pri b-sm" :disabled="dedup.busy" @click="submitDedup()"
+                      x-text="dedup.busy ? '提交中…' : '执行修正'"></button></div>
+                </div>
+                <div class="muted mt8">折减必有依据（BR-02）· 至少50字 · 承诺量保护：函件/承诺部分不参与折减</div>
+              </div>
+            </template>
+
+            <!-- 拆回分配表单 -->
+            <template x-if="split.show && modal.d.header.status === '已修正'">
+              <div>
+                <div class="sec">拆回分配（修正总量落回客户维度）</div>
+                <div class="frow">
+                  <div style="grid-column: span 3"><label class="f">拆回分配详情 <span class="req">*</span> (JSON)</label>
+                    <textarea x-model="split.split_detail" rows="4" placeholder='[{"oem_code":"OEM-A","qty":15000},...]'></textarea></div>
+                  <div style="display:flex; align-items:flex-end">
+                    <button class="b-pri b-sm" :disabled="split.busy" @click="submitSplit()"
+                      x-text="split.busy ? '提交中…' : '提交拆回'"></button></div>
+                </div>
+              </div>
+            </template>
+
+            <details class="raw"><summary>原始数据</summary>
+              <pre class="json" x-text="JSON.stringify(modal.d, null, 2)"></pre></details>
+          </div>
+        </template>
+      </div>
+      <div class="modal-ft" x-show="modal.d">
+        <template x-if="modal.d">
+          <div class="tagline" style="gap:8px">
+            <template x-if="(modal.d.header.status === '待汇总' || modal.d.header.status === '待修正') && !detailForm.show">
+              <button class="b-pri" @click="openDetailForm()">添加明细</button>
+            </template>
+            <template x-if="detailForm.show">
+              <button class="b-ghost" @click="detailForm.show = false">收起明细</button>
+            </template>
+            <template x-if="(modal.d.header.status === '待汇总' || modal.d.header.status === '待修正' || modal.d.header.status === '已修正') && !dedup.show">
+              <button class="b-pri" @click="openDedup()">去重修正</button>
+            </template>
+            <template x-if="dedup.show">
+              <button class="b-ghost" @click="dedup.show = false">收起修正</button>
+            </template>
+            <template x-if="modal.d.header.status === '已修正' && !split.show">
+              <button class="b-pri" @click="openSplit()">拆回分配</button>
+            </template>
+            <template x-if="split.show">
+              <button class="b-ghost" @click="split.show = false">收起拆回</button>
+            </template>
+            <button class="b-pri" x-show="modal.d.header.status === '已修正'"
+              @click="confirmAgg()">确认（转入牛鞭修正）</button>
+            <span class="muted" x-show="modal.d.header.status === '已确认'">已确认 · 不可操作</span>
+            <button class="b-ghost right" @click="closeModal()">关闭</button>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+</div>

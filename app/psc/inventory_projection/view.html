@@ -1,0 +1,349 @@
+<style>
+  /* 单物料库存推移日历视图（本页局部样式） */
+  .tbl th.num { text-align: right; }   /* 列表数字列表头右对齐，与 td.num 数字对齐 */
+  .cal-tbl { table-layout: fixed; min-width: 680px; }
+  .cal-tbl th { text-align: center; }
+  .cal-tbl td.cal-cell { height: 84px; min-width: 100px; vertical-align: top; border: 1px solid var(--line); padding: 4px; }
+  .cal-tbl td.cal-out { background: #fafafa !important; }
+  .cal-cell .cal-inner { display: flex; flex-direction: column; height: 100%; }
+  .cal-cell .cal-inner.cal-click { cursor: pointer; }
+  .cal-cell .cal-inner.cal-click:hover { opacity: .85; }
+  .cal-cell .cal-day { font-size: 16px; color: var(--muted); line-height: 1.2; }
+  .cal-cell.cal-today { outline: 2px solid #0b57d0; outline-offset: -2px; }
+  .cal-cell.cal-today .cal-day { font-weight: 700; color: #0b57d0; }
+  .cal-cell .cal-nums { display: flex; flex-direction: column; gap: 1px; margin-top: 2px; }
+  .cal-cell .cal-item { display: flex; justify-content: space-between; gap: 4px; font-size: 11px; line-height: 1.35; }
+  .cal-cell .cal-item.cal-main { font-size: 13px; }
+  .cal-cell .cal-lbl { color: var(--muted); white-space: nowrap; }
+  .cal-cell .cal-item.cal-main .cal-lbl { color: #333; }
+  .cal-cell .cal-val { font-weight: 600; }
+  .cal-cell .cal-val.cal-main { font-size: 16px; font-weight: 700; color: #0b57d0; }
+  .cal-cell .cal-val.cal-main.cal-neg { color: #b91c1c; }
+  .cal-cell .cal-val.cal-neg { color: #b91c1c; }
+</style>
+<div class="card mt12"><div class="bd" style="padding:0">
+  <!-- ══ 过滤区：标题 + 视图切换 + 预警六态 chips + 物料 autocomplete + 日期（与 list 参数一一对应；契约无 keyword，不设搜索框） ══ -->
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>库存推移表</b>
+    <span class="muted" style="font-size:12px">逐日推演未来 3 个月库存水位 · 已结束日隐藏不删除</span>
+    <div class="right tagline" style="gap:8px; flex-wrap:wrap">
+      <div class="chips">
+        <span class="fchip" :class="{on: viewMode === 'list'}" @click="switchView('list')">列表</span>
+        <span class="fchip" :class="{on: viewMode === 'cal'}" @click="switchView('cal')">日历</span>
+      </div>
+      <template x-if="viewMode === 'list'">
+        <div class="tagline" style="gap:8px; flex-wrap:wrap">
+          <div class="chips">
+            <template x-for="s in ['', '无', '缺货', '击穿最低', '击穿安全', '呆滞', '超储']" :key="s || '全部'">
+              <span class="fchip" :class="{on: fAlert === s}" @click="fAlert = s; search()" x-text="s || '全部'"></span>
+            </template>
+          </div>
+          <div style="position:relative">
+            <input x-model="fMaterial"
+                   @click.stop="openAc('filter')"
+                   @input="acShow = 'filter'; filterMat(fMaterial)"
+                   placeholder="物料号 / 名称…" autocomplete="off" style="width:180px">
+            <div x-show="acShow === 'filter'" @click.away="acShow = ''"
+                 style="position:absolute; top:100%; left:0; right:0; max-height:240px; overflow-y:auto;
+                        background:#fff; border:1px solid var(--line); border-radius:7px; z-index:50; box-shadow:var(--shadow)">
+              <div x-show="!matFiltered.length" style="padding:8px 12px; color:var(--muted)">无匹配物料</div>
+              <template x-for="no in matFiltered" :key="no">
+                <div @mousedown.prevent="pickMat(no)"
+                     style="padding:6px 12px; cursor:pointer; border-bottom:1px solid var(--line)"
+                     @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+                  <div style="font-weight:600" x-text="no"></div>
+                  <div style="font-size:12px; color:var(--muted)" x-text="matName(no)"></div>
+                </div>
+              </template>
+            </div>
+          </div>
+          <input x-model="fBizDate" @keydown.enter="search()" placeholder="YYYY-MM-DD" style="width:130px">
+          <button class="b-ghost b-sm" @click="search()">查询</button>
+          <button class="b-ghost b-sm" @click="resetFilters()">重置</button>
+        </div>
+      </template>
+    </div>
+  </div>
+  <!-- ══ 工具栏：两个计算触发入口（自动参考创建，无新建/编辑/删除） ══ -->
+  <div class="tagline" style="padding:0 16px 12px">
+    <span class="muted" style="font-size:12px">计算触发：</span>
+    <button class="b-pri b-sm" @click="openOp('refresh')">🌊 刷新</button>
+    <button class="b-pri b-sm" @click="openOp('batch')">🌊 批量刷新</button>
+  </div>
+  <!-- ══ 列表视图：表格 + 分页（列 ⊆ 详情字段集） ══ -->
+  <div x-show="viewMode === 'list'">
+    <div class="scroll-x">
+      <table class="tbl tight">
+        <tr>
+          <th>物料号</th><th>日期</th><th class="num">预计入库量</th><th class="num">预计出库量</th>
+          <th class="num">库存余额</th><th>预警类型</th>
+        </tr>
+        <template x-if="!visibleItems.length"><tr><td colspan="6" class="empty">无匹配数据</td></tr></template>
+        <template x-for="d in visibleItems" :key="d.material_no + '|' + d.biz_date">
+          <tr class="data" :style="d.alert_type !== '无' ? 'background:#fdf3e3' : ''">
+            <td>
+              <button class="b-link mono" @click="viewX(d)" x-text="d.material_no"></button>
+              <template x-if="matName(d.material_no)">
+                <div class="muted" style="font-size:11px" x-text="matName(d.material_no)"></div>
+              </template>
+            </td>
+            <td class="mono" x-text="d.biz_date"></td>
+            <td class="num" x-text="fmt(d.inbound_qty)"></td>
+            <td class="num" x-text="fmt(d.outbound_qty)"></td>
+            <td class="num" :style="d.balance < 0 ? 'color:#b91c1c' : ''" x-text="fmt(d.balance)"></td>
+            <td><span class="st" :class="'st-' + alertHue(d.alert_type)" x-text="d.alert_type"></span></td>
+          </tr>
+        </template>
+      </table>
+    </div>
+    <div class="tagline" style="padding:10px 16px">
+      <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+        <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+        <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ 日历视图：单物料月历（余额 + 入/出小字，按预警上色，严格从今天起） ══ -->
+  <div x-show="viewMode === 'cal'">
+    <div class="tagline" style="padding:0 16px 12px; gap:8px; flex-wrap:wrap">
+      <span class="muted" style="font-size:12px">物料：</span>
+      <div style="position:relative">
+        <input :value="cal.material_no"
+               @click.stop="openAc('cal')"
+               @input="cal.material_no = $event.target.value; openAc('cal')"
+               @keydown.enter="loadCal()"
+               placeholder="搜索物料号 / 名称…" autocomplete="off" style="width:200px">
+        <div x-show="acShow === 'cal'" @click.away="acShow = ''"
+             style="position:absolute; top:100%; left:0; right:0; max-height:240px; overflow-y:auto;
+                    background:#fff; border:1px solid var(--line); border-radius:7px; z-index:50; box-shadow:var(--shadow)">
+          <div x-show="!matFiltered.length" style="padding:8px 12px; color:var(--muted)">无匹配物料</div>
+          <template x-for="no in matFiltered" :key="no">
+            <div @mousedown.prevent="pickMat(no)"
+                 style="padding:6px 12px; cursor:pointer; border-bottom:1px solid var(--line)"
+                 @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+              <div style="font-weight:600" x-text="no"></div>
+              <div style="font-size:12px; color:var(--muted)" x-text="matName(no)"></div>
+            </div>
+          </template>
+        </div>
+      </div>
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost b-sm" @click="calShift(-1)">◀ 上月</button>
+        <span class="mono" style="font-weight:600" x-text="cal.month"></span>
+        <button class="b-ghost b-sm" @click="calShift(1)">下月 ▶</button>
+        <button class="b-ghost b-sm" @click="calThisMonth()">回到本月</button>
+      </div>
+    </div>
+
+    <!-- 三层水位（选料后自动显示：最低/安全/组批上限） -->
+    <div class="tagline" style="padding:0 16px 10px; gap:16px; flex-wrap:wrap" x-show="cal.material_no">
+      <span class="muted" style="font-size:12px">库存水位</span>
+      <span style="font-size:12px">最低 <b class="mono" x-text="cal.water ? fmt(cal.water.min_level) : '—'"></b></span>
+      <span style="font-size:12px">安全 <b class="mono" x-text="cal.water ? fmt(cal.water.safety_level) : '—'"></b></span>
+      <span style="font-size:12px">组批上限 <b class="mono" x-text="cal.water ? fmt(cal.water.batch_level) : '—'"></b></span>
+      <span class="muted" style="font-size:11px" x-show="!cal.water">暂无库存策略水位（该物料未计算库存策略）</span>
+    </div>
+
+    <div class="scroll-x" style="padding:0 16px 12px">
+      <table class="tbl tight cal-tbl">
+        <tr><th>周一</th><th>周二</th><th>周三</th><th>周四</th><th>周五</th><th>周六</th><th>周日</th></tr>
+        <template x-for="(week, wi) in calWeeks" :key="wi">
+          <tr>
+            <template x-for="(c, ci) in week" :key="c.ds || ('pad-' + wi + '-' + ci)">
+              <td class="cal-cell" :class="{ 'cal-today': c.ds === today, 'cal-out': !c.d }"
+                  :style="c.row ? ('background:' + calBg(c.row)) : ''">
+                <template x-if="c.d">
+                  <div class="cal-inner" :class="{ 'cal-click': c.row }" @click="c.row && viewX(c.row)">
+                    <div class="cal-day" x-text="c.d.getDate()"></div>
+                    <template x-if="c.row">
+                      <div class="cal-nums">
+                        <div class="cal-item cal-main"><span class="cal-lbl">预计库存量</span><b class="cal-val cal-main" :class="calNeg(c.row)" x-text="fmt(c.row.balance)"></b></div>
+                        <div class="cal-item"><span class="cal-lbl">预计入库量</span><span class="cal-val" x-text="fmt(c.row.inbound_qty)"></span></div>
+                        <div class="cal-item"><span class="cal-lbl">预计出库量</span><span class="cal-val" x-text="fmt(c.row.outbound_qty)"></span></div>
+                      </div>
+                    </template>
+                  </div>
+                </template>
+              </td>
+            </template>
+          </tr>
+        </template>
+      </table>
+    </div>
+    <div class="tagline" style="padding:0 16px 12px">
+      <span class="muted" style="font-size:12px" x-show="!cal.material_no">请先选择物料</span>
+      <span class="muted" style="font-size:12px" x-show="cal.material_no && !cal.rows.length && !cal.loading">该物料暂无推移记录（请先刷新）</span>
+      <span class="muted" style="font-size:12px" x-show="cal.loading">载入中…</span>
+      <div class="right muted" style="font-size:11px">红=缺货/击穿 · 橙=击穿安全/超储 · 白=无 · 今日蓝框</div>
+    </div>
+  </div>
+</div></div>
+
+<!-- ════════════ 详情模态（查全：get 六字段） ════════════ -->
+<div class="modal-mask" x-show="modalX.open" @click.self="closeX()"
+     @keydown.escape.window="closeX()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div><div class="docno" x-text="modalX.d ? modalX.d.material_no : '库存推移表'"></div>
+        <div class="sub" x-text="modalX.d ? (modalX.d.biz_date + ' · 库存推移表 · INVENTORY PROJECTION') : '库存推移表 · INVENTORY PROJECTION'"></div></div>
+      <template x-if="modalX.d">
+        <span class="st" :class="'st-' + alertHue(modalX.d.alert_type)" x-text="modalX.d.alert_type"></span>
+      </template>
+      <button class="x" @click="closeX()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <template x-if="modalX.loading">
+        <div class="loadbox"><span class="spin">◌</span><br>载入明细…</div>
+      </template>
+      <template x-if="!modalX.loading && modalX.d">
+        <div>
+          <div class="sec">基本信息</div>
+          <div class="kv">
+            <div><div class="k">物料号</div><div class="v mono" x-text="dash(modalX.d.material_no)"></div>
+              <div class="muted" style="font-size:11px">引用 md_material 主数据</div></div>
+            <div><div class="k">业务日期</div><div class="v mono" x-text="dash(modalX.d.biz_date)"></div>
+              <div class="muted" style="font-size:11px">物料号 + 日期复合主键 · 全局唯一</div></div>
+          </div>
+
+          <div class="sec">数量信息</div>
+          <div class="kv">
+            <div><div class="k">预计入库量</div><div class="v mono" x-text="fmt(modalX.d.inbound_qty)"></div>
+              <div class="muted" style="font-size:11px">主计划月度需求 + 在途工单</div></div>
+            <div><div class="k">预计出库量</div><div class="v mono" x-text="fmt(modalX.d.outbound_qty)"></div>
+              <div class="muted" style="font-size:11px">当日调拨到客户仓的调拨单合计</div></div>
+            <div><div class="k">库存余额</div>
+              <div class="v mono" :style="modalX.d.balance < 0 ? 'color:#b91c1c' : ''" x-text="fmt(modalX.d.balance)"></div>
+              <div class="muted" style="font-size:11px">逐日递推 = 上日余额 + 入库 − 出库</div></div>
+          </div>
+
+          <div class="sec">预警信息</div>
+          <div class="kv">
+            <div><div class="k">预警类型</div>
+              <div class="v"><span class="st" :class="'st-' + alertHue(modalX.d.alert_type)" x-text="dash(modalX.d.alert_type)"></span></div>
+              <div class="muted" style="font-size:11px">scan_alert 对照水位线回填 · 缺货 &gt; 击穿最低 &gt; 击穿安全取最严重</div></div>
+          </div>
+
+          <details class="raw"><summary>原始数据</summary>
+            <pre class="json" x-text="JSON.stringify(modalX.d, null, 2)"></pre></details>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft" x-show="modalX.d">
+      <template x-if="modalX.d">
+        <div class="tagline" style="gap:8px">
+          <button class="b-ghost" @click="closeX()">关闭</button>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ 操作弹窗（刷新 / 批量刷新 / 扫描预警；自动参考创建，无业务单据表单） ════════════ -->
+<div class="modal-mask" x-show="op.open" @click.self="closeOp()"
+     @keydown.escape.window="closeOp()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div>
+        <div class="docno" x-text="op.kind === 'refresh' ? '单物料刷新' : '批量刷新'"></div>
+        <div class="sub">库存推移表 · INVENTORY PROJECTION</div>
+      </div>
+      <button class="x" @click="closeOp()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <!-- 刷新 refresh(material_no*, biz_date*, opening_stock?) -->
+      <template x-if="op.kind === 'refresh'">
+        <div>
+          <div class="frow">
+            <div><label class="f">物料 <span class="req">*</span></label>
+              <div style="position:relative">
+                <input x-model="op.mat"
+                       @click.stop="openAc('op')"
+                       @input="acShow = 'op'; filterMat(op.mat)"
+                       placeholder="搜索物料号或名称…" autocomplete="off" style="width:100%">
+                <div x-show="acShow === 'op'" @click.away="acShow = ''"
+                     style="position:absolute; top:100%; left:0; right:0; max-height:240px; overflow-y:auto;
+                            background:#fff; border:1px solid var(--line); border-radius:7px; z-index:50; box-shadow:var(--shadow)">
+                  <div x-show="!matFiltered.length" style="padding:8px 12px; color:var(--muted)">暂无可选物料</div>
+                  <template x-for="no in matFiltered" :key="no">
+                    <div @mousedown.prevent="pickMat(no)"
+                         style="padding:6px 12px; cursor:pointer; border-bottom:1px solid var(--line)"
+                         @mouseenter="$el.style.background='#f5f5f5'" @mouseleave="$el.style.background=''">
+                      <div style="font-weight:600" x-text="no"></div>
+                      <div style="font-size:12px; color:var(--muted)" x-text="matName(no)"></div>
+                    </div>
+                  </template>
+                </div>
+              </div></div>
+            <div><label class="f">推演起始日期 <span class="req">*</span></label>
+              <input type="date" x-model="op.bizDate"></div>
+            <div><label class="f">期初库存 <span class="muted" style="font-weight:400;font-size:11px">可选</span></label>
+              <input type="number" x-model="op.opening" placeholder="留空取 ERP 自有仓库存"></div>
+          </div>
+          <div class="muted mt12" style="font-size:11px">以 ERP 库存为锚点，对单物料逐日推演未来 3 个月水位并落盘</div>
+        </div>
+      </template>
+
+      <!-- 批量刷新 refresh_batch(biz_date?, material_nos?)：自动当天 + 全量物料，无输入项 -->
+      <template x-if="op.kind === 'batch'">
+        <div>
+          <div class="muted" style="font-size:12px;line-height:1.7">
+            自动以<b>当天</b>为推演起始日期、<b>全量「正常」状态物料</b>为范围，逐物料刷新未来 3 个月推移表，
+            并联动预警扫描：击穿水位（缺货/击穿最低/击穿安全）时<b>自动创建需求池补库单</b>，无需人工确认。
+          </div>
+
+          <!-- 批量结果摘要（成功后保持打开供查看） -->
+          <template x-if="op.summary">
+            <div>
+              <div class="sec">刷新结果摘要</div>
+              <div class="kv">
+                <div><div class="k">物料总数</div><div class="v mono" x-text="op.summary.total"></div></div>
+                <div><div class="k">成功</div><div class="v mono" x-text="op.summary.success"></div></div>
+                <div><div class="k">失败</div><div class="v mono" x-text="op.summary.fail"></div></div>
+                <div><div class="k">自动补库单</div><div class="v mono" x-text="(op.summary.replenishments || []).length + ' 张'"></div></div>
+              </div>
+
+              <div class="mt12">
+                <div class="muted" style="font-size:11px" x-text="'成功物料（' + batchSuccessMats.length + '）：'"></div>
+                <div x-show="!batchSuccessMats.length" class="muted" style="font-size:12px">无</div>
+                <div class="chips" style="margin-top:4px">
+                  <template x-for="no in batchSuccessMats" :key="'ok|' + no">
+                    <span class="fchip on" x-text="no"></span>
+                  </template>
+                </div>
+              </div>
+
+              <div class="mt12">
+                <div class="muted" style="font-size:11px" x-text="'失败物料（' + (op.summary.errors || []).length + '）：'"></div>
+                <div x-show="!(op.summary.errors || []).length" class="muted" style="font-size:12px">无</div>
+                <template x-for="e in (op.summary.errors || [])" :key="'err|' + (e.material_no || '') + '|' + (e.message || '')">
+                  <div class="muted" style="font-size:12px" x-text="(e.material_no || '') + '：' + (e.message || '')"></div>
+                </template>
+              </div>
+
+              <div class="mt12">
+                <div class="muted" style="font-size:11px" x-text="'触发补库的物料（' + batchReplenishMats.length + '）：'"></div>
+                <div x-show="!batchReplenishMats.length" class="muted" style="font-size:12px">无（未击穿水位）</div>
+                <div class="chips" style="margin-top:4px">
+                  <template x-for="r in batchReplenishMats" :key="'rp|' + r.material_no">
+                    <span class="fchip" x-text="r.material_no + ' × ' + r.count + ' 张'"></span>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+      </template>
+
+    </div>
+    <div class="modal-ft">
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost" @click="closeOp()" x-text="op.summary ? '关闭' : '取消'"></button>
+        <button class="b-pri" x-show="!op.summary" :disabled="op.busy" @click="submitOp()"
+          x-text="op.busy ? '处理中…' : (op.kind === 'refresh' ? '开始推演' : '批量刷新')"></button>
+      </div>
+    </div>
+  </div>
+</div>

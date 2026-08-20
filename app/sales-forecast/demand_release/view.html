@@ -1,0 +1,117 @@
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>需求发布台账</b>
+    <span class="muted">冻结口径R版下达 · 净需求唯一输入 · 加工链终点</span>
+    <div class="right tagline" style="gap:8px; flex-wrap:wrap">
+      <div class="chips">
+        <template x-for="s in ['', '草稿', '待发布', '已发布', '已替代']" :key="s || '全部'">
+          <span class="fchip" :class="{on: fStatus === s}"
+            @click="fStatus = s; list.load(1)" x-text="s || '全部'"></span>
+        </template>
+      </div>
+      <button class="b-ghost b-sm" @click="search()">刷新</button>
+    </div>
+  </div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr>
+        <th>发布单号</th><th>发布版本</th><th>基准期间</th><th>状态</th><th>发布人</th><th>发布日期</th><th class="right">操作</th>
+      </tr>
+      <template x-if="!list.items.length"><tr><td colspan="7" class="empty">无匹配数据</td></tr></template>
+      <template x-for="d in list.items" :key="d.rel_no">
+        <tr class="data">
+          <td><button class="b-link mono" @click="viewX(d)" x-text="d.rel_no"></button></td>
+          <td class="mono" x-text="dash(d.rel_version)"></td>
+          <td x-text="dash(d.base_period)"></td>
+          <td><span class="st" :class="'st-' + hue(d.status)" x-text="statusLabel(d.status)"></span></td>
+          <td x-text="dash(d.publisher)"></td>
+          <td class="mono" x-text="dash(d.publish_date)"></td>
+          <td class="right rowact">
+            <button class="b-pri b-sm" x-show="d.status === '草稿'" @click="checklistVerify(d)">Checklist 校验</button>
+            <button class="b-pri b-sm" x-show="d.status === '待发布'" @click="publish(d)">发布</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:10px 16px">
+    <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+    <div class="right tagline" style="gap:8px">
+      <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+      <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+      <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- 详情模态 -->
+<div class="modal-mask" x-show="modalX.open" @click.self="closeX()"
+     @keydown.escape.window="closeX()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div>
+        <div class="docno" x-text="modalX.d ? modalX.d.header.rel_no : '发布单详情'"></div>
+        <div class="sub">需求发布详情 · DEMAND RELEASE</div>
+      </div>
+      <template x-if="modalX.d">
+        <span class="st" :class="'st-' + hue(modalX.d.header.status)" x-text="statusLabel(modalX.d.header.status)"></span>
+      </template>
+      <button class="x" @click="closeX()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <template x-if="modalX.loading">
+        <div class="loadbox"><span class="spin">◌</span><br>载入发布单明细…</div>
+      </template>
+      <template x-if="!modalX.loading && modalX.d">
+        <div>
+          <div class="sec">单头信息</div>
+          <div class="kv">
+            <div><div class="k">发布单号</div><div class="v mono" x-text="dash(modalX.d.header.rel_no)"></div></div>
+            <div><div class="k">状态</div><div class="v"><span class="st" :class="'st-' + hue(modalX.d.header.status)" x-text="statusLabel(modalX.d.header.status)"></span></div></div>
+            <div><div class="k">发布版本</div><div class="v mono" x-text="dash(modalX.d.header.rel_version)"></div></div>
+            <div><div class="k">基准期间</div><div class="v mono" x-text="dash(modalX.d.header.base_period)"></div></div>
+            <div><div class="k">上一版本</div><div class="v mono" x-text="dash(modalX.d.header.prev_version)"></div></div>
+            <div><div class="k">发布人</div><div class="v" x-text="dash(modalX.d.header.publisher)"></div></div>
+            <div><div class="k">发布日期</div><div class="v mono" x-text="dash(modalX.d.header.publish_date)"></div></div>
+          </div>
+
+          <div class="sec">发布明细（<span x-text="modalX.d.details ? modalX.d.details.length : 0"></span> 行）</div>
+          <div class="scroll-x">
+            <table class="tbl tight">
+              <tr><th>行号</th><th>零件号</th><th>车型</th><th>期间</th><th>消耗驱动量</th><th>事件项</th><th>发布量</th><th>依据</th></tr>
+              <template x-if="!modalX.d.details || !modalX.d.details.length">
+                <tr><td colspan="8" class="empty">暂无明细</td></tr>
+              </template>
+              <template x-for="d in modalX.d.details" :key="d.line_no">
+                <tr>
+                  <td class="mono" x-text="d.line_no"></td>
+                  <td class="mono" x-text="dash(d.part_no)"></td>
+                  <td x-text="dash(d.veh_model)"></td>
+                  <td class="mono" x-text="dash(d.period)"></td>
+                  <td class="mono" x-text="fmt(d.cons_qty)"></td>
+                  <td class="mono" x-text="dash(d.event_items)"></td>
+                  <td class="mono" x-text="fmt(d.rel_qty)"></td>
+                  <td x-text="dash(d.basis)"></td>
+                </tr>
+              </template>
+            </table>
+          </div>
+
+          <details class="raw"><summary>原始数据</summary>
+            <pre class="json" x-text="JSON.stringify(modalX.d, null, 2)"></pre>
+          </details>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft" x-show="modalX.d">
+      <template x-if="modalX.d">
+        <div class="tagline" style="gap:8px">
+          <span class="muted" x-show="modalX.d.header.status === '已发布' || modalX.d.header.status === '已替代'"
+            x-text="'当前状态：' + statusLabel(modalX.d.header.status)"></span>
+          <button class="b-pri" x-show="modalX.d.header.status === '草稿'" @click="checklistVerify(modalX.d)">Checklist 校验</button>
+          <button class="b-pri" x-show="modalX.d.header.status === '待发布'" @click="publish(modalX.d)">正式发布</button>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>

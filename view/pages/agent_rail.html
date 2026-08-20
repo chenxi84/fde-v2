@@ -1,0 +1,52 @@
+<!-- Agent 右栏（平台级跨应用）—— 窄栏形态：头 + 会话切换 + 消息流 + 输入 -->
+<div class="agent-rail-inner">
+  <div class="agent-rail-hd">
+    <span class="overline" style="margin:0">✦ 平台级 Agent</span>
+    <div class="right tagline" style="gap:6px">
+      <button class="b-ghost b-sm" @click="newSession()" title="新建会话">＋ 新</button>
+      <button class="b-ghost b-sm" @click="delSession()" title="删除当前会话">🗑</button>
+    </div>
+  </div>
+
+  <select x-model="sid" @change="onSessionChange()" class="agent-rail-sel">
+    <option value="">新对话（发送即建）</option>
+    <template x-for="s in sessions" :key="s.session_id">
+      <option :value="s.session_id" x-text="s.title || '新对话'"></option>
+    </template>
+  </select>
+
+  <div class="chatbox agent-rail-chat">
+    <template x-if="!msgs.length && !sending">
+      <div class="empty" style="padding:24px 8px !important">
+        我是平台级操作助手，可跨应用编排调用<strong>你有权限</strong>的服务。<br>
+        <span class="muted" style="font-size:11px">例如：查一下 M1 的库存推移表并给出补库建议</span>
+      </div>
+    </template>
+    <template x-for="(m, i) in msgs.filter(visible)" :key="i">
+      <div class="msg" :class="m.role === 'user' ? 'me' : 'ai'">
+        <div class="who" x-text="m.role === 'user' ? '你' : 'Agent'"></div>
+        <div class="b" x-text="m.content"></div>
+        <template x-if="m.tool_calls && m.tool_calls.length">
+          <div style="margin-top:4px">
+            <template x-for="(t, ti) in m.tool_calls" :key="ti">
+              <span class="tcall" x-text="'⚙ ' + t"></span>
+            </template>
+          </div>
+        </template>
+      </div>
+    </template>
+    <template x-if="sending">
+      <div class="msg ai"><div class="who">Agent</div>
+        <div class="b typing muted" x-text="progress || '思考 / 调用工具中'"></div></div>
+    </template>
+  </div>
+
+  <div class="agent-rail-input">
+    <textarea x-model="input" rows="2" @keydown.enter.prevent="send()"
+      placeholder="告诉 Agent 要做什么（Enter 发送）…"></textarea>
+    <input type="file" id="agent-rail-file" multiple style="display:none" @change="onAttachChange($event)">
+    <button class="b-ghost b-sm" :disabled="uploading" @click="attachFile()"
+      title="上传附件（csv/xlsx/txt 等；解析不了的由 Agent 告知）">📎</button>
+    <button class="b-pri b-sm" :disabled="sending || !input.trim()" @click="send()">发送</button>
+  </div>
+</div>

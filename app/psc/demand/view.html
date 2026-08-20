@@ -1,0 +1,184 @@
+<div class="card mt12"><div class="bd" style="padding:0">
+  <!-- ══ 操作区（手工参考创建 · 无 create/update 表单，以版本级操作按钮替代） ══ -->
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>毛需求与净需求</b>
+    <span class="muted" style="font-size:12px">状态机 · 草稿 → 发布（锁定） → 冻结</span>
+    <div class="right tagline" style="gap:8px; flex-wrap:wrap">
+      <select x-model="fVersion" @change="onVersionChange()" style="width:190px">
+        <option value="">全部版本</option>
+        <template x-if="!versionList.length"><option value="" disabled>暂无月度版本</option></template>
+        <template x-for="v in versionList" :key="v.version_no">
+          <option :value="v.version_no" x-text="v.version_no + ' · ' + (v.lock_status || '—')"></option>
+        </template>
+      </select>
+      <span class="st" x-show="lockStatus" :class="'st-' + hue(lockStatus)" x-text="lockStatus"></span>
+      <button class="b-ghost b-sm" @click="toggleSummary()"
+        x-text="'上游数据摘要 ' + (summary.open ? '▴' : '▾')"></button>
+    </div>
+  </div>
+  <!-- 操作按钮（按选中版本 lock_status x-show） -->
+  <div class="tagline" style="padding:0 16px 10px; gap:8px; flex-wrap:wrap">
+    <span class="muted" style="font-size:12px" x-show="!fVersion">请选择月度版本后，按版本状态执行对应操作</span>
+    <template x-if="fVersion">
+      <div class="tagline" style="gap:8px">
+        <button class="b-pri b-sm" x-show="lockStatus === '草稿'" @click="act('build_gross')">合成毛需求</button>
+        <button class="b-pri b-sm" x-show="lockStatus === '草稿'" @click="act('publish')">发布</button>
+        <button class="b-pri b-sm" x-show="lockStatus === '发布（锁定）'" @click="act('calc_net')">运算净需求</button>
+        <button class="b-pri b-sm" x-show="lockStatus === '冻结'" @click="act('export_net')">导出净需求</button>
+      </div>
+    </template>
+  </div>
+  <!-- 上游数据摘要 collapse（来源：sales_forecast.get_summary） -->
+  <div class="collapse" :class="{open: summary.open}">
+    <div style="padding:0 16px 10px">
+      <div class="loadbox" x-show="summary.loading"><span class="spin">◌</span> 载入汇总…</div>
+      <template x-if="summary.open && !summary.loading">
+        <div>
+          <div class="muted" style="font-size:12px; padding:4px 0">来源：sales_forecast · 最终预测量汇总（material_no × rolling_month × final_qty_sum）</div>
+          <div class="scroll-x">
+            <table class="tbl tight">
+              <tr><th>物料</th><th>滚动月度</th><th class="right">最终预测量</th></tr>
+              <template x-if="!summary.rows.length"><tr><td colspan="3" class="empty">暂无汇总数据（请先在销售预测完成 summarize）</td></tr></template>
+              <template x-for="r in summary.rows" :key="r.material_no + ':' + r.rolling_month">
+                <tr class="data">
+                  <td class="mono" x-text="dash(r.material_no)"></td>
+                  <td x-text="dash(r.rolling_month)"></td>
+                  <td class="right mono" x-text="fmt(r.final_qty_sum)"></td>
+                </tr>
+              </template>
+            </table>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+  <!-- ══ 过滤条：物料 autocomplete + 滚动月度 chips（与 demand.list 参数一一对应；契约无 keyword，不设搜索框） ══ -->
+  <div class="tagline" style="padding:10px 16px; border-top:1px solid var(--line); flex-wrap:wrap">
+    <span class="muted" style="font-size:12px">台账</span>
+    <div class="right tagline" style="gap:8px; flex-wrap:wrap">
+      <span style="position:relative">
+        <input x-model="matQuery" @focus="matOpen = true" @click.stop="matOpen = true"
+          @input="matOpen = true; fMaterial = ''" @keydown.enter="search()"
+          placeholder="物料号 / 名称…" style="width:180px">
+        <button class="x" type="button" x-show="fMaterial" @click="clearMaterial()"
+          style="position:absolute; top:50%; right:6px; transform:translateY(-50%); font-size:12px">✕</button>
+        <div class="autocomplete-drop" x-show="matOpen && materialOptions.length" @click.away="matOpen = false"
+          style="position:absolute;top:100%;left:0;right:0;background:var(--card);border:1px solid var(--line);max-height:220px;overflow:auto;z-index:100;border-radius:4px">
+          <template x-for="p in filteredMaterials" :key="p.material_no">
+            <div @click="selectMaterial(p)" style="padding:6px 8px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--line-sub)">
+              <div class="mono" x-text="p.material_no"></div>
+              <div class="muted" style="font-size:11px" x-text="dash(p.material_name)"></div>
+            </div>
+          </template>
+          <div x-show="!filteredMaterials.length" style="padding:6px 8px;color:var(--muted);font-size:12px">暂无可选物料</div>
+        </div>
+      </span>
+      <div class="chips">
+        <template x-for="s in ['', 'N+1', 'N+2', 'N+3']" :key="s || '全部'">
+          <span class="fchip" :class="{on: fRolling === s}" @click="fRolling = s; search()" x-text="s || '全部'"></span>
+        </template>
+      </div>
+      <button class="b-ghost b-sm" @click="resetFilters()">重置</button>
+    </div>
+  </div>
+  <!-- ══ 表格：列 ⊆ 详情字段集；序 = 版本 → 物料 → 滚动月度 → 毛需求拆解 → 净需求拆解 ══ -->
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr>
+        <th>版本</th><th>物料</th><th>滚动月度</th>
+        <th class="right">预测</th><th class="right">库存策略</th>
+        <th class="right" x-text="isFar() ? '毛需求(=净需求)' : '毛需求'"></th>
+        <th class="right" x-show="!isFar()">未发</th><th class="right" x-show="!isFar()">库存</th>
+        <th class="right" x-show="!isFar()">在途</th><th class="right" x-show="!isFar()">净需求</th>
+      </tr>
+      <template x-if="!list.items.length"><tr><td colspan="10" class="empty">无匹配数据</td></tr></template>
+      <template x-for="d in list.items" :key="d.version_no + ':' + d.material_no + ':' + d.rolling_month">
+        <tr class="data">
+          <td class="mono" x-text="dash(d.version_no)"></td>
+          <td><button class="b-link mono" @click="viewX(d)" x-text="d.material_no"></button></td>
+          <td x-text="dash(d.rolling_month)"></td>
+          <td class="right mono" x-text="fmt(d.forecast_qty)"></td>
+          <td class="right mono" x-text="fmt(d.inventory_qty)"></td>
+          <td class="right mono" style="font-weight:600" x-text="fmt(d.gross_qty)"></td>
+          <td class="right mono" x-show="!isFar()" x-text="fmt(d.open_order_qty)"></td>
+          <td class="right mono" x-show="!isFar()" x-text="fmt(d.onhand_qty)"></td>
+          <td class="right mono" x-show="!isFar()" x-text="fmt(d.in_transit_qty)"></td>
+          <td class="right mono" style="font-weight:600" x-show="!isFar()" x-text="fmt(d.net_qty)"></td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <!-- ══ 分页条 ══ -->
+  <div class="tagline" style="padding:10px 16px">
+    <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+    <div class="right tagline" style="gap:8px">
+      <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+      <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+      <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- ════════════ 详情模态（查全：demand.get 全字段，毛需求/净需求分层拆解） ════════════ -->
+<div class="modal-mask" x-show="modalX.open" @click.self="closeX()"
+     @keydown.escape.window="closeX()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div><div class="docno" x-text="modalX.d ? (modalX.d.version_no + ' · ' + modalX.d.material_no + ' · ' + modalX.d.rolling_month) : '毛需求与净需求详情'"></div>
+        <div class="sub">毛需求与净需求 · DEMAND</div></div>
+      <template x-if="modalX.d">
+        <span class="st" :class="'st-' + hue(lockOf(modalX.d.version_no))" x-text="lockOf(modalX.d.version_no) || '—'"></span>
+      </template>
+      <button class="x" @click="closeX()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <template x-if="modalX.loading">
+        <div class="loadbox"><span class="spin">◌</span><br>载入明细…</div>
+      </template>
+      <template x-if="!modalX.loading && modalX.d">
+        <div>
+          <div class="sec">基本标识</div>
+          <div class="kv">
+            <div><div class="k">版本</div><div class="v mono" x-text="dash(modalX.d.version_no)"></div></div>
+            <div><div class="k">物料</div><div class="v mono" x-text="dash(modalX.d.material_no)"></div></div>
+            <div><div class="k">滚动月度</div><div class="v" x-text="dash(modalX.d.rolling_month)"></div>
+              <div class="muted" style="font-size:11px">标识 = 版本 + 物料 + 滚动月度唯一</div></div>
+          </div>
+
+          <div class="sec">毛需求拆解（毛需求 = 预测 + 库存策略）</div>
+          <div class="kv">
+            <div><div class="k">预测</div><div class="v mono" x-text="fmt(modalX.d.forecast_qty)"></div></div>
+            <div><div class="k">库存策略</div><div class="v mono" x-text="fmt(modalX.d.inventory_qty)"></div>
+              <div class="muted" style="font-size:11px">每个滚动月度 = 预测 + 水位（min+safety+batch）</div></div>
+            <div><div class="k">毛需求</div><div class="v mono" style="font-weight:600" x-text="fmt(modalX.d.gross_qty)"></div>
+              <div class="muted" style="font-size:11px">系统计算 · 禁止手工改</div></div>
+          </div>
+
+          <div class="sec">净需求拆解（N+1 近期净额；N+2/N+3 远期毛额）</div>
+          <div class="kv">
+            <div><div class="k">毛需求</div><div class="v mono" x-text="fmt(modalX.d.gross_qty)"></div></div>
+            <div><div class="k">未发</div><div class="v mono" x-text="fmt(modalX.d.open_order_qty)"></div></div>
+            <div><div class="k">库存</div><div class="v mono" x-text="fmt(modalX.d.onhand_qty)"></div>
+              <div class="muted" style="font-size:11px">自有仓 + 寄售仓；仅 N+1 扣减</div></div>
+            <div><div class="k">在途</div><div class="v mono" x-text="fmt(modalX.d.in_transit_qty)"></div></div>
+            <div><div class="k">净需求</div><div class="v mono" style="font-weight:600" x-text="fmt(modalX.d.net_qty)"></div>
+              <div class="muted" style="font-size:11px">系统计算 · 各层非负</div></div>
+          </div>
+
+          <details class="raw"><summary>原始数据</summary>
+            <pre class="json" x-text="JSON.stringify(modalX.d, null, 2)"></pre></details>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft" x-show="modalX.d">
+      <template x-if="modalX.d">
+        <div class="tagline" style="gap:8px">
+          <button class="b-pri" x-show="lockOf(modalX.d.version_no) === '草稿'" @click="act('build_gross', modalX.d.version_no)">合成毛需求</button>
+          <button class="b-pri" x-show="lockOf(modalX.d.version_no) === '草稿'" @click="act('publish', modalX.d.version_no)">发布</button>
+          <button class="b-pri" x-show="lockOf(modalX.d.version_no) === '发布（锁定）'" @click="act('calc_net', modalX.d.version_no)">运算净需求</button>
+          <button class="b-pri" x-show="lockOf(modalX.d.version_no) === '冻结'" @click="act('export_net', modalX.d.version_no)">导出净需求</button>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>

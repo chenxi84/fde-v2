@@ -1,0 +1,132 @@
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px;flex-wrap:wrap">
+    <b>替换关系</b>
+    <div class="right tagline" style="gap:8px">
+      <div class="chips">
+        <template x-for="t in ['', '替换', '替代']" :key="t || '全部'">
+          <span class="fchip" :class="{on: filterType === t}" @click="filterType = t; search()" x-text="t || '全部'"></span>
+        </template>
+      </div>
+      <input x-model="filterOld" @keydown.enter="search()" placeholder="旧件号…" style="width:100px">
+      <input x-model="filterNew" @keydown.enter="search()" placeholder="新件号…" style="width:100px">
+      <div class="chips">
+        <template x-for="s in ['', '生效', '失效']" :key="s || '全部'">
+          <span class="fchip" :class="{on: filterStatus === s}" @click="filterStatus = s; search()" x-text="s || '全部'"></span>
+        </template>
+      </div>
+      <button class="b-ghost b-sm" @click="search()">搜索</button>
+    </div>
+  </div>
+  <div style="padding:0 16px 8px"><button class="b-pri b-sm" @click="showCreate()">+ 新建替换关系</button></div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr><th>关系号</th><th>类型</th><th>旧件号</th><th>新件号</th><th>切换时点</th><th>ECN号</th><th>状态</th><th class="right">操作</th></tr>
+      <template x-if="!list.items.length"><tr><td colspan="8" class="empty">无匹配数据</td></tr></template>
+      <template x-for="d in list.items" :key="d.rel_no">
+        <tr class="data">
+          <td><button class="b-link mono" @click="view(d)" x-text="d.rel_no"></button></td>
+          <td><span class="st" :class="'st-' + hue(d.rel_type)" x-text="d.rel_type"></span></td>
+          <td x-text="d.old_part"></td>
+          <td x-text="d.new_part"></td>
+          <td x-text="dash(d.switch_date)"></td>
+          <td x-text="dash(d.ecn_no)"></td>
+          <td><span class="st" :class="'st-' + hue(d.status)" x-text="d.status"></span></td>
+          <td class="right rowact" style="display:flex;gap:4px;justify-content:flex-end">
+            <button class="b-pri b-sm" @click="view(d)">详情</button>
+            <button class="b-ghost b-sm" x-show="d.status === '生效'" @click.stop="doDisable(d)">设为失效</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:8px 16px" x-show="list.total > 0">
+    <span style="font-size:12px;color:var(--muted)">共 <span x-text="list.total"></span> 条</span>
+    <div class="right tagline" style="gap:4px">
+      <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">上一页</button>
+      <span style="font-size:12px" x-text="list.page + ' / ' + Math.ceil(list.total / list.size)"></span>
+      <button class="b-ghost b-sm" :disabled="list.page * list.size >= list.total" @click="list.load(list.page + 1)">下一页</button>
+    </div>
+  </div>
+</div></div>
+
+<div class="modal-mask" x-show="modal.open" @click.self="closeModal()">
+  <div class="modal" style="max-width:480px">
+    <template x-if="modal.loading"><div class="loadbox" style="padding:40px;text-align:center">加载中…</div></template>
+    <template x-if="!modal.loading && modal.d">
+      <div>
+        <div class="modal-hd" style="background:var(--ink);color:#fff">
+          <span><b x-text="modal.d.rel_no"></b></span>
+          <span class="st" :class="'st-' + hue(modal.d.rel_type)" x-text="modal.d.rel_type" style="margin-left:8px"></span>
+          <span class="st" :class="'st-' + hue(modal.d.status)" x-text="modal.d.status" style="margin-left:4px"></span>
+          <button class="b-ghost" style="color:#fff" @click="closeModal()">✕</button>
+        </div>
+        <div class="modal-bd" style="padding:16px">
+          <div class="sec">基本信息</div>
+          <div class="kv"><label>关系号</label><span x-text="modal.d.rel_no"></span></div>
+          <div class="kv"><label>关系类型</label><span class="st" :class="'st-' + hue(modal.d.rel_type)" x-text="modal.d.rel_type"></span></div>
+          <div class="kv"><label>状态</label><span class="st" :class="'st-' + hue(modal.d.status)" x-text="modal.d.status"></span></div>
+          <div class="sec">零件关系</div>
+          <div class="kv"><label>旧件号</label><span x-text="modal.d.old_part"></span></div>
+          <div class="kv"><label>新件号</label><span x-text="modal.d.new_part"></span></div>
+          <div class="sec">变更依据</div>
+          <div class="kv"><label>切换时点</label><span x-text="dash(modal.d.switch_date)"></span></div>
+          <div class="kv"><label>ECN号</label><span x-text="dash(modal.d.ecn_no)"></span></div>
+          <details class="mt12"><summary style="font-size:12px;color:var(--muted);cursor:pointer">原始数据</summary>
+            <pre style="font-size:11px;max-height:200px;overflow:auto" x-text="JSON.stringify(modal.d, null, 2)"></pre>
+          </details>
+        </div>
+        <div class="modal-ft" style="display:flex;gap:8px">
+          <button class="b-pri" @click="showEdit()">编辑</button>
+          <button class="b-ghost" x-show="modal.d.status === '生效'" @click="doDisable(modal.d)">设为失效</button>
+          <button class="b-ghost" @click="closeModal()">关闭</button>
+        </div>
+      </div>
+    </template>
+  </div>  <!-- /.modal -->
+</div>
+
+<div class="modal-mask" x-show="form.open" @click.self="form.open = false">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-hd"><b x-text="form.mode === 'create' ? '新建替换关系' : '编辑替换关系'"></b><button class="b-ghost" @click="form.open = false">✕</button></div>
+    <div class="modal-bd" style="padding:16px">
+      <div class="kv"><label>关系号 ★</label><span><input x-model="form.rel_no" :disabled="form.mode === 'edit'" style="width:100%"></span></div>
+      <div class="kv"><label>关系类型 ★</label><span>
+        <select x-model="form.rel_type"><option value="替换">替换</option><option value="替代">替代</option></select>
+      </span></div>
+      <div class="kv"><label>旧件号 ★</label>
+        <span style="position:relative">
+          <input x-model="oldQuery" @focus="oldOpen = true" @click.stop="oldOpen = true; newOpen = false" @input="oldOpen = true" placeholder="搜索物料…" style="width:100%">
+          <div class="autocomplete-drop" x-show="oldOpen && partOptions.length" @click.away="oldOpen = false" style="position:absolute;top:100%;left:0;right:0;background:var(--card);border:1px solid var(--line);max-height:200px;overflow:auto;z-index:100;border-radius:4px">
+            <template x-for="p in filteredParts" :key="p.part_no">
+              <div @click="selectOldPart(p)" style="padding:6px 8px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--line-sub)">
+                <div x-text="p.part_no + ' - ' + p.part_name"></div>
+              </div>
+            </template>
+            <div x-show="!filteredParts.length" style="padding:6px 8px;color:var(--muted);font-size:12px">暂无可选物料</div>
+          </div>
+        </span>
+      </div>
+      <div class="kv"><label>新件号 ★</label>
+        <span style="position:relative">
+          <input x-model="newQuery" @focus="newOpen = true" @click.stop="newOpen = true; oldOpen = false" @input="newOpen = true" placeholder="搜索物料…" style="width:100%">
+          <div class="autocomplete-drop" x-show="newOpen && partOptions.length" @click.away="newOpen = false" style="position:absolute;top:100%;left:0;right:0;background:var(--card);border:1px solid var(--line);max-height:200px;overflow:auto;z-index:100;border-radius:4px">
+            <template x-for="p in filteredParts" :key="p.part_no">
+              <div @click="selectNewPart(p)" style="padding:6px 8px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--line-sub)">
+                <div x-text="p.part_no + ' - ' + p.part_name"></div>
+              </div>
+            </template>
+            <div x-show="!filteredParts.length" style="padding:6px 8px;color:var(--muted);font-size:12px">暂无可选物料</div>
+          </div>
+        </span>
+      </div>
+      <div x-show="form.old_part || form.new_part" class="kv"><label>已选</label><span style="font-size:13px" x-text="(form.old_part || '—') + ' → ' + (form.new_part || '—')"></span></div>
+      <details class="mt12"><summary style="font-size:12px;color:var(--muted);cursor:pointer">更多字段 ▾</summary>
+        <div class="mt8" style="display:flex;flex-direction:column;gap:8px">
+          <div class="kv"><label>切换时点</label><span><input type="date" x-model="form.switch_date" style="width:100%"></span></div>
+          <div class="kv"><label>ECN号</label><span><input x-model="form.ecn_no" style="width:100%"></span></div>
+        </div>
+      </details>
+    </div>
+    <div class="modal-ft"><button class="b-pri" @click="save()">保存</button><button class="b-ghost" @click="form.open = false">取消</button></div>
+  </div>  <!-- /.modal -->
+</div>

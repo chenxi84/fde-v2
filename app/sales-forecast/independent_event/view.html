@@ -1,0 +1,157 @@
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>独立事件台账</b>
+    <span class="muted">水位脉冲 / 断点 / 其他事件 · 叠加结构加项载体</span>
+    <div class="right tagline" style="gap:8px; flex-wrap:wrap">
+      <div class="chips">
+        <template x-for="s in ['', '待确认', '生效', '持续中', '已回落', '已关闭']" :key="s || '全部状态'">
+          <span class="fchip" :class="{on: fStatus === s}"
+            @click="fStatus = s; list.load(1)" x-text="s || '全部状态'"></span>
+        </template>
+      </div>
+      <select x-model="fEventType" @change="search()" style="width:140px">
+        <option value="">全部类型</option>
+        <option value="水位脉冲">水位脉冲</option>
+        <option value="断点·旧件截断">断点·旧件截断</option>
+        <option value="断点·新件启动">断点·新件启动</option>
+        <option value="其他">其他</option>
+      </select>
+      <button class="b-ghost b-sm" @click="search()">刷新</button>
+    </div>
+  </div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr>
+        <th>事件编号</th><th>事件类型</th><th>零件号</th><th>期间</th><th>事件量</th><th>状态</th><th>创建人</th><th class="right">操作</th>
+      </tr>
+      <template x-if="!list.items.length"><tr><td colspan="8" class="empty">无匹配数据</td></tr></template>
+      <template x-for="d in list.items" :key="d.event_no">
+        <tr class="data">
+          <td><button class="b-link mono" @click="viewX(d)" x-text="d.event_no"></button></td>
+          <td><span class="st" :class="'st-' + hue(d.event_type)" x-text="eventTypeLabel(d.event_type)"></span></td>
+          <td class="mono" x-text="dash(d.part_no)"></td>
+          <td class="mono" x-text="dash(d.period)"></td>
+          <td class="mono" x-text="fmt(d.event_qty)"></td>
+          <td><span class="st" :class="'st-' + hue(d.status)" x-text="statusLabel(d.status)"></span></td>
+          <td x-text="dash(d.creator)"></td>
+          <td class="right rowact">
+            <button class="b-pri b-sm" x-show="d.status === '待确认'" @click="act(d, 'confirm')">确认</button>
+            <button class="b-pri b-sm" x-show="d.status === '生效'" @click="act(d, 'mark_sustained')">标记持续</button>
+            <button class="b-pri b-sm" x-show="d.status === '生效' || d.status === '持续中'" @click="act(d, 'mark_subsided')">标记回落</button>
+            <button class="b-ghost b-sm" x-show="d.status === '已回落' || d.status === '生效'" @click="act(d, 'close')">关闭</button>
+            <button class="b-dng b-sm" x-show="d.status !== '已关闭' && d.status !== '已取消'" @click="act(d, 'cancel')">取消</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:10px 16px">
+    <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+    <div class="right tagline" style="gap:8px">
+      <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+      <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+      <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- 详情模态 -->
+<div class="modal-mask" x-show="modalX.open" @click.self="closeX()"
+     @keydown.escape.window="closeX()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div>
+        <div class="docno" x-text="modalX.d ? modalX.d.event_no : '事件详情'"></div>
+        <div class="sub">独立事件详情 · INDEPENDENT EVENT</div>
+      </div>
+      <template x-if="modalX.d">
+        <span class="st" :class="'st-' + hue(modalX.d.status)" x-text="statusLabel(modalX.d.status)"></span>
+      </template>
+      <button class="x" @click="closeX()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <template x-if="modalX.loading">
+        <div class="loadbox"><span class="spin">◌</span><br>载入事件明细…</div>
+      </template>
+      <template x-if="!modalX.loading && modalX.d">
+        <div>
+          <div class="sec">基本信息</div>
+          <div class="kv">
+            <div><div class="k">事件编号</div><div class="v mono" x-text="dash(modalX.d.event_no)"></div></div>
+            <div><div class="k">状态</div><div class="v"><span class="st" :class="'st-' + hue(modalX.d.status)" x-text="statusLabel(modalX.d.status)"></span></div></div>
+            <div><div class="k">事件类型</div><div class="v"><span class="st" :class="'st-' + hue(modalX.d.event_type)" x-text="eventTypeLabel(modalX.d.event_type)"></span></div></div>
+            <div><div class="k">零件号</div><div class="v mono" x-text="dash(modalX.d.part_no)"></div></div>
+            <div><div class="k">OEM编码</div><div class="v mono" x-text="dash(modalX.d.oem_code)"></div></div>
+            <div><div class="k">车型</div><div class="v" x-text="dash(modalX.d.veh_model)"></div></div>
+          </div>
+
+          <div class="sec">量与期间</div>
+          <div class="kv">
+            <div><div class="k">归属期间</div><div class="v mono" x-text="dash(modalX.d.period)"></div></div>
+            <div><div class="k">事件量</div><div class="v mono" x-text="fmt(modalX.d.event_qty)"></div></div>
+            <div><div class="k">计入需求</div><div class="v" x-text="modalX.d.in_demand ? '是' : '否'"></div></div>
+            <div><div class="k">计入趋势</div><div class="v" x-text="modalX.d.in_trend ? '是' : '否'"></div></div>
+          </div>
+
+          <div class="sec">来源与依据</div>
+          <div class="kv">
+            <div style="grid-column: span 2"><div class="k">来源依据</div><div class="v" x-text="dash(modalX.d.source_basis)"></div></div>
+            <div><div class="k">来源引用</div><div class="v mono" x-text="dash(modalX.d.source_ref)"></div></div>
+            <div><div class="k">断点批次</div><div class="v mono" x-text="dash(modalX.d.bp_batch)"></div></div>
+          </div>
+
+          <div class="sec">关闭与管理</div>
+          <div class="kv">
+            <div><div class="k">关闭依据</div><div class="v" x-text="dash(modalX.d.close_basis)"></div></div>
+            <div><div class="k">创建人</div><div class="v" x-text="dash(modalX.d.creator)"></div></div>
+            <div><div class="k">创建日期</div><div class="v mono" x-text="dash(modalX.d.create_date)"></div></div>
+            <div><div class="k">断点日期</div><div class="v mono" x-text="dash(modalX.d.bp_date)"></div></div>
+          </div>
+
+          <details class="raw"><summary>原始数据</summary>
+            <pre class="json" x-text="JSON.stringify(modalX.d, null, 2)"></pre>
+          </details>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft" x-show="modalX.d">
+      <template x-if="modalX.d">
+        <div class="tagline" style="gap:8px">
+          <span class="muted" x-show="modalX.d.status === '已关闭' || modalX.d.status === '已取消'"
+            x-text="'当前状态：' + statusLabel(modalX.d.status)"></span>
+          <button class="b-pri" x-show="modalX.d.status === '待确认'" @click="act(modalX.d, 'confirm')">确认</button>
+          <button class="b-pri" x-show="modalX.d.status === '生效'" @click="act(modalX.d, 'mark_sustained')">标记持续中</button>
+          <button class="b-pri" x-show="modalX.d.status === '生效' || modalX.d.status === '持续中'" @click="act(modalX.d, 'mark_subsided')">标记回落</button>
+          <button class="b-ghost" x-show="modalX.d.status === '已回落' || modalX.d.status === '生效'" @click="act(modalX.d, 'close')">关闭</button>
+          <button class="b-dng" x-show="modalX.d.status !== '已关闭' && modalX.d.status !== '已取消'" @click="act(modalX.d, 'cancel')">取消</button>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<!-- 关闭/取消弹窗（共用） -->
+<div class="modal-mask" x-show="closeForm.open" @click.self="closeCloseForm()"
+     @keydown.escape.window="closeCloseForm()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div>
+        <div class="docno" x-text="closeForm.actionLabel + ' · ' + closeForm.event_no"></div>
+        <div class="sub">填写依据 · BASIS REQUIRED</div>
+      </div>
+      <button class="x" @click="closeCloseForm()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <label class="f" x-text="(closeForm.action === 'mark_subsided' ? '回落依据' : closeForm.action === 'close' ? '关闭依据' : '取消原因') + ' *'"></label>
+      <textarea x-model="closeForm.close_basis" rows="4"
+        :placeholder="closeForm.action === 'mark_subsided' ? '水位达标证明' : closeForm.action === 'close' ? '关闭依据' : '复盘结论：误判/误登记原因'"></textarea>
+    </div>
+    <div class="modal-ft">
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost" @click="closeCloseForm()">取消</button>
+        <button class="b-dng" :disabled="closeForm.busy" @click="submitClose()"
+          x-text="closeForm.busy ? '处理中…' : '确认' + closeForm.actionLabel"></button>
+      </div>
+    </div>
+  </div>
+</div>

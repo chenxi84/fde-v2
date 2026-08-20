@@ -1,0 +1,249 @@
+<div class="card mt12"><div class="bd" style="padding:0">
+  <!-- ══ 过滤区：项目号/物料号模糊 + 查询/批量导入/新建（与 md_project_part.list 参数一一对应；无 keyword） ══ -->
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>项目零件映射</b>
+    <span class="muted" style="font-size:12px">项目 × 零件量纲 · 单车用量（车型/份额关联项目显示）</span>
+    <div class="right tagline" style="gap:8px; flex-wrap:wrap">
+      <input x-model="fProject" @keydown.enter="search()" placeholder="项目号" style="width:110px">
+      <input x-model="fMaterial" @keydown.enter="search()" placeholder="物料号" style="width:110px">
+      <button class="b-ghost b-sm" @click="search()">查询</button>
+      <button class="b-ghost b-sm" @click="openImport()">批量导入</button>
+      <button class="b-pri b-sm" @click="openCreate()">＋ 新建映射</button>
+    </div>
+  </div>
+  <!-- ══ 表格：列 ⊆ 详情字段集；序 = 单号 → 归属 → 量纲 → 操作 ══ -->
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr>
+        <th>项目号</th><th>物料号</th><th>车型</th>
+        <th class="right">单车用量</th><th class="right">供应份额</th><th class="right">操作</th>
+      </tr>
+      <template x-if="!list.items.length">
+        <tr><td colspan="6" class="empty"
+          x-text="(fProject || fMaterial) ? '无符合条件的映射' : '暂无映射 —— 点「新建映射」创建'"></td></tr>
+      </template>
+      <template x-for="d in list.items" :key="d.project_no + '|' + d.material_no">
+        <tr class="data">
+          <td>
+            <button class="b-link mono" @click="viewX(d)" x-text="d.project_no"></button>
+            <template x-if="projectMap[d.project_no]">
+              <div class="muted" style="font-size:11px" x-text="projectMap[d.project_no]"></div>
+            </template>
+          </td>
+          <td>
+            <span class="mono" x-text="d.material_no"></span>
+            <template x-if="materialMap[d.material_no]">
+              <div class="muted" style="font-size:11px" x-text="materialMap[d.material_no]"></div>
+            </template>
+          </td>
+          <td x-text="dash(projVeh(d.project_no))"></td>
+          <td class="right mono" x-text="fmt(d.usage)"></td>
+          <td class="right mono" x-text="pct(projShare(d.project_no))"></td>
+          <td class="right rowact">
+            <button class="b-pri b-sm" @click="openEdit(d)">编辑</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <!-- ══ 分页条 ══ -->
+  <div class="tagline" style="padding:10px 16px">
+    <span class="muted" x-text="'共 ' + list.total + ' 条'"></span>
+    <div class="right tagline" style="gap:8px">
+      <button class="b-ghost b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">‹ 上一页</button>
+      <span class="muted mono" x-text="list.page + ' / ' + list.pages"></span>
+      <button class="b-ghost b-sm" :disabled="list.page >= list.pages" @click="list.load(list.page + 1)">下一页 ›</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- ════════════ 详情模态（查全：md_project_part.get 全字段；复合主键，无状态徽章） ════════════ -->
+<div class="modal-mask" x-show="modalX.open" @click.self="closeX()"
+     @keydown.escape.window="closeX()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div>
+        <div class="docno" x-text="modalX.d ? (modalX.d.project_no + ' × ' + modalX.d.material_no) : '项目零件映射'"></div>
+        <div class="sub">主数据 · 项目×零件量纲 · PROJECT-PART</div>
+      </div>
+      <button class="x" @click="closeX()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <template x-if="modalX.loading">
+        <div class="loadbox"><span class="spin">◌</span><br>载入明细…</div>
+      </template>
+      <template x-if="!modalX.loading && modalX.d">
+        <div>
+          <div class="sec">基本信息</div>
+          <div class="kv">
+            <div><div class="k">项目号</div><div class="v mono" x-text="dash(modalX.d.project_no)"></div>
+              <template x-if="projectMap[modalX.d.project_no]"><div class="muted" style="font-size:11px" x-text="projectMap[modalX.d.project_no]"></div></template></div>
+            <div><div class="k">物料号</div><div class="v mono" x-text="dash(modalX.d.material_no)"></div>
+              <template x-if="materialMap[modalX.d.material_no]"><div class="muted" style="font-size:11px" x-text="materialMap[modalX.d.material_no]"></div></template></div>
+            <div style="grid-column: span 2"><div class="k">主键说明</div><div class="v" style="font-size:12px">复合主键 project_no + material_no，创建后不可直接变更（如需变更请新建映射）</div></div>
+          </div>
+
+          <div class="sec">量纲信息</div>
+          <div class="kv">
+            <div><div class="k">车型</div><div class="v" x-text="dash(projVeh(modalX.d.project_no))"></div>
+              <div class="muted" style="font-size:11px">关联项目 · 不在映射表存储</div></div>
+            <div><div class="k">单车用量</div><div class="v mono" x-text="fmt(modalX.d.usage)"></div>
+              <div class="muted" style="font-size:11px">正整数（映射表存储）</div></div>
+            <div><div class="k">供应份额</div><div class="v mono" x-text="pct(projShare(modalX.d.project_no))"></div>
+              <div class="muted" style="font-size:11px">关联项目 · 不在映射表存储</div></div>
+          </div>
+
+          <details class="raw"><summary>原始数据</summary>
+            <pre class="json" x-text="JSON.stringify(modalX.d, null, 2)"></pre></details>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft" x-show="modalX.d">
+      <template x-if="modalX.d">
+        <div class="tagline" style="gap:8px">
+          <button class="b-pri" @click="openEdit(modalX.d)">编辑</button>
+          <button class="b-ghost" @click="closeX()">关闭</button>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ 创建 / 编辑表单模态（create 5 参数全必填；edit 复合主键锁定） ════════════ -->
+<div class="modal-mask" x-show="form.open" @click.self="closeForm()"
+     @keydown.escape.window="closeForm()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div>
+        <div class="docno" x-text="form.mode === 'edit' ? ('编辑 · ' + form.project_no + ' × ' + form.material_no) : '新建映射'"></div>
+        <div class="sub">项目零件映射 · CREATE / UPDATE</div>
+      </div>
+      <button class="x" @click="closeForm()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="frow">
+        <div>
+          <label class="f">项目号 <span class="req">*</span></label>
+          <div style="position:relative">
+            <input x-model="projQuery" :disabled="form.mode === 'edit'"
+              @focus="projOpen = true" @click.stop="projOpen = true" @input="onProjInput()"
+              placeholder="输入项目号/名称搜索…">
+            <div x-show="projOpen && form.mode !== 'edit'" @click.away="projOpen = false"
+              style="position:absolute;top:100%;left:0;right:0;background:var(--card);border:1px solid var(--line);max-height:220px;overflow:auto;z-index:100;border-radius:4px;box-shadow:0 4px 12px rgba(0,0,0,.08)">
+              <template x-for="p in filteredProjects" :key="p.project_no">
+                <div @click="selectProject(p)" style="padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--line-sub)">
+                  <div class="mono" x-text="p.project_no"></div>
+                  <div class="muted" style="font-size:11px" x-text="p.project_name"></div>
+                </div>
+              </template>
+              <div x-show="!filteredProjects.length" class="muted" style="padding:8px 10px;font-size:12px">暂无可选项目</div>
+            </div>
+          </div>
+          <div class="muted" x-show="form.project_no && form.mode !== 'edit'" style="font-size:11px;margin-top:4px"
+            x-text="projectMap[form.project_no] || ''"></div>
+        </div>
+        <div>
+          <label class="f">物料号 <span class="req">*</span></label>
+          <div style="position:relative">
+            <input x-model="matQuery" :disabled="form.mode === 'edit'"
+              @focus="matOpen = true" @click.stop="matOpen = true" @input="onMatInput()"
+              placeholder="输入物料号/名称搜索…">
+            <div x-show="matOpen && form.mode !== 'edit'" @click.away="matOpen = false"
+              style="position:absolute;top:100%;left:0;right:0;background:var(--card);border:1px solid var(--line);max-height:220px;overflow:auto;z-index:100;border-radius:4px;box-shadow:0 4px 12px rgba(0,0,0,.08)">
+              <template x-for="m in filteredMaterials" :key="m.material_no">
+                <div @click="selectMaterial(m)" style="padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--line-sub)">
+                  <div class="mono" x-text="m.material_no"></div>
+                  <div class="muted" style="font-size:11px" x-text="m.material_name"></div>
+                </div>
+              </template>
+              <div x-show="!filteredMaterials.length" class="muted" style="padding:8px 10px;font-size:12px">暂无可选物料</div>
+            </div>
+          </div>
+          <div class="muted" x-show="form.material_no && form.mode !== 'edit'" style="font-size:11px;margin-top:4px"
+            x-text="materialMap[form.material_no] || ''"></div>
+        </div>
+
+        <div>
+          <label class="f">单车用量 <span class="req">*</span></label>
+          <input type="number" min="1" step="1" x-model="form.usage" placeholder="正整数，如 2">
+        </div>
+        <div class="muted" style="grid-column: span 2; font-size:12px; align-self:end">
+          车型 / 供应份额为项目级信息，自动关联所选项目显示，无需在此填写（项目变更时自动同步）。
+        </div>
+      </div>
+    </div>
+    <div class="modal-ft">
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost" @click="closeForm()">取消</button>
+        <button class="b-pri" :disabled="form.busy" @click="save()"
+          x-text="form.busy ? '处理中…' : (form.mode === 'edit' ? '保存修改' : '创建')"></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ 批量导入模态（md_project_part.import_batch：rows upsert，逐行校验） ════════════ -->
+<div class="modal-mask" x-show="imp.open" @click.self="closeImport()"
+     @keydown.escape.window="closeImport()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div>
+        <div class="docno">批量导入</div>
+        <div class="sub">项目零件映射 · IMPORT BATCH</div>
+      </div>
+      <button class="x" @click="closeImport()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <template x-if="!imp.result">
+        <div>
+          <div class="frow">
+            <div style="grid-column: span 2">
+              <label class="f">粘贴数据 / 上传 CSV <span class="muted" style="font-weight:400; font-size:11px">列：project_no, material_no, veh_model, usage, share</span></label>
+              <textarea x-model="imp.text" rows="8" placeholder="每行一条：project_no,material_no,veh_model,usage,share"></textarea>
+            </div>
+          </div>
+          <div class="tagline mt12" style="gap:8px">
+            <button class="b-ghost b-sm" @click="downloadTemplate()">下载模板</button>
+            <label class="b-ghost b-sm" style="cursor:pointer; margin:0">
+              上传 CSV<input type="file" accept=".csv,.txt" style="display:none" @change="onImportFile($event)">
+            </label>
+          </div>
+        </div>
+      </template>
+      <template x-if="imp.result">
+        <div>
+          <div class="kv">
+            <div><div class="k">总数</div><div class="v mono" x-text="imp.result.total"></div></div>
+            <div><div class="k">成功</div><div class="v mono" x-text="imp.result.success"></div></div>
+            <div><div class="k">失败</div><div class="v mono" x-text="imp.result.fail"></div></div>
+          </div>
+          <template x-if="imp.result.errors && imp.result.errors.length">
+            <div>
+              <div class="sec">错误明细</div>
+              <div class="scroll-x">
+                <table class="tbl tight">
+                  <tr><th>行</th><th>字段</th><th>原因</th></tr>
+                  <template x-for="e in imp.result.errors" :key="e.row + '-' + e.field">
+                    <tr><td class="mono" x-text="e.row"></td><td class="mono" x-text="dash(e.field)"></td><td x-text="dash(e.message)"></td></tr>
+                  </template>
+                </table>
+              </div>
+            </div>
+          </template>
+        </div>
+      </template>
+    </div>
+    <div class="modal-ft">
+      <div class="right tagline" style="gap:8px">
+        <template x-if="!imp.result">
+          <button class="b-ghost" @click="closeImport()">取消</button>
+          <button class="b-pri" :disabled="imp.busy" @click="runImport()"
+            x-text="imp.busy ? '导入中…' : '开始导入'"></button>
+        </template>
+        <template x-if="imp.result">
+          <button class="b-pri" @click="closeImport()">完成</button>
+        </template>
+      </div>
+    </div>
+  </div>
+</div>
