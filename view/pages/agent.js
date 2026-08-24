@@ -24,6 +24,8 @@ export function pageAgent() {
     msgs: [],
     input: "",
     sending: false,
+    live: null,       // 流式回复气泡 {content, tool_calls}
+    confirm: null,    // 待人工确认的危险操作 [{id,name,input}]
 
     async init() {
       self.tpl = await fetch(new URL("agent.html", import.meta.url)).then((r) => r.text());
@@ -88,6 +90,9 @@ export function pageAgent() {
       if (!m || self.sending) return;
       self.input = "";
       self.sending = true;
+      self.live = { content: "", tool_calls: [] };
+      self.confirm = null;
+      const tools = [];
       try {
         if (!self.sid) {                    // 未选会话：发送即开启新会话
           const s = await post("/api/agent/sessions", {});
@@ -96,18 +101,82 @@ export function pageAgent() {
         }
         self.msgs.push({ role: "user", content: m });
         self.scrollEnd();
-        const r = await post("/api/agent/chat", { message: m, session_id: self.sid });
-        const names = (r.tool_calls || []).map(toolNameOf).filter(Boolean).map(toolDisp);
-        self.msgs.push({
-          role: "assistant",
-          content: r.reply || "",
-          tool_calls: names.length ? names : undefined,
-        });
+        const onEvent = (evt) => {
+          if (evt.event === "delta") { self.live.content += evt.data; }
+          else if (evt.event === "tool") {
+            tools.push(toolDisp(evt.data));
+            self.live.tool_calls = [...tools];
+          }
+          else if (evt.event === "done") {
+            self.live.content = evt.data || self.live.content;
+            self.live.tool_calls = tools;
+          }
+          else if (evt.event === "error" && !self.live.content) {
+            self.live.content = "⚠ " + evt.data;
+          }
+          else if (evt.event === "confirm_required") {
+            self.confirm = evt.data;  // 停车，等人工确认
+          }
+          self.scrollEnd();
+        };
+        await this.streamRequest("/api/agent/chat/stream", { message: m, session_id: self.sid }, onEvent);
+        while (self.confirm) {
+          const names = self.confirm.map(c => c.name).join("\n");
+          const ok = window.confirm("⚠ Agent 请求执行以下操作（需人工确认）：\n" + names +
+            "\n\n「确定」= 确认执行；「取消」= 拒绝。");
+          const decisions = self.confirm.map(c => ({ id: c.id, confirmed: ok }));
+          self.confirm = null;
+          await this.streamRequest("/api/agent/confirm", { session_id: self.sid, decisions }, onEvent);
+        }
+        this.commitLive();
         await self.loadSessions();
-      } catch { /* toast 已提示 */ } finally {
+      } catch {
+        if (self.live && !self.live.content) self.live.content = "⚠ 请求失败，请重试";
+        this.commitLive();
+      } finally {
         self.sending = false;
         self.scrollEnd();
       }
+    },
+
+    /* POST SSE 流式读取：逐帧解析 data: {...} 并回调。 */
+    async streamRequest(url, payload, onEvent) {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok || !resp.body) throw new Error("HTTP " + resp.status);
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf("\n\n")) >= 0) {
+          const frame = buf.slice(0, idx).trim();
+          buf = buf.slice(idx + 2);
+          if (!frame.startsWith("data:")) continue;
+          let evt;
+          try { evt = JSON.parse(frame.slice(5).trim()); } catch { continue; }
+          onEvent(evt);
+        }
+      }
+    },
+
+    /* 把流式 live 气泡落为一条历史消息（快照，避免引用 live 反应式对象导致渲染丢失） */
+    commitLive() {
+      if (!self.live) return;
+      const content = self.live.content || "";
+      const tools = (self.live.tool_calls || []).filter(Boolean);
+      self.msgs.push({
+        role: "assistant",
+        content,
+        tool_calls: tools.length ? [...tools] : undefined,
+      });
+      self.live = null;
     },
 
     async newSession() {

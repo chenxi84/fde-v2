@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Agent 后端 · FDE 平台{% endblock %}
+{% block content %}
+  <p><a href="/">← 应用清单</a></p>
+  <div class="section-title">Agent 后端管理</div>
+  <p class="muted">Agent 的「编排 + 规划 + 权限 + 重试」由 <b>AgentScope 2.0</b> 统一提供；
+     FDE 平台继续当「工具 + 身份 + 运行时」。会话持久化走 AgentScope 原生 state（<code>agent_state.db</code>）。</p>
+
+  <div class="card">
+    <h3>当前后端
+      {% if active == 'agentscope' %}<span class="ok">AgentScope 2.0</span>
+      {% else %}<span class="err">不可用（已回落降级）</span>{% endif %}
+    </h3>
+    <table class="kv">
+      <tr><td>生效后端</td><td><code>{{ active }}</code></td></tr>
+      <tr><td>编排循环</td><td>AgentScope ReAct + 模型重试/回落 + 工具权限三态</td></tr>
+      <tr><td>会话持久化</td><td><code>config/agent_state.db</code>（AgentScope 原生 state，跨进程恢复）</td></tr>
+      <tr><td>危险操作</td><td>HITL：delete/publish/lock 等经 <code>ask_rules</code> 执行前停车，需人工确认</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>AgentScope 接入状态</h3>
+    <table class="kv">
+      <tr><td>可用</td><td>
+        {% if agentscope.available %}<span class="ok">是</span>（v{{ agentscope.version }}）
+        {% else %}<span class="err">否</span> — {{ agentscope.error or '未安装' }}{% endif %}</td></tr>
+      <tr><td>FDE 工具清单</td><td><b>{{ tool_count }}</b> 个对外服务（含内置文件工具，按当前身份授权过滤后注入）</td></tr>
+      <tr><td>权限</td><td>allow/deny 由「工具清单按授权过滤 + <code>bridge.execute</code> fail-closed」兜底；危险操作经 <code>ask_rules</code> 触发 HITL 确认</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>对话模型（operator）</h3>
+    <table class="kv">
+      <tr><td>状态</td><td>
+        {% if profile.source == 'db' %}<span class="ok">已配置</span>
+        {% elif profile.source == 'env' %}<span class="muted">回退环境变量</span>
+        {% else %}<span class="err">未配置</span>{% endif %}</td></tr>
+      <tr><td>厂商 / 协议</td><td>{{ profile.provider }}</td></tr>
+      <tr><td>模型名</td><td><code>{{ profile.model or '—' }}</code></td></tr>
+      <tr><td>Base URL</td><td><code>{{ profile.base_url or '—' }}</code></td></tr>
+    </table>
+    <div class="inline" style="margin-top:8px">
+      <a class="ghost" href="/llm">前往「大模型」配置 →</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Skill 库（自进化程序性记忆）<span class="muted">共 {{ skills|length }} 条</span></h3>
+    <p class="muted">半自动生命周期：Agent 提议（draft）→ 人工审批（approved 发布）→ 弃用（deprecated）。
+       只有「已发布」的技能会注入 Agent 供复用（复用自动累计使用次数）；Agent 不会无审批直接执行草稿。</p>
+
+    {% set drafts = skills | selectattr('status', 'equalto', 'draft') | list %}
+    {% set approved = skills | selectattr('status', 'equalto', 'approved') | list %}
+    {% set deprecated = skills | selectattr('status', 'equalto', 'deprecated') | list %}
+
+    <h4>待审批（{{ drafts|length }}）</h4>
+    {% if not drafts %}<div class="muted">暂无待审批的 skill 草稿。</div>{% endif %}
+    {% for s in drafts %}
+      <div class="skill-item" style="border:1px solid #e3e3e3;border-radius:8px;padding:10px 12px;margin-bottom:8px">
+        <b>{{ s.name }}</b> <span class="muted">v{{ s.version }} · by {{ s.created_by or 'agent' }}</span>
+        <div class="muted">{{ s.description }}</div>
+        {% if s.trigger %}<div class="muted">触发：{{ s.trigger }}</div>{% endif %}
+        <ol style="margin:6px 0 8px 18px;font-size:13px">
+          {% for st in s.steps %}<li><code>{{ st.tool }}</code>{% if st.note %} — {{ st.note }}{% endif %}</li>{% endfor %}
+        </ol>
+        <form method="post" action="/agent-admin/skills/{{ s.id }}/approve" style="display:inline">
+          <button type="submit" class="save-btn">发布</button>
+        </form>
+        <form method="post" action="/agent-admin/skills/{{ s.id }}/reject" style="display:inline">
+          <button type="submit" class="ghost">否决</button>
+        </form>
+      </div>
+    {% endfor %}
+
+    <h4>已发布（{{ approved|length }}）</h4>
+    {% if not approved %}<div class="muted">暂无已发布 skill。</div>{% endif %}
+    {% for s in approved %}
+      <div class="skill-item" style="border:1px solid #e3e3e3;border-radius:8px;padding:10px 12px;margin-bottom:8px">
+        <b>{{ s.name }}</b> <span class="muted">v{{ s.version }} · 已用 {{ s.usage_count }} 次
+          {% if s.rating_count %} · 评分 {{ '%.1f'|format(s.score) }}/{{ s.rating_count }}人{% endif %}</span>
+        <div class="muted">{{ s.description }}</div>
+        {% if s.trigger %}<div class="muted">触发：{{ s.trigger }}</div>{% endif %}
+        <ol style="margin:6px 0 8px 18px;font-size:13px">
+          {% for st in s.steps %}<li><code>{{ st.tool }}</code>{% if st.note %} — {{ st.note }}{% endif %}</li>{% endfor %}
+        </ol>
+        <form method="post" action="/agent-admin/skills/{{ s.id }}/rate" style="display:inline">
+          <select name="score" style="width:auto;display:inline">
+            <option value="5">5</option><option value="4">4</option><option value="3">3</option>
+            <option value="2">2</option><option value="1">1</option>
+          </select>
+          <button type="submit" class="ghost">评分</button>
+        </form>
+        <form method="post" action="/agent-admin/skills/{{ s.id }}/deprecate" style="display:inline">
+          <button type="submit" class="ghost">弃用</button>
+        </form>
+      </div>
+    {% endfor %}
+
+    {% if deprecated %}
+    <h4>已弃用（{{ deprecated|length }}）</h4>
+    <div class="muted">
+      {% for s in deprecated %}<code>{{ s.name }}</code>（v{{ s.version }}）{% if not loop.last %}、{% endif %}{% endfor %}
+    </div>
+    {% endif %}
+  </div>
+{% endblock %}

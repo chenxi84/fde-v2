@@ -38,6 +38,9 @@ config/.testexec/
 # 实验产出
 spike_out/
 
+# 宣传材料（含个人联系方式、未公开草稿、发布策略等）
+宣传/
+
 # IDE
 .vscode/
 .idea/

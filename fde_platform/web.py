@@ -26,6 +26,7 @@ from pathlib import Path
 
 from flask import (
     Flask,
+    Response,
     jsonify,
     redirect,
     render_template,
@@ -78,10 +79,19 @@ UNGROUPED_LABEL = "未分组"
 def _get_agent(app_name):
     key = app_name or "__platform__"
     if key not in _agent_sessions:
-        from fde_platform.agent import AgentSession
-
-        _agent_sessions[key] = AgentSession(platform, app_name)
+        _agent_sessions[key] = _build_agent(app_name)
     return _agent_sessions[key]
+
+
+def _build_agent(app_name):
+    """Agent 后端（Phase 3 起唯一：AgentScope 编排）。
+
+    AgentScope import 失败时，``AgentScopeSession.chat`` 自带降级提示（不抛错、不阻断），
+    故这里直接返回；不再保留旧 ReAct 后端。
+    """
+    from fde_platform.agent_agentscope import AgentScopeSession
+
+    return AgentScopeSession(platform, app_name)
 
 
 def _coerce(params: dict, schema: list[dict]) -> dict:
@@ -638,6 +648,69 @@ def api_platform_agent_chat():
     return jsonify({"status": "ok", "data": result})
 
 
+def _agent_stream_response(agent, message: str, session_id: str):
+    """SSE 流式响应：AgentScope 后端走原生事件流；旧后端回落为单帧 done。"""
+    if hasattr(agent, "stream_chat"):
+        return Response(agent.stream_chat(message, session_id), mimetype="text/event-stream")
+    result = agent.chat(message, session_id)
+
+    def _single():
+        yield "data: " + json.dumps(
+            {"event": "done", "data": result.get("reply", ""),
+             "tools": [t.get("tool") for t in result.get("tool_calls", [])]},
+            ensure_ascii=False,
+        ) + "\n\n"
+
+    return Response(_single(), mimetype="text/event-stream")
+
+
+@app.route("/api/agent/chat/stream", methods=["POST"])
+def api_platform_agent_chat_stream():
+    data = request.get_json(silent=True) or {}
+    message = (data.get("message") or "").strip()
+    session_id = data.get("session_id", "default")
+    if not message:
+        return jsonify({"status": "error", "message": "消息不能为空"})
+    return _agent_stream_response(_get_agent(None), message, session_id)
+
+
+@app.route("/api/apps/<path:app_name>/agent/chat/stream", methods=["POST"])
+def api_agent_chat_stream(app_name):
+    if app_name not in platform.app_names():
+        return jsonify({"status": "error", "message": f"应用不存在：{app_name}"}), 404
+    data = request.get_json(silent=True) or {}
+    message = (data.get("message") or "").strip()
+    session_id = data.get("session_id", "default")
+    if not message:
+        return jsonify({"status": "error", "message": "消息不能为空"})
+    return _agent_stream_response(_get_agent(app_name), message, session_id)
+
+
+def _agent_confirm_response(agent, session_id: str, decisions: list):
+    """SSE 流式确认响应（HITL：用户确认/拒绝危险操作后继续）。"""
+    if hasattr(agent, "confirm"):
+        return Response(agent.confirm(session_id, decisions), mimetype="text/event-stream")
+    return jsonify({"status": "error", "message": "当前后端不支持交互确认"}), 400
+
+
+@app.route("/api/agent/confirm", methods=["POST"])
+def api_platform_agent_confirm():
+    data = request.get_json(silent=True) or {}
+    session_id = data.get("session_id", "default")
+    decisions = data.get("decisions") or []
+    return _agent_confirm_response(_get_agent(None), session_id, decisions)
+
+
+@app.route("/api/apps/<path:app_name>/agent/confirm", methods=["POST"])
+def api_agent_confirm(app_name):
+    if app_name not in platform.app_names():
+        return jsonify({"status": "error", "message": f"应用不存在：{app_name}"}), 404
+    data = request.get_json(silent=True) or {}
+    session_id = data.get("session_id", "default")
+    decisions = data.get("decisions") or []
+    return _agent_confirm_response(_get_agent(app_name), session_id, decisions)
+
+
 @app.route("/api/agent/reset", methods=["POST"])
 def api_platform_agent_reset():
     data = request.get_json(silent=True) or {}
@@ -650,14 +723,14 @@ def api_platform_agent_reset():
 @app.route("/api/apps/<path:app_name>/agent/progress", methods=["GET"])
 def api_agent_progress(app_name):
     """读该会话在途对话的阶段进度（当前轮次 / 正在调用的工具）；data=null 表示无在途对话。"""
-    from fde_platform.agent import get_progress
+    from fde_platform.agent_common import get_progress
     sid = request.args.get("session_id", "default")
     return jsonify({"status": "ok", "data": get_progress(app_name, sid)})
 
 
 @app.route("/api/agent/progress", methods=["GET"])
 def api_platform_agent_progress():
-    from fde_platform.agent import get_progress
+    from fde_platform.agent_common import get_progress
     sid = request.args.get("session_id", "default")
     return jsonify({"status": "ok", "data": get_progress(None, sid)})
 
@@ -666,9 +739,9 @@ def api_platform_agent_progress():
 # 会话按登录用户隔离：session_id 统一加 “用户名:” 前缀存储；owner 列做归属校验。
 # 未启用鉴权时（users.session_user() 恒 None）归为 anon（单用户 DEMO 场景）。
 
-from fde_platform import chatstore  # noqa: E402
+from fde_platform import agent_state  # noqa: E402
 
-chatstore.init_schema()
+agent_state.init_schema()
 
 
 def _chat_user():
@@ -687,7 +760,7 @@ def _strip_sid(username: str, full_sid: str) -> str:
 
 def _sessions_list(scope: str):
     username, _ = _chat_user()
-    rows = chatstore.list_sessions(owner=username, scope=scope)
+    rows = agent_state.list_sessions(owner=username, scope=scope)
     return jsonify({"status": "ok", "data": [
         {"session_id": _strip_sid(username, r["session_id"]),
          "title": r["title"] or "新对话",
@@ -700,7 +773,7 @@ def _session_create(scope: str):
     import uuid
     username, _ = _chat_user()
     raw = uuid.uuid4().hex[:12]
-    chatstore.create_session(_full_sid(username, raw), username, scope)
+    agent_state.create_session(_full_sid(username, raw), username, scope)
     return jsonify({"status": "ok",
                     "data": {"session_id": raw, "title": "新对话"}})
 
@@ -708,7 +781,7 @@ def _session_create(scope: str):
 def _session_owned(scope: str, sid: str):
     """取当前用户拥有的会话（校验归属与 scope）；不满足返回 None。"""
     username, is_admin = _chat_user()
-    sess = chatstore.get_session(_full_sid(username, sid))
+    sess = agent_state.get_session(_full_sid(username, sid))
     if sess is None or sess["scope"] != scope:
         return None
     if sess["owner"] != username and not is_admin:
@@ -720,15 +793,16 @@ def _session_messages(scope: str, sid: str):
     username, _ = _chat_user()
     if _session_owned(scope, sid) is None:
         return jsonify({"status": "error", "message": "会话不存在"}), 404
+    from fde_platform.agent_agentscope import load_session_messages
     return jsonify({"status": "ok",
-                    "data": chatstore.load_messages(_full_sid(username, sid))})
+                    "data": load_session_messages(_full_sid(username, sid))})
 
 
 def _session_delete(scope: str, sid: str):
     username, _ = _chat_user()
     if _session_owned(scope, sid) is None:
         return jsonify({"status": "error", "message": "会话不存在"}), 404
-    chatstore.delete_session(_full_sid(username, sid))
+    agent_state.delete_session(_full_sid(username, sid))
     return jsonify({"status": "ok", "message": "会话已删除"})
 
 

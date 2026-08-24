@@ -59,4 +59,5 @@ python app/<组>/tests/verify_view_<组>.py             # 组级壳/菜单/dashb
 - 数据库默认 SQLite；配 `DATABASE_URL` 即切 PostgreSQL，建表/SQL 方言自动翻译，应用零改动。
 - 平台模块「import 失败即回落」：删掉 `auth.py`/`users.py` 即回落无认证；删 scheduler / llm 模块同理，其余代码无需改动。
 - LLM 仅运行期对话 Agent 需要（`LLM_BASE_URL/LLM_API_KEY/LLM_MODEL`）；构建流水线的设计/生成/验收步骤不依赖 LLM。
+- Agent 编排层：唯一后端 `fde_platform/agent_agentscope.py`（AgentScope 2.0 编排，import 失败自动回落降级提示）。会话持久化用 AgentScope 原生 state（`fde_platform/agent_state.py`，取代 chatstore，跨进程 `model_dump(mode="json")` + `model_validate` 恢复，前端历史从 `context` 派生）。共享基座（提示词/进度/会话 helper）在 `fde_platform/agent_common.py`；工具桥接在 `fde_platform/agentscope_bridge.py`（含 `_platform_tool_defs`：skill 沉淀全员 + 集成/定时任务配置仅 admin，危险操作 `_meta.dangerous` 走 HITL）；skill 库在 `fde_platform/skills.py`（draft→approve→published，`platform_propose_skill` 提议）。危险操作 HITL 经 `ask_rules` 停车、`/api/agent/confirm` 确认。管理页 `/agent-admin`（`fde_platform/agent_admin.py`）。
 - 参考更细的约定/坑：`design-plus/CONVENTION.md`（后端）、`design-plus/VIEW_CONVENTION.md` + `design-plus/view-convention/`（前端，含 patterns/pitfalls）。

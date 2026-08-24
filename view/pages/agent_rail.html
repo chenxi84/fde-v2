@@ -35,18 +35,29 @@
         </template>
       </div>
     </template>
-    <template x-if="sending">
+    <template x-if="sending && live">
       <div class="msg ai"><div class="who">Agent</div>
-        <div class="b typing muted" x-text="progress || '思考 / 调用工具中'"></div></div>
+        <div class="b" x-show="live.content" x-text="live.content"></div>
+        <div class="b typing muted" x-show="!live.content" x-text="progress || '思考 / 调用工具中'"></div>
+        <template x-if="live.tool_calls && live.tool_calls.length">
+          <div style="margin-top:4px">
+            <template x-for="(t, ti) in live.tool_calls" :key="ti">
+              <span class="tcall" x-text="'⚙ ' + t"></span>
+            </template>
+          </div>
+        </template>
+      </div>
     </template>
   </div>
 
   <div class="agent-rail-input">
-    <textarea x-model="input" rows="2" @keydown.enter.prevent="send()"
+    <textarea x-model="input" rows="4" @keydown.enter.prevent="send()"
       placeholder="告诉 Agent 要做什么（Enter 发送）…"></textarea>
     <input type="file" id="agent-rail-file" multiple style="display:none" @change="onAttachChange($event)">
-    <button class="b-ghost b-sm" :disabled="uploading" @click="attachFile()"
-      title="上传附件（csv/xlsx/txt 等；解析不了的由 Agent 告知）">📎</button>
-    <button class="b-pri b-sm" :disabled="sending || !input.trim()" @click="send()">发送</button>
+    <div class="agent-rail-actions">
+      <button class="b-ghost" :disabled="uploading" @click="attachFile()"
+        title="上传附件（csv/xlsx/txt 等；解析不了的由 Agent 告知）">📎 上传文件</button>
+      <button class="b-pri" :disabled="sending || !input.trim()" @click="send()">发送</button>
+    </div>
   </div>
 </div>

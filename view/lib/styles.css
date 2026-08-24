@@ -1,4 +1,4 @@
 /* FDE 视图 · 设计系统别名 —— 规范表已提升至 fde_platform/static/fde.css
    （登录页等鉴权前页面需经 /static/ 可达，view/ 在鉴权闸内喂不到登录页）。
    本文件仅转发；新样式一律加在规范表，勿在此扩写。 */
-@import url("/static/fde.css");
+@import url("/static/fde.css?v=20260821");

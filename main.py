@@ -55,6 +55,15 @@ try:
 except ImportError:
     LLM_ADMIN_ON = False
 
+# Agent 后端管理（可插拔）：删除 fde_platform/agent_admin.py 后此处 import 失败即回落无此页
+try:
+    from fde_platform import agent_admin
+
+    agent_admin.register(app)
+    AGENT_ADMIN_ON = True
+except ImportError:
+    AGENT_ADMIN_ON = False
+
 def main():
     names = platform.app_names()
     bar = "=" * 54
@@ -67,6 +76,7 @@ def main():
     print(f"鉴权     : {'开启（首次登录 admin/admin，请尽快改密）' if AUTH_ON else '关闭（无认证模式）'}")
     print(f"定时任务 : {'开启（/scheduler）' if SCHED_ON else '关闭'}")
     print(f"大模型配置: {'开启（/llm）' if LLM_ADMIN_ON else '关闭'}")
+    print(f"Agent 后端: {os.environ.get('AGENT_BACKEND', 'agentscope')}（管理页 /agent-admin）")
     print(f"应用目录 : {platform.apps_dir}")
     print(f"发现应用 : {len(names)} 个")
     # 按应用组（app/ 一级目录）分组展示；未分组应用单列

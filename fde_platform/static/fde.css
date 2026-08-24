@@ -99,7 +99,7 @@ header.top .crumb { font-size: 12px; color: var(--muted); }
 .agent-toggle.on:hover { color: #fff; }
 
 aside.agent-rail {
-  width: 340px; flex: none; background: #0e1b2a; border-left: 1px solid #1e2c3e;
+  width: 380px; flex: none; background: #0e1b2a; border-left: 1px solid #1e2c3e;
   position: sticky; top: 0; height: 100vh; display: flex;
 }
 aside.agent-rail > div { flex: 1; min-width: 0; min-height: 0; display: flex; }
@@ -108,8 +108,9 @@ aside.agent-rail > div { flex: 1; min-width: 0; min-height: 0; display: flex; }
 .agent-rail-hd { display: flex; align-items: center; justify-content: space-between; }
 .agent-rail-sel { width: 100%; }
 .agent-rail-chat { flex: 1; height: auto; min-height: 200px; }
-.agent-rail-input { display: flex; gap: 8px; align-items: flex-end; }
-.agent-rail-input textarea { flex: 1; resize: none; }
+.agent-rail-input { display: flex; flex-direction: column; gap: 8px; }
+.agent-rail-input textarea { width: 100%; min-height: 92px; resize: vertical; line-height: 1.5; }
+.agent-rail-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
 
 /* ── Agent 右栏 · 暗色主题 ────────────────────────────── */
 .agent-rail .overline { color: #9fb0c5; }

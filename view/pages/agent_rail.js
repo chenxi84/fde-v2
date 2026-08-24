@@ -24,6 +24,8 @@ export function agentRail() {
     input: "",
     sending: false,
     progress: "",     // 「执行中」阶段文案
+    live: null,       // 流式回复气泡 {content, tool_calls}
+    confirm: null,    // 待人工确认的危险操作 [{id,name,input}]
     uploading: false, // 附件上传中
 
     async init() {
@@ -94,6 +96,9 @@ export function agentRail() {
       self.input = "";
       self.sending = true;
       self.progress = "思考中…";
+      self.live = { content: "", tool_calls: [] };
+      self.confirm = null;
+      const tools = [];
       try {
         if (!self.sid) {
           const s = await post("/api/agent/sessions", {});
@@ -103,34 +108,86 @@ export function agentRail() {
         self.msgs.push({ role: "user", content: m });
         self.scrollEnd();
         const sid = self.sid;
-        // 「执行中」进度轮询（阶段信号，不含工具返回数据）
-        const poller = setInterval(async () => {
-          try {
-            const pr = await fetch(`/api/agent/progress?session_id=${encodeURIComponent(sid)}`);
-            const pj = await pr.json();
-            const p = pj && pj.data;
-            if (!p) return;
-            if (p.phase === "tool" && p.tool) {
-              self.progress = `正在调用 ${toolDisp(p.tool)}` + (p.tools_done ? `（已完成 ${p.tools_done} 个）` : "");
-            } else if (p.phase === "llm") {
-              self.progress = `第 ${p.round || 1} 轮推理`;
-            }
-          } catch { /* 轮询失败不影响主流程 */ }
-        }, 1200);
-        const r = await post("/api/agent/chat", { message: m, session_id: sid });
-        clearInterval(poller);
-        const names = (r.tool_calls || []).map(toolNameOf).filter(Boolean).map(toolDisp);
-        self.msgs.push({
-          role: "assistant",
-          content: r.reply || "",
-          tool_calls: names.length ? names : undefined,
-        });
+        const onEvent = (evt) => {
+          if (evt.event === "delta") { self.live.content += evt.data; }
+          else if (evt.event === "tool") {
+            tools.push(toolDisp(evt.data));
+            self.live.tool_calls = [...tools];
+            self.progress = `正在调用 ${toolDisp(evt.data)}`;
+          }
+          else if (evt.event === "done") {
+            self.live.content = evt.data || self.live.content;
+            self.live.tool_calls = tools;
+          }
+          else if (evt.event === "error" && !self.live.content) {
+            self.live.content = "⚠ " + evt.data;
+          }
+          else if (evt.event === "confirm_required") {
+            self.confirm = evt.data;  // 停车，等人工确认
+          }
+          self.scrollEnd();
+        };
+        await this.streamRequest("/api/agent/chat/stream", { message: m, session_id: sid }, onEvent);
+        // HITL：危险操作需人工确认，确认/拒绝后继续（可多轮）
+        while (self.confirm) {
+          const names = self.confirm.map(c => c.name).join("\n");
+          const ok = window.confirm("⚠ Agent 请求执行以下操作（需人工确认）：\n" + names +
+            "\n\n「确定」= 确认执行；「取消」= 拒绝。");
+          const decisions = self.confirm.map(c => ({ id: c.id, confirmed: ok }));
+          self.confirm = null;
+          await this.streamRequest("/api/agent/confirm", { session_id: sid, decisions }, onEvent);
+        }
         self.progress = "";
+        this.commitLive();
         await self.loadSessions();
-      } catch { self.progress = ""; } finally {
+      } catch (e) {
+        self.progress = "";
+        if (self.live && !self.live.content) self.live.content = "⚠ 请求失败，请重试";
+        this.commitLive();
+      } finally {
         self.sending = false;
         self.scrollEnd();
       }
+    },
+
+    /* POST SSE 流式读取：逐帧解析 data: {...} 并回调。 */
+    async streamRequest(url, payload, onEvent) {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok || !resp.body) throw new Error("HTTP " + resp.status);
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf("\n\n")) >= 0) {
+          const frame = buf.slice(0, idx).trim();
+          buf = buf.slice(idx + 2);
+          if (!frame.startsWith("data:")) continue;
+          let evt;
+          try { evt = JSON.parse(frame.slice(5).trim()); } catch { continue; }
+          onEvent(evt);
+        }
+      }
+    },
+
+    /* 把流式 live 气泡落为一条历史消息（快照，避免引用 live 反应式对象导致渲染丢失） */
+    commitLive() {
+      if (!self.live) return;
+      const content = self.live.content || "";
+      const tools = (self.live.tool_calls || []).filter(Boolean);
+      self.msgs.push({
+        role: "assistant",
+        content,
+        tool_calls: tools.length ? [...tools] : undefined,
+      });
+      self.live = null;
     },
 
     async newSession() {

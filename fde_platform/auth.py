@@ -36,6 +36,9 @@ WHITELIST_PREFIXES = ("/static/",)
 AGENT_ENDPOINTS = {
     "api_agent_chat", "api_agent_reset",
     "api_platform_agent_chat", "api_platform_agent_reset",
+    # SSE 流式 + HITL 确认（同样按用户隔离 session_id）
+    "api_agent_chat_stream", "api_agent_confirm",
+    "api_platform_agent_chat_stream", "api_platform_agent_confirm",
 }
 
 # 应用前端静态资源端点（/app/<名>/view.{js,html}）：是前端代码而非数据，
@@ -293,8 +296,15 @@ def register(app):
     app.register_blueprint(users.bp)
     app.register_blueprint(auth_bp)
     app.before_request(gate)
+
+    @app.context_processor
+    def _inject_auth_user():
+        """向所有模板注入当前登录用户（gate 已置 g.auth_user；登录页/未登录为 None）。"""
+        user = g.get("auth_user") if "auth_user" in g else None
+        return {"auth_user": user}
+
     # 右下角悬浮用户条（登录用户/用户管理/退出）按需求移除，不再注入；
-    # 用户名与退出仍在视图壳头部 .uchip 提供，用户管理经 /auth/users 或控制台进入。
+    # 用户管理入口已移至 base.html 顶部导航（仅 admin 可见），用户名/退出仍在 .uchip。
     # app.after_request(inject_userbar)
 
     logger.info("鉴权已启用 · 用户库 %s", users.DB_PATH)

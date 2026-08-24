@@ -320,7 +320,7 @@ class SalesForecast:
                 failed += 1
         return {"version_no": version_no, "computed": computed, "failed": failed}
 
-    def import_orig_qty(self, version_no: str, rows):
+    def import_orig_qty(self, version_no: str, rows: list):
         """批量导入客户原始预测：逐行调 fill_customer 写 orig_qty（自动算 adj、N+1 关联历史台账），
         单行失败（物料/客户不存在、月度非法、非草稿等）跳过不阻断。返回 {total,success,fail,errors}。"""
         version_no = self._require(version_no, "版本号")

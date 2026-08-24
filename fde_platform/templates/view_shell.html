@@ -45,6 +45,7 @@
         <span class="ava" x-text="me ? me.username.slice(0, 1).toUpperCase() : ''"></span>
         <span><b x-text="me ? me.username : ''"></b>
           <span class="muted" x-text="me ? '· ' + me.role_label : ''"></span></span>
+        <a href="/auth/users" x-show="me && me.is_admin">用户权限</a>
         <a href="/logout">退出</a>
       </div>
       <button class="agent-toggle" :class="{ on: agentOpen }" @click="toggleAgent()"

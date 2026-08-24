@@ -44,9 +44,18 @@
               </template>
             </div>
           </template>
-          <template x-if="sending">
+          <template x-if="sending && live">
             <div class="msg ai"><div class="who">Agent</div>
-              <div class="b typing muted">思考 / 调用工具中</div></div>
+              <div class="b" x-show="live.content" x-text="live.content"></div>
+              <div class="b typing muted" x-show="!live.content">思考 / 调用工具中</div>
+              <template x-if="live.tool_calls && live.tool_calls.length">
+                <div>
+                  <template x-for="(t, ti) in live.tool_calls" :key="ti">
+                    <span class="tcall" x-text="'⚙ ' + t"></span>
+                  </template>
+                </div>
+              </template>
+            </div>
           </template>
         </div>
         <div class="tagline mt12">
