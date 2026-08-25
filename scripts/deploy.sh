@@ -5,7 +5,7 @@
 
 SERVER="${1:?请提供服务器IP}"
 USER="${2:-root}"
-REMOTE_DIR="/opt/fde-v2"
+REMOTE_DIR="/opt/fde-v2.2"
 
 set -e
 
