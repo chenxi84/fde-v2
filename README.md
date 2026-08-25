@@ -72,7 +72,6 @@ fde-v2/
 │   ├── lib/                   #   前端公共库（alpine / shell / api / styles，只读环境前提）
 │   └── pages/                 #   平台通用页（console / agent）
 ├── design-plus/                    # ★ 主规格：轻量技能体系（九步法 + 前后端约定正本，含完成门禁）
-├── design-normal/                  # 基础规格：无门禁版，适用于 demo / 低优先级 / 非正式设计
 │   ├── CONVENTION.md          #   ★ 后端应用约定正本（CONVENTION v2，唯一来源）
 │   ├── VIEW_CONVENTION.md     #   ★ 前端视图约定正本（VIEW_CONVENTION v1，唯一来源）
 │   ├── view-convention/       #   前端约定参考资料（architecture/patterns/design-system/pitfalls）
@@ -115,7 +114,7 @@ python main.py
 
 ### 从零构建一个新业务系统
 
-推荐入口：将设计规格与业务说明发给 AI 代理（如 Claude Code），按 `design-plus/工具链使用说明.md` 逐步执行九步法。**正式项目**建议使用 `design-plus/`（含完成门禁，每步强制 100% 覆盖度）；demo / 低优先级项目可用 `design-normal/`（无门禁）。
+推荐入口：将设计规格与业务说明发给 AI 代理（如 Claude Code），按 `design-plus/工具链使用说明.md` 逐步执行九步法（含完成门禁，每步强制 100% 覆盖度）。
 
 也可手工驱动 Claude，把下面这句话连同你的业务说明发给它：
 

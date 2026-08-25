@@ -40,7 +40,7 @@ python app/<组>/tests/verify_view_<组>.py             # 组级壳/菜单/dashb
 - 前端调服务一律 `svc("应用","服务",...)` **字面量**（不能变量拼名）——后端靠扫描源码里的字面量派生「页→服务」隐式放行边。
 
 ### 构建流水线（九步法）
-`design-plus/` 是**主规格**（含每步完成门禁，强制 100% 覆盖度）；`design-normal/` 是无门禁版（demo/低优先级）。构建入口见 `design-plus/工具链使用说明.md`：
+`design-plus/` 是**主规格**（含每步完成门禁，强制 100% 覆盖度）。构建入口见 `design-plus/工具链使用说明.md`：
 
 - ① 架构设计 → ② 应用详设 → ③ 编码（CONVENTION）→ ④ 测试用例 → ⑤ 测试执行（`verify_chain`）→ **契约冻结 `app/<组>/_contracts.md`（前后端依赖屏障，未冻结不开工前端）** → ⑥ 前端设计 → ⑦ 前端编码（VIEW_CONVENTION）→ ⑧ 前端测试用例 → ⑨ 前端测试执行（`verify_view`，出口闸）。
 
