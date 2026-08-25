@@ -52,6 +52,9 @@ aside.rail {
   color: #c7d3e2; padding: 18px 12px 14px; display: flex; flex-direction: column; gap: 2px;
   position: sticky; top: 0; height: 100vh;
 }
+.rail .back-home { display: block; padding: 0 10px 12px; font-size: 12px; color: #7e90a8;
+  text-decoration: none; transition: color .15s; }
+.rail .back-home:hover { color: #ffd58f; }
 .brand { padding: 2px 10px 16px; border-bottom: 1px solid rgba(255,255,255,.08); margin-bottom: 12px; }
 .brand .name { font-size: 19px; font-weight: 800; letter-spacing: .04em; color: #fff; }
 .brand .name em { font-style: normal; color: #f5b04c; }
@@ -431,6 +434,15 @@ hr.sep { border: none; border-top: 1px dashed var(--line); margin: 12px 0; }
   border: 1px solid #dde3da; border-radius: 5px; background: #eef1ec; color: #33414f;
   font: 500 11.5px var(--mono); transition: border-color .15s, color .15s; }
 .group-card:hover .chip { border-color: rgba(23,94,84,.45); color: var(--prime-deep); }
+.group-card .wl-chips { min-height: 30px; }
+.group-card .enter-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-top: 14px; padding: 8px 16px;
+  background: var(--prime); color: #fff; border-radius: 7px;
+  font: 600 13px var(--sans); text-decoration: none;
+  transition: background .16s var(--ease), transform .1s var(--ease);
+}
+.group-card .enter-btn:hover { background: var(--prime-deep); color: #fff; transform: translateX(2px); }
 
 /* ── 登录页：品牌墙 + 登录卡 ── */
 .login-wrap { box-sizing: border-box; max-width: 1060px; min-height: calc(100vh - 64px);

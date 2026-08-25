@@ -13,22 +13,23 @@
       {% endif %}
     </div>
 
-    <!-- ── 兜底可达清单（搜索 + 分组芯片：视图 + 详情 双入口）── -->
-    <div class="section-title">全部应用 · 可达清单</div>
-    <div class="wiring-list reveal">
-      <input class="wiring-search" type="search" id="wsearch" placeholder="搜索应用（名称或键名）…">
+    <!-- ── 应用组卡片（主入口：进入应用组 + 应用快速直达）── -->
+    <div class="section-title">应用组 · 选择进入</div>
+    <div class="group-grid reveal">
       {% for g in groups %}
-        <div class="wl-group" data-group="{{ g.key }}">
-          <b>{{ g.name }}</b> <span class="muted">{{ g.app_count }} 个应用</span>
-          <div class="wl-chips">
+        <div class="card group-card">
+          <h3>{{ g.name }} <span class="muted">· {{ g.app_count }} 个应用</span></h3>
+          <div class="wl-chips" style="margin-top:10px">
             {% for a in g.apps %}
               {% set short = a.split('/')|last %}
-              <span class="wl-chip" data-key="{{ short }}" data-name="{{ app_names.get(short, a) }}">
-                <a class="chip" href="/view/{{ g.key }}/#/{{ short }}">{{ app_names.get(short, a) }} <span class="muted">{{ a }}</span></a>
+              <span class="wl-chip">
+                <a class="chip" href="/view/{{ g.key }}/#/{{ short }}"
+                   title="进入应用 {{ app_names.get(short, a) }}">{{ app_names.get(short, a) }}</a>
                 <a class="chip-det" href="/app/{{ a }}" title="应用详情 · README / 服务调试 / MCP">详情</a>
               </span>
             {% endfor %}
           </div>
+          <a class="enter-btn" href="/view/{{ g.key }}/">进入 {{ g.name }} 应用组 →</a>
         </div>
       {% endfor %}
     </div>
