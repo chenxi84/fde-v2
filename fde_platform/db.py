@@ -305,6 +305,12 @@ class _PgConnection:
 
     def execute(self, sql, params=None):
         sql = _translate_ddl(sql)
+        # SQLite PRAGMA table_info(X) → PG information_schema（r[1]=列名，兼容应用取列名的口径）
+        m = re.match(r'PRAGMA\s+table_info\s*\(\s*([A-Za-z_]\w*)\s*\)', sql, re.IGNORECASE)
+        if m:
+            table = m.group(1).lower()
+            sql = (f"SELECT ordinal_position, column_name FROM information_schema.columns "
+                   f"WHERE table_name = '{table}' ORDER BY ordinal_position")
         sql = sql.strip()  # 去首尾空白，保证和 sql_upper 索引对齐
         ctx = getattr(self, "_fde_ctx", None) or {}
         user = (ctx or {}).get("userno", "") or ""
