@@ -6,8 +6,6 @@
 - **流水线（构建期）**：`design-plus/` 轻量九步法（后端五步 + 前端四步），配合 AI 代理从一段业务说明出发，自动产出**架构设计 → 详设 → 编码 → 测试用例/执行 → 契约冻结 → 前端四步**，端到端交付一个可运行系统。
 
 > 仓库内自带现行约定样板 `app/e2e/`（成员/任务，最小完整、九步产物齐全）。
->
-> 📖 **可视化技术文档**：浏览器打开 [`README/index.html`](README/index.html)——技术架构图（SVG）、平台功能实用说明、平台文件概述。本文件保持 Markdown 形态，供检索 / diff / 工具读取，两者互补。
 
 ---
 
@@ -47,15 +45,25 @@
 fde-v2/
 ├── main.py                    # 平台启动入口（python main.py → http://127.0.0.1:4000）
 ├── fde.py                     # 平台 SDK（对应用的公共依赖，目前含业务异常基类 FdeError）
-├── fde_platform/              # 平台实现（发现/加载/注入/路由/鉴权/Agent/MCP/调度/设计器…）
+├── fde_platform/              # 平台实现（发现/加载/注入/路由/鉴权/Agent/MCP/调度…）
 │   ├── web.py                 #   Flask 应用与控制台路由
 │   ├── runtime.py / scanner.py#   运行期加载与跨调用静态扫描器
-│   ├── agent.py / llm.py      #   对话 Agent 与 LLM 接入
+│   ├── agent_agentscope.py    #   Agent 编排唯一后端（AgentScope 2.0，import 失败回落降级）
+│   ├── agent_common.py        #   Agent 共享基座（提示词 / 进度 / 会话 helper）
+│   ├── agent_state.py         #   会话持久化（AgentScope 原生 state，取代 chatstore）
+│   ├── agentscope_bridge.py   #   工具桥接（平台工具定义 + 危险操作 HITL）
+│   ├── skills.py              #   自进化 skill 库（draft→approve→published）
+│   ├── agent_admin.py         #   Agent 管理页 /agent-admin
+│   ├── llm.py / llm_admin.py  #   LLM 接入与管理（可插拔）
 │   ├── mcp_server.py          #   MCP 服务（stdio）
+│   ├── platform_mcp_tools.py  #   平台管理能力开放为 MCP tools
 │   ├── scheduler.py           #   定时任务（APScheduler，可插拔）
 │   ├── auth.py / users.py     #   鉴权（可插拔，删除即回落无认证）
-│   ├── design_* / builder.py  #   应用组设计器（后台 builder agent + 工具链，可插拔）
-│   ├── static/ · templates/   #   控制台前端资源
+│   ├── integration.py         #   集成接口管理（外部系统适配器 / 网关）
+│   ├── view_registry.py       #   前端视图扫描与菜单装配
+│   ├── listsort.py            #   列表排序（平台保留参数 sort_by/sort_dir）
+│   ├── dbguard.py             #   测试数据库隔离
+│   └── static/ · templates/   #   控制台前端资源
 ├── app/                       # 全部 FDE 应用（组 = 一级目录）
 │   ├── e2e/                   #   应用组「e2e」——现行约定样板（member/task）
 │   │   ├── 架构设计.md         #     ① 组级总体架构
@@ -67,7 +75,6 @@ fde-v2/
 │   │       ├── 前端详设.md       #       前端详设（设计态，不 serve）
 │   │       ├── view.js/view.html#       前端页面（落盘即进菜单）
 │   │       └── <应用>.db        #       运行期自建（不提交）
-│   └── mom/                   #   （预留，空）
 ├── view/                      # 组级聚合页（无后端应用的页面，如 e2e/dashboard）
 │   ├── lib/                   #   前端公共库（alpine / shell / api / styles，只读环境前提）
 │   └── pages/                 #   平台通用页（console / agent）
@@ -86,10 +93,8 @@ fde-v2/
 │   ├── 前端测试.md             #   第⑧步：前端测试用例生成（逐应用 + 组级补充）
 │   └── 前端测试执行.md          #   第⑨步：用例 → 逐应用 verify_view 脚本 + 组级脚本并跑通
 ├── config/                    # 配置与运行期数据库
-│   ├── .env.example           #   配置模板（复制为 .env）
-│   └── stub/*.json            #   离线 stub 数据（单一数据源）
-├── tests/                     # 手工回归工具箱（verify_* / test_* / seed_demo / smoke，仅人工运行，平台不依赖；测试产物已按组归档至 app/<组>/tests/，隔离基建在 fde_platform/dbguard.py）
-└── spike_out/                 # 其它实验产出
+│   └── .env.example           #   配置模板（复制为 .env）
+└── scripts/                   # 部署与运维脚本（deploy.sh / gen-cert.sh / smoke_test.py）
 ```
 
 ---
@@ -107,7 +112,7 @@ python main.py
 # 浏览器访问 http://127.0.0.1:4000
 ```
 
-启动横幅会打印：鉴权 / 定时任务 / 大模型配置 / 应用组设计四个**可插拔**模块的开关状态，以及发现的应用清单（按组分组）。
+启动横幅会打印：鉴权 / 定时任务 / LLM / Agent 编排四个**可插拔**模块的开关状态，以及发现的应用清单（按组分组）。
 
 - **鉴权**：默认开启，首次登录 `admin / admin`（请尽快改密）。删除 `fde_platform/auth.py` 与 `users.py` 即回落无认证模式。
 - **MCP 服务**（stdio，另起进程）：`python -m fde_platform.mcp_server`
@@ -136,10 +141,10 @@ Claude 会读规范、逐步推进，你只需在「第①步 应用划分」「
 | **跨应用路由** | 实现 `self.fde.call` 的按名解析与运行期绑定，身份 `ctx` 自动透传且不可伪造。 |
 | **身份与鉴权** | 平台认证调用人、注入权威 `ctx`；授权维度是「应用下的开放服务」，Web / MCP / Agent / 调度四处一致强制。 |
 | **静态扫描器** | `python -m fde_platform.scanner` 用 AST 在**不运行**前提下校验所有 `self.fde.call` 的目标与参数契约（退出码可入 CI）；结果见控制台 `/api/scan`。 |
-| **AI Agent** | 每个应用可带 `README.md`（注入该应用 Agent 的 system prompt）；对话经 LLM（兼容 OpenAI 接口的国产模型）驱动工具调用。 |
+| **AI Agent（AgentScope）** | 唯一后端 `agent_agentscope.py`（AgentScope 2.0 编排，import 失败自动回落降级）；自进化 skill 库（`skills.py` draft→approve→published）；危险操作经 `_meta.dangerous` 走 HITL 人工确认；会话持久化用 AgentScope 原生 state（`agent_state.py`，取代 chatstore）。 |
 | **资源目录** | 每个应用自动建 `resource/import-file`（上传）/ `export-file`（产出），配套内置文件工具供 Agent / MCP 做数据导入。 |
 | **定时任务** | APScheduler 按 cron 调度公共服务，管理页 `/scheduler`，日志落 `config/scheduler.db`。 |
-| **视图装配** | 扫描各应用 `view.{js,html}` 的自描述 `PAGE_META`，零接线装配进所属组菜单；仅经写死端点 `/app/<名>/view.{js,html}` serve。 |
+| **视图装配** | 扫描各应用 `view.{js,html}` 的自描述 `PAGE_META`（key/name/ic/order/bold/col_default_hidden），零接线装配进所属组菜单；组级聚合页放 `view/<组>/`，经 `view_registry.py` 统一扫描与 `/view/<组>/` 路由 serve。 |
 | **列表排序（零改动）** | 平台保留参数 `sort_by/sort_dir` + `watchSortableTables()` 自动装饰表头：点击列头由后端排序后返回当前页，应用 list 契约与前端代码均无需改动（`fde_platform/listsort.py`）。 |
 | **自定义显示列（跟账号）** | 工具栏右侧注入列设置图标，弹层可对**全部已渲染列**勾选显隐（表头文本标识 + nth-child 隐藏，扛 x-for 重渲染）；配置存 `/api/prefs/cols:<页>`（`user_prefs` 表，per-user 持久化）。`list()` 约定返回全字段、视图渲染全列，`PAGE_META.col_default_hidden` 声明默认隐藏的非关键列（默认只显示关键列），用户调整后个人配置覆盖。范例 `md_material`。 |
 | **数据库双模** | 默认 SQLite，配置 `DATABASE_URL` 即可切换 PostgreSQL；建表语句、SQL 方言自动翻译，应用零改动。 |
@@ -231,7 +236,7 @@ class Todo:                                  # 类 = 聚合根，PascalCase（�
 
 ```bash
 python -m fde_platform.scanner             # 跨应用调用契约左移校验（有问题退出码 1）
-python tests/verify_web.py                 # 平台 Web / test_client 验收
+python app/<组>/tests/verify_chain_<组>.py  # 后端主链端到端（各组自含，dbguard 隔离）
 python design-plus/前端验收样板/verify_view_e2e.py            # e2e 前端验收（playwright，需 Chromium）
 ```
 
@@ -265,5 +270,5 @@ python design-plus/前端验收样板/verify_view_e2e.py            # e2e 前端
 | 上线后持续演进 | 修改详设 → AI 代理单步重执行 → 回归测试 |
 | 外部系统对接 | `/integration` 集成接口管理（扫描/配置/测试/跟踪） |
 | 平台 MCP 管理 | `python -m fde_platform.mcp_server --user admin` |
-| 部署指南 | `HOW-TO-USE.md`（本地开发 / Docker HTTP / Docker HTTPS+PG） |
+| 部署指南 | `HOW-TO-USE.md`（本地开发 / Docker HTTP / Docker HTTPS+PG / deploy.sh 一键部署） |
 | 活的参考实现（只读） | `app/e2e/`（现行约定样板：架构 / 详设 / 前端详设 / view / 契约一应俱全） |

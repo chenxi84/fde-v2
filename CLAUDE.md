@@ -8,7 +8,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 python main.py                                    # 启动平台 → http://127.0.0.1:4000（默认账号 admin/admin）
 python -m fde_platform.scanner                    # 跨应用调用契约静态扫描（有问题退出码 1，可入 CI）
 python -m fde_platform.mcp_server [--user admin]  # 以 stdio MCP 服务暴露全部应用（供外部 AI 工具接入）
-python tests/verify_web.py                        # 平台 Web / test_client 验收
 ```
 
 测试（每个脚本自包含、独立运行；**必须先停掉 dev server**）：

@@ -20,8 +20,6 @@ echo ">>> git pull..."
 git pull
 echo ">>> docker-compose down..."
 docker-compose down
-echo ">>> 清理 pgdata..."
-sudo rm -rf pgdata 2>/dev/null || true
 echo ">>> docker-compose build..."
 docker-compose build --no-cache 2>&1 | tail -3
 echo ">>> docker-compose up..."

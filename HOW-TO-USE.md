@@ -78,6 +78,20 @@ docker compose up -d --build
 
 > 如果服务器在国内且 Docker Hub 连接超时，需先配置镜像加速（见 Dockerfile 和 daemon.json）。
 
+### 一键自动部署（deploy.sh）
+
+一条命令完成「本地推 Gitee → 服务器拉取 → 容器化重建 → 冒烟验证」全流程。
+
+```bash
+bash scripts/deploy.sh <服务器IP> [SSH用户名]
+```
+
+前提：本地已配置 Gitee 远程（`git push origin master` 可用）；服务器 `/opt/fde-v2` 已 `git clone` 该项目并配好 SSH 免密登录；服务器已安装 docker-compose。
+
+脚本流程：`git push origin master` → 服务器 `git pull` → `docker-compose down` → `docker-compose build --no-cache` → `docker-compose up -d` → curl 健康检查 → 本地跑冒烟测试。
+
+> 冒烟测试也可单独运行：`python scripts/smoke_test.py <服务器IP>`，验证登录与核心服务是否正常。
+
 ---
 
 ## 四、使用
