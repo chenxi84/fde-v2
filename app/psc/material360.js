@@ -1,8 +1,8 @@
-/* view/psc/material360.js —— psc 组级聚合页「物料 360 视图」（无后端应用 · key=material_360）
+/* app/psc/material360.js —— psc 组级聚合页「物料 360 视图」（无后端应用 · key=material_360）
    选中一个物料，一屏呈现其基础数据 / 销售历史 / 预测与库存策略 / 毛净需求 / 入库出库计划 / 库存推移。
    编排方式：前端 Promise.allSettled 扇出 ~15 个 quiet svc 字面量，每个分区独立零值回落
-   （任一应用无数据/失败只空该区，不坏整页；照抄 view/psc/dashboard.js 模式）。
-   图表：手写 SVG 模板字符串 + x-html 注入（照抄 view/psc/process.js buildSvg 模式）。
+   （任一应用无数据/失败只空该区，不坏整页；照抄 app/psc/dashboard.js 模式）。
+   图表：手写 SVG 模板字符串 + x-html 注入（照抄 app/psc/process.js buildSvg 模式）。
    月度版本：自动取当前活跃版本（get_active），非用户可选——360 视图与版本无关，仅作只读标注。 */
 import { svc, hue, fmt, dash } from "/view/lib/api.js";
 

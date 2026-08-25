@@ -1,9 +1,9 @@
-/* view/psc/dashboard.js —— psc 组级看板（无后端应用的聚合页 · 默认落地页 key=dashboard）
+/* app/psc/dashboard.js —— psc 组级看板（无后端应用的聚合页 · 默认落地页 key=dashboard）
    区块：KPI 指标带（demand_pool 三态 / strategy_fitting 待复核 / 月度版本草稿 / 推移表缺货预警）
         + 主链管道 7 段（销售预测→库存策略→毛净需求→主计划→推移表→需求池→策略拟合，各 list 最近 5 行）
         + 待办队列 3 行（需求池待下达 / 拟合待复核 / 版本草稿）。
    全部 15 处 svc 字面量 + {quiet:true} 探测（失败零值兜底，不喷 toast）；跳转目标字面量 key。
-   对标 view/e2e/dashboard.*。 */
+   对标 app/e2e/dashboard.*。 */
 import { svc, hue, fmt } from "/view/lib/api.js";
 
 /* 页面自描述（平台扫描的唯一入口）：组级页 key 固定 dashboard；order 最小居首 */

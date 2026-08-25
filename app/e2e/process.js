@@ -1,4 +1,4 @@
-/* view/e2e/process.js —— 组级「流程总览」参考实现（数据驱动 SVG 流程图，最小自足样例）
+/* app/e2e/process.js —— 组级「流程总览」参考实现（数据驱动 SVG 流程图，最小自足样例）
    不聚合后端服务，硬编码一条 3 阶段链路，演示核心范式（照抄结构、换业务数据即可）：
    ① SVG 不在模板里用 x-for，改在 JS 拼 SVG 字符串 → x-html 注入；点击用 data-page 事件委托；
    ② 坐标在 computeLayout() 里算；③ 正交直角连线 elbow + 步骤间横向箭头 hArrow；④ 暗色主题。

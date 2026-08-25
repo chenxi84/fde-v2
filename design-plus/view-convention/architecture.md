@@ -25,11 +25,11 @@ view/                         仅平台级与组级（非逐应用）内容
 **应用前端与后端同文件夹**：模块内没有 `index.html` / `app.js`，也没有独立的
 `view/<组>/pages/` 树——应用页就在 `app/<组>/<应用>/view.{js,html}`。通用壳由平台
 `fde_platform/templates/view_shell.html` 统一渲染，页面清单与品牌由平台扫描
-`app/<组>/<应用>/view.js` 与组级页 `view/<组>/*.js` 约定推导（见下「启动时序」）。
+`app/<组>/<应用>/view.js` 与组级页 `app/<组>/*.js` 约定推导（见下「启动时序」）。
 
 依赖方向单向：业务页 → `/view/lib/`（绝对 import）；平台壳 `view_shell.html` →
 `lib/shell.js` 的 `bootShell` →（运行期动态 `import()`）应用页（`/app/<名>/view.js`）
-与组级页（`/view/<组>/<页>.js`）；`shell.js` → 平台公共页。业务页之间不互相依赖。
+与组级页（`/app/<组>/<页>.js`）；`shell.js` → 平台公共页。业务页之间不互相依赖。
 
 ## 部署拓扑
 
@@ -66,8 +66,8 @@ bootShell("{{ module }}");
 
 `bootShell(module)` 的异步装配链（`lib/shell.js`）：
 
-1. `get("/api/view_boot?module=<组>")` 拉启动清单 `{module, brand, pages}`（服务端扫描 `app/<组>/<应用>/view.js` 与组级页 `view/<组>/*.js`，按 `PAGE_META.order` 升序；品牌约定推导）。
-2. `Promise.all(pages.map(p => import(p.url)))` **并行动态加载**各页工厂（应用页 `p.url = /app/<应用>/view.js`，组级页 `p.url = /view/<组>/<页>.js`）。
+1. `get("/api/view_boot?module=<组>")` 拉启动清单 `{module, brand, pages}`（服务端扫描 `app/<组>/<应用>/view.js` 与组级页 `app/<组>/*.js`，按 `PAGE_META.order` 升序；品牌约定推导）。
+2. `Promise.all(pages.map(p => import(p.url)))` **并行动态加载**各页工厂（应用页 `p.url = /app/<应用>/view.js`，组级页 `p.url = /app/<组>/<页>.js`）。
 3. 逐页 `Alpine.data(key, mod.default)` 注册（**约定：工厂为默认导出**）并登记 `components`。
 4. `Alpine.data("shell", () => createShell({module, brand, pages, components}))` 注册壳组件。
 5. **显式 `Alpine.start()`**。
@@ -77,7 +77,7 @@ bootShell("{{ module }}");
 
 `shell.js` 被导入时顺带挂好 x-html 模板所需的 window 全局助手（`dash`/`fmtTime`/`tryParse`——Alpine 表达式对未绑定标识符回落 window）。
 
-> **新页面落盘即生效**：启动清单源自从 `app/<组>/<应用>/view.js` 与 `view/<组>/*.js`
+> **新页面落盘即生效**：启动清单源自从 `app/<组>/<应用>/view.js` 与 `app/<组>/*.js`
 > 的动态扫描（`view_registry` mtime 缓存——被扫描文件 mtime 变化即重扫），故新增/修改
 > 页面无需改任何框架文件，浏览器刷新后菜单与授权清单自动更新；管理页「重新扫描」可立即刷新。
 

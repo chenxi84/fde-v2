@@ -53,11 +53,11 @@
 
 ## 前后端同文件夹
 
-35. **应用页模板固定名 `view.html`**：`view.js` 抓 `new URL("view.html", import.meta.url)`，serve 于 `/app/<名>/view.html`。别把模板叫回 `<应用>.html`——端点只认 `view.html`。组级页例外：模板与页面同名（`dashboard.html`），走 `/view/<组>/` 静态。
+35. **应用页模板固定名 `view.html`**：`view.js` 抓 `new URL("view.html", import.meta.url)`，serve 于 `/app/<名>/view.html`。别把模板叫回 `<应用>.html`——端点只认 `view.html`。组级页例外：模板与页面同名（`dashboard.html`），走 `/app/<组>/` 静态。
 
 ## 模块构建（2026-08 e2e 模块实测新增）
 
-36. **每个模块必须有 dashboard 组级页（最致命的静默崩溃）**：平台壳 `shell.js` 的默认路由写死 `route: "dashboard"`（`view/lib/shell.js`）。模块若没有 `view/<组>/dashboard.{js,html}`，授权集到达**之前**的预渲染窗口与受限用户回落都会把空 `{}` 挂到默认路由上 → 模板里 `x-html="tpl"` 对 `undefined` 求值，连同看板要引用的 `list.items` 等一起喷一片 console error。2026-08 给 e2e 模块只建了应用页、漏了看板，verify_view 首屏即 5 个报错。✅ 规则：**新建模块 = 必产 `view/<组>/dashboard.{js,html}`**（key="dashboard"、PAGE_META.order 给最小、quiet 探测 + 零值兜底，照抄 `view/e2e/dashboard.*`）；它不是"可选聚合页"，是壳能正常启动的前提。
+36. **每个模块必须有 dashboard 组级页（最致命的静默崩溃）**：平台壳 `shell.js` 的默认路由写死 `route: "dashboard"`（`view/lib/shell.js`）。模块若没有 `app/<组>/dashboard.{js,html}`，授权集到达**之前**的预渲染窗口与受限用户回落都会把空 `{}` 挂到默认路由上 → 模板里 `x-html="tpl"` 对 `undefined` 求值，连同看板要引用的 `list.items` 等一起喷一片 console error。2026-08 给 e2e 模块只建了应用页、漏了看板，verify_view 首屏即 5 个报错。✅ 规则：**新建模块 = 必产 `app/<组>/dashboard.{js,html}`**（key="dashboard"、PAGE_META.order 给最小、quiet 探测 + 零值兜底，照抄 `app/e2e/dashboard.*`）；它不是"可选聚合页"，是壳能正常启动的前提。
 37. **reactive 状态必须同步建好，再 await**：页面工厂的 `init()` 若先 `await`（如 `await loadMembers()`）再创建某个 `Alpine.reactive` 子对象（如 `self.list = pageable(...)`），`self.tpl` 一旦赋值 Alpine 即注入模板并求值 `list.items/total/page`，此刻 `list` 仍是 `null` → 「reading 'items' of null」。2026-08 task 页 init 先 await 成员映射、后建 list，首屏喷 4 个 null 错。✅ 规则：工厂体内**一切会被模板引用的 reactive 状态，必须在第一个 `await` 之前同步初始化**（list 先 `pageable(...)` 建好含空 `items:[]`，再 `await loadMembers()`，最后 `await self.list.load()`）——对标 e2e 范式。
 38. **加页面 = 同步更新 verify 受限用户断言（耦合极易漏）**：模块新增页面（尤其看板）后，`app/<组>/tests/verify_view_<组>.py` 里两处必须跟着改，否则受限阶段误报 403 / 回落断言失败：① 受限角色的授权清单要加上新页（如 `users.set_role_page_grants("limited_role", ["<组>:dashboard", "<组>:member", "_platform:agent"])`）——新页进菜单后预渲染窗口会带 `X-Fde-Page="<组>:<新页>"` 发 svc，未授权即 403；② 直访无授权路由的**回落断言**要改成菜单首项（看板成 menu[0] 后回落目标由「某应用」变成「首页看板」）。2026-08 e2e 加看板后这两处没同步，多出 2 个 403。✅ 规则：改完页面把 `verify_view_<组>.py` 的 `limited_role` 授权清单与回落断言逐字对一遍（照 `verify_view_e2e.py` 范式）。
 39. **dbguard 隔离 + 平台配置库随清单演进（2026-07-30 洗库事故 / 2026-08 补 llm.db）**：① 一切测试必走 `fde_platform/dbguard.isolate_dbs()`：进入时移走全部应用库/平台库，退出（含断言失败，经 atexit）原样还回——**用户数据分毫不丢**；并行跑多个 verify 会互踩共享暂存洗掉用户库（2026-07-30 事故），故守卫持跨进程独占锁 `fde_platform/.dbguard.lock`，第二个并发进程干净拒绝（原 #19 并入）。② `dbguard._CONFIG_DBS` 枚举 `config/` 下的平台库，**新增任何 `config/*.db`（2026-08 前漏了 `llm.db`）必须同步加进清单**，否则用户真实配置泄漏进测试、使"未配置降级"类断言失准。③ 测试里逼 LLM 降级路径用 `FDE_LLM_RETRIES=1`/`FDE_LLM_BACKOFF=0` 压短重试（`fde_platform/llm.py` 读取，默认 3/8），连接拒绝即秒回，避免默认退避拖超测试超时。
@@ -73,5 +73,5 @@
 - `bootShell` 对清单 404 / import 报错渲染错误面板兜底（原 #30）
 - 应用前端只经写死端点 `/app/<名>/view.{js,html}` serve、`.py`/`.db` 绝不暴露（原 #32，红线见 README §测试与验收红线）
 - `/app/<名>/view.*` 端点豁免应用可见性校验（原 #33）
-- dashboard 是无后端应用的组级页、住 `view/<组>/`（原 #34）
+- dashboard 是无后端应用的组级页、住 `app/<组>/`（原 #34）
 - favicon 由平台统一提供、各模块不单独配（原 #23）

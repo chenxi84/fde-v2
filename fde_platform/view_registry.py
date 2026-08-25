@@ -8,8 +8,8 @@
 
 1. **应用页** = `app/<组>/<应用>/view.js`（key = 应用目录名，与后端应用名/page_id 对齐；
    经 `/app/<应用>/view.js` 写死端点 serve，绝不暴露同目录的 .py/.db）。
-2. **组级页** = `view/<组>/<key>.js`（key = 文件名；经 `/view/<组>/<key>.js` 静态 serve）。
-   仅给「无后端应用的组级聚合页」用（如 dashboard）；组名必须是 `app/` 下真实存在的组。
+2. **组级页** = `app/<组>/<key>.js`（key = 文件名；经 `/app/<组>/<key>.js` 静态 serve）。
+   仅给「无后端应用的组级聚合页」用（如 dashboard）；与组内应用子目录并列的松散文件。
 
 平台公共页 = `view/pages/*.js`（元数据取自 `lib/shell.js` 的 `PLATFORM_PAGES`）。
 **console（通用服务台）不进清单**：其服务调用是动态的（不可派生），仅 admin 可见、不可授权。
@@ -145,27 +145,26 @@ def _scan() -> dict:
             pages.append(entry)
             services[pid] = _read_services(vjs)
 
-        # ② 组级页：view/<组>/<key>.js（无后端应用的组级聚合页，如 dashboard）
-        gview = VIEW_DIR / group
-        if gview.is_dir():
-            for js in sorted(gview.glob("*.js")):
-                scanned.append(js)
-                meta = _parse_page_meta(js)
-                key = meta.get("key") or js.stem
-                name = meta.get("name") or key
-                pid = f"{group}:{key}"
-                entry2 = {
-                    "id": pid, "key": key, "name": name,
-                    "ic": meta.get("ic") or "▦",
-                    "title": meta.get("title") or name,
-                    "crumb": meta.get("crumb") or "",
-                    "order": meta.get("order"),
-                    "url": f"/view/{group}/{js.name}",
-                }
-                if meta.get("bold"):
-                    entry2["bold"] = True
-                pages.append(entry2)
-                services[pid] = _read_services(js)
+        # ② 组级页：app/<组>/<key>.js（无后端应用的组级聚合页，如 dashboard；
+        #    松散文件，与组内应用子目录并列；后端发现只认子目录里的 .py，故不冲突）
+        for js in sorted(g.glob("*.js")):
+            scanned.append(js)
+            meta = _parse_page_meta(js)
+            key = meta.get("key") or js.stem
+            name = meta.get("name") or key
+            pid = f"{group}:{key}"
+            entry2 = {
+                "id": pid, "key": key, "name": name,
+                "ic": meta.get("ic") or "▦",
+                "title": meta.get("title") or name,
+                "crumb": meta.get("crumb") or "",
+                "order": meta.get("order"),
+                "url": f"/app/{group}/{js.name}",
+            }
+            if meta.get("bold"):
+                entry2["bold"] = True
+            pages.append(entry2)
+            services[pid] = _read_services(js)
 
         if pages:
             modules.append({"module": group, "pages": pages})
@@ -197,9 +196,7 @@ def _mtime_token() -> float:
             vjs = app_dir / "view.js"
             if app_dir.is_dir() and vjs.exists():
                 files.append(vjs)
-        gview = VIEW_DIR / g.name
-        if gview.is_dir():
-            files.extend(gview.glob("*.js"))
+        files.extend(g.glob("*.js"))  # 组级页（松散文件）
     pd = VIEW_DIR / "pages"
     if pd.is_dir():
         files.extend(pd.glob("*.js"))

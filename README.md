@@ -66,6 +66,7 @@ fde-v2/
 │   └── static/ · templates/   #   控制台前端资源
 ├── app/                       # 全部 FDE 应用（组 = 一级目录）
 │   ├── e2e/                   #   应用组「e2e」——现行约定样板（member/task）
+│   │   ├── dashboard.js · process.js   #  组级聚合页（松散文件，无后端应用）
 │   │   ├── 架构设计.md         #     ① 组级总体架构
 │   │   ├── _contracts.md       #     冻结的服务契约
 │   │   └── <应用>/             #     member / task，各含
@@ -75,7 +76,7 @@ fde-v2/
 │   │       ├── 前端详设.md       #       前端详设（设计态，不 serve）
 │   │       ├── view.js/view.html#       前端页面（落盘即进菜单）
 │   │       └── <应用>.db        #       运行期自建（不提交）
-├── view/                      # 组级聚合页（无后端应用的页面，如 e2e/dashboard）
+├── view/                      # 平台级前端（业务生成不碰）
 │   ├── lib/                   #   前端公共库（alpine / shell / api / styles，只读环境前提）
 │   └── pages/                 #   平台通用页（console / agent）
 ├── design-plus/                    # ★ 主规格：轻量技能体系（九步法 + 前后端约定正本，含完成门禁）
@@ -144,7 +145,7 @@ Claude 会读规范、逐步推进，你只需在「第①步 应用划分」「
 | **AI Agent（AgentScope）** | 唯一后端 `agent_agentscope.py`（AgentScope 2.0 编排，import 失败自动回落降级）；自进化 skill 库（`skills.py` draft→approve→published）；危险操作经 `_meta.dangerous` 走 HITL 人工确认；会话持久化用 AgentScope 原生 state（`agent_state.py`，取代 chatstore）。 |
 | **资源目录** | 每个应用自动建 `resource/import-file`（上传）/ `export-file`（产出），配套内置文件工具供 Agent / MCP 做数据导入。 |
 | **定时任务** | APScheduler 按 cron 调度公共服务，管理页 `/scheduler`，日志落 `config/scheduler.db`。 |
-| **视图装配** | 扫描各应用 `view.{js,html}` 的自描述 `PAGE_META`（key/name/ic/order/bold/col_default_hidden），零接线装配进所属组菜单；组级聚合页放 `view/<组>/`，经 `view_registry.py` 统一扫描与 `/view/<组>/` 路由 serve。 |
+| **视图装配** | 扫描各应用 `view.{js,html}` 的自描述 `PAGE_META`（key/name/ic/order/bold/col_default_hidden），零接线装配进所属组菜单；组级聚合页放 `app/<组>/`（松散文件），经 `view_registry.py` 统一扫描与 `/app/<组>/<页>.{js,html}` serve。 |
 | **列表排序（零改动）** | 平台保留参数 `sort_by/sort_dir` + `watchSortableTables()` 自动装饰表头：点击列头由后端排序后返回当前页，应用 list 契约与前端代码均无需改动（`fde_platform/listsort.py`）。 |
 | **自定义显示列（跟账号）** | 工具栏右侧注入列设置图标，弹层可对**全部已渲染列**勾选显隐（表头文本标识 + nth-child 隐藏，扛 x-for 重渲染）；配置存 `/api/prefs/cols:<页>`（`user_prefs` 表，per-user 持久化）。`list()` 约定返回全字段、视图渲染全列，`PAGE_META.col_default_hidden` 声明默认隐藏的非关键列（默认只显示关键列），用户调整后个人配置覆盖。范例 `md_material`。 |
 | **数据库双模** | 默认 SQLite，配置 `DATABASE_URL` 即可切换 PostgreSQL；建表语句、SQL 方言自动翻译，应用零改动。 |
@@ -205,7 +206,7 @@ class Todo:                                  # 类 = 聚合根，PascalCase（�
 | ⑤ | 测试执行（真实树直跑 · 清表初始化） | `testexec` | `app/<组>/tests/verify_chain_<组>.py`（+ parts）+ `app/<组>/tests/测试报告_<组>.md`（+ `app/<组>/tests/BUGS_<组>.md`） | ★★ 是否全绿；失败先 triage |
 | — | 契约冻结（前端段依赖屏障） | `contracts` | `app/<组>/_contracts.md` | ★ 屏障检查 |
 | ⑥ | 前端设计 | `fdesign` | 逐应用 `前端详设.md` + 组级 `前端详设/dashboard.md` | 可看页面规划 |
-| ⑦ | 前端编码（VIEW_CONVENTION） | `fcode` | `app/<组>/<应用>/view.{js,html}` + `view/<组>/dashboard.{js,html}` | 落盘即进菜单 |
+| ⑦ | 前端编码（VIEW_CONVENTION） | `fcode` | `app/<组>/<应用>/view.{js,html}` + `app/<组>/dashboard.{js,html}` | 落盘即进菜单 |
 | ⑧ | 前端测试用例（只生成不运行） | `ftest` | 逐应用 `前端测试用例.md` + 组级补充 `app/<组>/前端测试用例.md` | — |
 | ⑨ | 前端测试执行（playwright 串行真跑） | `fverify` | `app/<组>/tests/verify_view_<组>_*.py` + `app/<组>/tests/前端测试报告.md` | ★ 0 报错 |
 

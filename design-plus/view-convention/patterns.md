@@ -1,8 +1,8 @@
 # 代码范式（Patterns）
 
-所有范式是成文化的前端视图范式，经参考实现实测。**参考实现 = `app/e2e/<应用>/view.*`（member / task）+ `view/e2e/dashboard.*`（组级看板）+ `view/e2e/process.*`（组级流程总览，见 §8）**，新模块照抄结构、换业务字段。
+所有范式是成文化的前端视图范式，经参考实现实测。**参考实现 = `app/e2e/<应用>/view.*`（member / task）+ `app/e2e/dashboard.*`（组级看板）+ `app/e2e/process.*`（组级流程总览，见 §8）**，新模块照抄结构、换业务字段。
 
-> **页面组织**：菜单 = dashboard（组级页 `view/<组>/dashboard.*`）+ 每个应用一页（`app/<组>/<应用>/view.{js,html}`，与后端同文件夹）；Agent / 服务台由 shell 自动追加，**不在模块内声明**。公共基座（`view/lib/`）只 import、不复制、不修改。
+> **页面组织**：菜单 = dashboard（组级页 `app/<组>/dashboard.*`）+ 每个应用一页（`app/<组>/<应用>/view.{js,html}`，与后端同文件夹）；Agent / 服务台由 shell 自动追加，**不在模块内声明**。公共基座（`view/lib/`）只 import、不复制、不修改。
 
 ## 0. 列表字段 / 搜索条件 / CRUD 完整性规范
 
@@ -262,7 +262,7 @@ async save() {
 - `view.js` —— `PAGE_META` 自描述 + 默认导出工厂（§1），绝对路径 `import "/view/lib/*"`。
 - `view.html` —— 模板片段（§2-§6），经 `new URL("view.html", import.meta.url)` 抓取。
 
-**组级聚合页**（无对应后端应用，如 dashboard）放 `view/<组>/<页>.{js,html}`（key = 文件名）。
+**组级聚合页**（无对应后端应用，如 dashboard）放 `app/<组>/<页>.{js,html}`（key = 文件名）。
 
 文件落盘即被平台扫描装配：启动清单（菜单/路由）、角色授权清单、首页线路图、
 `svc()` 隐式放行派生边，全部自动纳入。**不写、也不修改任何框架文件**——模块内本就不存在
@@ -281,14 +281,14 @@ foot = <组名> 组 · N 页面     （N = 扫描到的页面数）
 
 ```
 浏览器 GET /view/<组>/
-  → web.py 识别「有视图页面的组」（app/<组>/ 应用含 view.js 或 view/<组>/ 有组级页），
+  → web.py 识别「有视图页面的组」（app/<组>/ 应用含 view.js 或 app/<组>/ 有组级页松散文件），
     渲染平台通用壳 templates/view_shell.html
   → 壳内 bootShell(组名)（lib/shell.js）
       → GET /api/view_boot?module=<组>   （view_registry 扫描 app/<组>/<应用>/view.js
-                                           与 view/<组>/*.js 合并，按 PAGE_META.order
+                                           与 app/<组>/*.js 合并，按 PAGE_META.order
                                            升序 + 约定推导品牌）
       → Promise.all(pages.map(p => import(p.url)))   动态加载各页工厂
-           应用页 p.url = /app/<应用>/view.js · 组级页 p.url = /view/<组>/<页>.js
+           应用页 p.url = /app/<应用>/view.js · 组级页 p.url = /app/<组>/<页>.js
       → 逐页 Alpine.data(key, mod.default) 注册
       → Alpine.data("shell", createShell({module, brand, pages, components}))
       → Alpine.start()
@@ -306,7 +306,7 @@ foot = <组名> 组 · N 页面     （N = 扫描到的页面数）
 
 **参考实现：`view/e2e/process.{js,html}`（组级流程总览样例，最小自足）**。用于把一条跨应用的业务链路画成**可点击、带状态**的流程图。
 
-**页面骨架同 §7 组级聚合页**：`view/<组>/process.js`，`PAGE_META.key = "process"`、`order` 紧跟 dashboard（15）。
+**页面骨架同 §7 组级聚合页**：`app/<组>/process.js`，`PAGE_META.key = "process"`、`order` 紧跟 dashboard（15）。
 
 关键范式（均为实测踩坑）：
 

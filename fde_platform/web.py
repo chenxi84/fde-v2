@@ -292,6 +292,7 @@ def app_detail(app_name):
 # ══════════════════════════════════════════════════════════
 
 _VIEW_DIR = Path(__file__).resolve().parents[1] / "view"
+_APP_DIR = Path(__file__).resolve().parents[1] / "app"
 
 
 def _view_modules() -> list:
@@ -371,6 +372,31 @@ def app_view_js(app_name):
 def app_view_html(app_name):
     """应用前端模板片段（页面经 import.meta.url 相对自身抓取）。"""
     return _serve_app_view(app_name, "view.html", "text/html")
+
+
+def _serve_group_view(group, page, ext, mime):
+    """serve 组级聚合页前端文件（app/<组>/<页>.{js,html}，松散文件，无对应后端应用）。
+
+    安全要点：group/page 均为单段路径（路由转换器不含 /），文件名 = f"{page}.{ext}"
+    常量拼接，故绝无目录穿越；同组应用子目录里的 .py/.db 不会被本端点触及。"""
+    if group.startswith((".", "_")) or page.startswith((".", "_")):
+        return render_template("error.html", message="页面不存在"), 404
+    path = _APP_DIR / group / f"{page}.{ext}"
+    if not path.is_file():
+        return render_template("error.html", message=f"页面不存在：{group}/{page}.{ext}"), 404
+    return send_file(str(path), mimetype=mime)
+
+
+@app.route("/app/<group>/<page>.js")
+def group_view_js(group, page):
+    """组级聚合页 JS（ES Module；MIME 必须为 JS，否则动态 import 被浏览器拒）。"""
+    return _serve_group_view(group, page, "js", "text/javascript")
+
+
+@app.route("/app/<group>/<page>.html")
+def group_view_html(group, page):
+    """组级聚合页模板片段。"""
+    return _serve_group_view(group, page, "html", "text/html")
 
 
 @app.route("/favicon.ico")

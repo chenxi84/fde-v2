@@ -12,11 +12,11 @@
 app/<组>/<应用>/                 业务应用（前后端同文件夹，本规范的生成目标）
 ├── <应用>.py · <应用>.db · README.md · resource/    后端（design-plus/CONVENTION.md 约定）
 └── view.js · view.html                              前端页面（自描述 PAGE_META + 模板片段）
+app/<组>/<页>.{js,html}          组级页（可选，无后端应用的聚合页）：<页>.{js,html}，如 dashboard.*
 app/<组>/_contracts.md           组级服务契约 dump（生成依据）
-view/                            仅平台级与非逐应用的内容
+view/                            仅平台级内容（业务生成不得修改）
 ├── lib/        公共基座（全模块共享，平台所有）：alpine.esm.js · api.js · shell.js · styles.css · icon.svg
-├── pages/      平台公共页（每个模块自动获得）：agent.* · console.*
-└── <组>/       组级页（可选，无后端应用的聚合页）：<页>.{js,html}，如 dashboard.*
+└── pages/      平台公共页（每个模块自动获得）：agent.* · console.*
 ```
 
 前端与后端**完全同构且同文件夹**——约定优于配置、扫描即发现、零登记，且**一个应用的
@@ -24,13 +24,13 @@ view/                            仅平台级与非逐应用的内容
 `view.js`/`view.html`——一次生成、整文件夹交付，丢进平台即可用。组 = `app/<组>/` 一级
 目录（后端约定），品牌 / 壳 / 菜单 / 路由全部由平台约定推导，**无任何框架文件、无配置
 文件**。平台通用壳 `view_shell.html` 在 `/view/<组>/` 根渲染，`bootShell(组名)` 拉
-`/api/view_boot` 页面清单（平台扫描 `app/<组>/<应用>/view.js` 与组级页 `view/<组>/*.js`
+`/api/view_boot` 页面清单（平台扫描 `app/<组>/<应用>/view.js` 与组级页 `app/<组>/*.js`
 合并得出）、动态 `import()` 各页工厂、注册 Alpine 组件后启动。
 
 - **生成发生在应用文件夹内**：前端页面 `view.js`/`view.html` 直接写进该应用的后端目录 `app/<组>/<应用>/`。`view/lib/` 与 `view/pages/`（平台公共页）是平台级基础设施：规范只记载其 API 契约供页面调用，**业务生成不得修改**（公共能力的演进是平台任务，不是视图生成任务）。
 - 由此：**新增一个应用的前端 = 在 `app/<组>/<应用>/` 下只写 2 个文件**（`view.js` + `view.html`，页面自描述）——**零接线**，放进目录即出现在菜单。**新建模块 = 建 `app/<组>/` 组并放应用**（前端随后逐应用补 view 文件；无脚手架文件，品牌由组名推导：`FDE·<组名大写>`，脚标 `<组名> 组 · N 页面`）。`view/lib/`、`view/pages/` 与平台零改动。
 - **授权同样零接线**：新页面文件落盘即被平台注册表（`view_registry` 扫描）自动纳入角色授权清单（管理页「用户与角色管理」→ 角色 → 前端页面授权）；页面源码里的 `svc()` 字面量调用被扫描为"页→服务"派生边，角色获授该页即**隐式放行**这些服务，无需再逐个授服务。
-- **业务页代码范式一律以 `design-plus/view-convention/patterns.md` 为准**（范式成文化，参考实现 = `app/e2e/<应用>/view.*` + `view/e2e/dashboard.*`，按现行约定实测的模块）：页面工厂、模态、列表、表单照抄范式结构、不发明新架构。
+- **业务页代码范式一律以 `design-plus/view-convention/patterns.md` 为准**（范式成文化，参考实现 = `app/e2e/<应用>/view.*` + `app/e2e/dashboard.*`，按现行约定实测的模块）：页面工厂、模态、列表、表单照抄范式结构、不发明新架构。
 
 ## 开工前必读（每次）
 
@@ -43,7 +43,7 @@ view/                            仅平台级与非逐应用的内容
    - `patterns.md` —— 页面工厂（PAGE_META + 默认导出）/ 列表 / 模态 / 表单
    - `design-system.md` —— 设计令牌与组件目录（`view/lib/styles.css`）
    - `pitfalls.md` —— 历次踩坑清单（异步启动、PAGE_META.order、挂载重建、选择器陷阱等）
-4. **平台现状**：组 = `app/<组>/` 一级目录；某组只要有视图页面（任一应用含 `view.js`，或 `view/<组>/` 有组级页）即成模块——`/view/<组>/` 渲染平台通用壳，模块清单页（`/view/`）只列这些组，故 `view/lib/`、`view/pages/` 天然不进清单。**应用页经写死端点 `/app/<名>/view.{js,html}` serve**（只认这两个文件名，同目录 `.py`/`.db` 绝不暴露）；组级页与 `view/lib/`、`view/pages/` 经 `/view/…` 静态放行。**新模块无需改平台任何代码**。
+4. **平台现状**：组 = `app/<组>/` 一级目录；某组只要有视图页面（任一应用含 `view.js`，或 `app/<组>/` 有组级页松散文件）即成模块——`/view/<组>/` 渲染平台通用壳，模块清单页（`/view/`）只列这些组，故 `view/lib/`、`view/pages/` 天然不进清单。**应用页经写死端点 `/app/<名>/view.{js,html}` serve**（只认这两个文件名，同目录 `.py`/`.db` 绝不暴露）；**组级页经 `/app/<组>/<页>.{js,html}` serve**；`view/lib/`、`view/pages/` 经 `/view/…` 静态放行。**新模块无需改平台任何代码**。
 5. **菜单与授权机制（shell + 平台统一负责，生成物零感知）**：
    - 菜单按**角色页面授权**渲染：shell 拉 `/api/my_pages`（角色获授的页面集，admin 全通），业务项按 `<模块>:<页key>` 过滤；授权集到达前菜单为空（不暴露）。
    - 平台公共页：Agent 可按页面授权；**服务台（console）仅 admin 可见、不进授权清单**（其服务调用是动态的、不可派生）。
@@ -54,7 +54,7 @@ view/                            仅平台级与非逐应用的内容
 ## 页面规划原则（先于一切设计）
 
 1. **菜单与 APP 一一对应**：侧栏菜单项 = 模块内每个应用（一个应用一个页面），**除「首页看板」外不得规划合并多应用的工作台**（不按角色归并、不按流程段归并）。
-2. **首页看板是唯一例外，且每个模块必备**：`dashboard` 做跨应用聚合——KPI 指标带、主链管道（状态分布）、待办队列（如待审批），点数字/单号跳到对应应用页。看板对受限用户恒显，故其初始加载一律 `quiet` 探测 + 零值兜底（不喷错误 toast）。**新建模块必须产出 `view/<组>/dashboard.{js,html}`（key="dashboard"）**——平台壳默认路由写死 `dashboard`（`view/lib/shell.js`），缺看板会导致预渲染/受限窗口把空 `{}` 挂上默认路由、`x-html="tpl"` 对 undefined 求值而整片报错（见 pitfalls #36）。
+2. **首页看板是唯一例外，且每个模块必备**：`dashboard` 做跨应用聚合——KPI 指标带、主链管道（状态分布）、待办队列（如待审批），点数字/单号跳到对应应用页。看板对受限用户恒显，故其初始加载一律 `quiet` 探测 + 零值兜底（不喷错误 toast）。**新建模块必须产出 `app/<组>/dashboard.{js,html}`（key="dashboard"）**——平台壳默认路由写死 `dashboard`（`view/lib/shell.js`），缺看板会导致预渲染/受限窗口把空 `{}` 挂上默认路由、`x-html="tpl"` 对 undefined 求值而整片报错（见 pitfalls #36）。
 3. **每个应用页 = 该应用的完整增删改查**，统一解剖结构（见工作流第 3 步）：
    - **列表**：展示关键字段（不止单号+状态，防遗漏）+ 关键字段搜索条件；
    - **详情模态**：点单号弹出，展示**全部**业务字段；
@@ -79,7 +79,7 @@ python -m fde_platform.contract_dump <组>   # dump 全部服务契约 + 真实 
 模块即后端组 `app/<组>/`——**前端不需要自己的模块目录/脚手架**：
 - 通用壳、品牌、菜单、路由由平台自动提供（`view_shell.html` + `bootShell` + `/api/view_boot`）；某组只要有应用带 `view.js` 就自动成为视图模块。
 - 品牌按约定推导：`name = FDE·<组名大写>`、`sub = FORWARD DEPLOYED`、`foot = <组名> 组 · N 页面`。
-- **逐应用页面放各自 `app/<组>/<应用>/view.{js,html}`**（第 3 步）；组级聚合页（如 dashboard，无对应后端应用）放 `view/<组>/<页>.{js,html}`。
+- **逐应用页面放各自 `app/<组>/<应用>/view.{js,html}`**（第 3 步）；组级聚合页（如 dashboard，无对应后端应用）放 `app/<组>/<页>.{js,html}`（松散文件，与组内应用子目录并列）。
 - 组级契约速查 `_contracts.md` 由 dump 工具写到 `app/<组>/_contracts.md`。
 
 **不得**为新模块复制 alpine / api.js / styles.css / shell——页面一律用**绝对路径** `import "/view/lib/api.js"`（文件与目录深度解耦，搬移不用改）。新组件样式先想能否用现有类；确需新增，追加在**规范表 `fde_platform/static/fde.css`**（`view/lib/styles.css` 已是 `@import` 别名，勿在别名扩写；这属公共层演进，要在报告里向用户说明）。
@@ -160,7 +160,7 @@ export default function pageXxx() {
 5. **契约先行**：字段以后端真实契约与返回为准（dump services + 读 create/update 源码），不照别的视图猜。
 6. **组件范式唯一**：架构、类名、交互模式一律照本正本与 `design-plus/view-convention/patterns.md` 的范式（经 e2e 参考实现实测），不发明新架构；用户明确要求的差异除外。
 7. **数据隔离**：一切测试经 dbguard（`fde_platform/dbguard.py`）、串行跑——运维红线（隔离 / 串行 / 杀 dev server，勿绕）见 README §测试与验收红线。
-8. **生成边界 + 前后端同文件夹**：应用前端只写 `app/<组>/<应用>/view.{js,html}`（与后端 `<应用>.py` 同文件夹，加应用前端 = 2 文件零接线）；组级聚合页放 `view/<组>/<页>.{js,html}`；通用壳 / 品牌 / 菜单 / 路由由平台约定推导，`view/lib/`、`view/pages/` 与后端 `.py` 零改动（样式确需扩充规范表 `fde_platform/static/fde.css` 属平台演进，须先向用户说明；`lib/styles.css` 是 `@import` 别名，勿扩写）。
+8. **生成边界 + 前后端同文件夹**：应用前端只写 `app/<组>/<应用>/view.{js,html}`（与后端 `<应用>.py` 同文件夹，加应用前端 = 2 文件零接线）；组级聚合页放 `app/<组>/<页>.{js,html}`（松散文件）；通用壳 / 品牌 / 菜单 / 路由由平台约定推导，`view/lib/`、`view/pages/` 与后端 `.py` 零改动（样式确需扩充规范表 `fde_platform/static/fde.css` 属平台演进，须先向用户说明；`lib/styles.css` 是 `@import` 别名，勿扩写）。
 9. **页面自描述约定**：每页 `export const PAGE_META = {key,name,ic,title,crumb,order}` + `export default function pageXxx()`（工厂默认导出、保留专名）。`order` 升序即菜单顺序，**必须显式给**。import 一律**绝对路径** `/view/lib/*`（相对路径在迁入应用目录后会断）；模板抓取用 `import.meta.url`。
 10. **鉴权零实现 + svc 字面量**：不另造认证；页面不判断权限（菜单按页面授权渲染在 shell，数据闸门在后端，隐式放行在闸门）；401 → api.js 自动跳登录。**页面调服务必须用 `svc("app", "service")` 字面量**（可包在闭包里逐项写，勿用变量拼名）——这是隐式放行派生扫描的唯一来源；变量拼名只许服务台用。
 11. **reactive 状态同步先行**：页面工厂体内一切会被模板引用的 reactive 状态，必须在**第一个 `await` 之前**同步建好（如 `self.list = pageable(...)` 含空 `items:[]`），再 `await` 拉数、最后 `await self.list.load()`。先 await 后建对象，`tpl` 一赋值即求值 null 子属性而整片报错（见 pitfalls #37）。
@@ -180,6 +180,12 @@ import）与 `app.js`（PAGES 清单），加一个应用要在两个框架文�
 `/app/<名>/view.{js,html}` serve 应用前端（同目录 `.py`/`.db` 绝不暴露）；页面 import 统一
 改绝对路径 `/view/lib/*`。注册表扫描 `app/<组>/<应用>/view.js` 与 `view/<组>/*.js` 双源合并，
 page_id（`<组>:<应用>`）与授权数据格式不变。`_contracts.md` 随之归到 `app/<组>/`。
+
+2026-08-25 **组级页并入组目录**：组级聚合页（dashboard / 流程总览 / 物料 360 等无后端应用的页）
+从 `view/<组>/<页>.{js,html}` 迁入 `app/<组>/<页>.{js,html}`（与组内应用子目录并列的松散文件），
+`view/` 只保留平台级内容（`lib/`、`pages/`）。注册表扫描源由 `view/<组>/*.js` 改为
+`app/<组>/*.js`，组级页改经 `/app/<组>/<页>.{js,html}` serve；后端发现只认子目录里的 `.py`，
+松散文件天然不冲突。
 
 2026-08-02 **约定正本迁至 `design-plus/VIEW_CONVENTION.md`**（与后端约定 `skill/app-convention.md`
 → `design-plus/CONVENTION.md` 的迁移同例）：参考资料随迁 `design-plus/view-convention/`（architecture /
