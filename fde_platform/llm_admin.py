@@ -32,7 +32,8 @@ def page():
     return render_template("llm_settings.html",
                            profiles=llm.list_profiles(),
                            providers=providers,
-                           roles=llm.ROLES)
+                           roles=llm.ROLES,
+                           presets=llm.DEEPSEEK_PRESETS)
 
 
 @bp.route("/llm/save", methods=["POST"])

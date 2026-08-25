@@ -28,10 +28,27 @@ DB_PATH = PROJECT_ROOT / "config" / "llm.db"
 MASTER_KEY_PATH = PROJECT_ROOT / "config" / "llm_master.key"
 
 # 系统内置的两个独立 Agent 角色
-ROLES = ("operator",)
-ROLE_LABELS = {"operator": "Agent 对话模型"}
+ROLES = ("operator", "vision")
+ROLE_LABELS = {"operator": "Agent 对话模型", "vision": "多模态兜底模型"}
 ROLE_DESC = {
     "operator": "交互式调用应用服务、跨应用编排",
+    "vision": "遇到图片时临时调用的视觉模型（看图转文字），默认不参与主对话",
+}
+
+# 一键载入预设：各 role 的 DeepSeek 默认配置（前端「一键载入」按钮填入，用户只需填 key）
+DEEPSEEK_PRESETS = {
+    "operator": {
+        "provider": "openai_compat",
+        "base_url": "https://api.deepseek.com/v1",
+        "model": "deepseek-v4-pro",
+        "temperature": 0.1,
+    },
+    "vision": {
+        "provider": "openai_compat",
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-v4-flash-vision-exp",
+        "temperature": 0.1,
+    },
 }
 
 PROVIDERS = ("openai_compat", "anthropic")
@@ -278,6 +295,35 @@ class AnthropicProvider(LLMProvider):
         self.max_tokens = max_tokens or 4096  # Anthropic 必填
         self.timeout_s = timeout_s or 120
 
+    @staticmethod
+    def _convert_user_content(content):
+        """OpenAI 风格 user content → Anthropic content（多模态 image_url → image block）。
+
+        content 为 str 时原样返回；为 list（OpenAI 多模态 content parts）时逐项转换：
+        text 保留、image_url 的 data URL 拆成 base64 image block。
+        """
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return content
+        out = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            ptype = part.get("type")
+            if ptype == "text":
+                out.append({"type": "text", "text": part.get("text", "")})
+            elif ptype == "image_url":
+                url = (part.get("image_url") or {}).get("url", "")
+                if url.startswith("data:"):
+                    meta, _, data = url.partition(",")
+                    media_type = meta[len("data:"):].split(";")[0]
+                    out.append({"type": "image", "source": {
+                        "type": "base64", "media_type": media_type, "data": data}})
+                elif url:
+                    out.append({"type": "image", "source": {"type": "url", "url": url}})
+        return out
+
     def _to_anthropic(self, messages, tools):
         system_parts, msgs = [], []
         for m in messages:
@@ -285,7 +331,7 @@ class AnthropicProvider(LLMProvider):
             if role == "system":
                 system_parts.append(m.get("content", ""))
             elif role == "user":
-                msgs.append({"role": "user", "content": m.get("content", "")})
+                msgs.append({"role": "user", "content": self._convert_user_content(m.get("content", ""))})
             elif role == "assistant":
                 content = []
                 if m.get("content"):

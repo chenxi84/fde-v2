@@ -15,6 +15,12 @@
     </h3>
     <div class="muted">{{ p.desc }}</div>
     <form class="llm-form" data-role="{{ p.role }}" style="margin-top:8px">
+      {% if p.role in presets %}
+      <div class="inline" style="margin-bottom:8px">
+        <button type="button" class="ghost preset-btn">一键载入 DeepSeek 配置（只需填 Key）</button>
+        <span class="muted">→ {{ presets[p.role].model }}</span>
+      </div>
+      {% endif %}
       <div class="row">
         <div><label>厂商 / 协议</label>
           <select name="provider">
@@ -90,6 +96,22 @@ function toggleBaseUrl(form) {
   /* base_url 对两类 provider 都可能用到：OpenAI 兼容必填；Anthropic 经网关填网关地址、直连留空 */
   form.querySelector('.baseurl-cell').style.display = '';
 }
+/* 一键载入 DeepSeek 预设：填 provider/base_url/model，聚焦 key 输入框 */
+const DEEPSEEK_PRESETS = {{ presets | tojson }};
+document.querySelectorAll('.preset-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const form = btn.closest('.llm-form');
+    const preset = DEEPSEEK_PRESETS[form.dataset.role];
+    if (!preset) return;
+    form.querySelector('[name="provider"]').value = preset.provider;
+    form.querySelector('[name="base_url"]').value = preset.base_url;
+    form.querySelector('[name="model"]').value = preset.model;
+    if (preset.temperature != null) form.querySelector('[name="temperature"]').value = preset.temperature;
+    form.querySelector('[name="enabled"]').value = '1';  // 一键载入默认启用
+    toggleBaseUrl(form);
+    form.querySelector('[name="api_key"]').focus();
+  });
+});
 document.querySelectorAll('.llm-form').forEach(form => {
   const status = form.querySelector('.status');
   toggleBaseUrl(form);

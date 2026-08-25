@@ -42,7 +42,7 @@ try:
         ToolCallStartEvent,
         UserConfirmResultEvent,
     )
-    from agentscope.message import Msg, UserMsg
+    from agentscope.message import Msg, UserMsg, TextBlock, DataBlock, Base64Source
     from agentscope.model import AnthropicChatModel, OpenAIChatModel
     from agentscope.permission import (
         PermissionBehavior,
@@ -51,7 +51,7 @@ try:
         PermissionRule,
     )
     from agentscope.state import AgentState
-    from agentscope.tool import FunctionTool, Toolkit
+    from agentscope.tool import FunctionTool, Toolkit, ToolChunk
 
     AGENTSCOPE_AVAILABLE = True
 except Exception as _exc:  # noqa: BLE001
@@ -82,6 +82,63 @@ def is_dangerous_tool(tool_name: str) -> bool:
     """工具名（<组>__<应用>__<服务>）的**服务名**是否命中危险模式（需人确认）。"""
     service = tool_name.rsplit("__", 1)[-1].lower()
     return any(p in service for p in _dangerous_patterns())
+
+
+_VISION_PROMPT = "请提取图片中的全部文字与表格数据，尽量保留行列结构；若为图表请描述关键信息与数值。"
+
+
+def _as_tool_result(raw: str):
+    """工具 JSON 结果 → 纯文本或多模态 ToolChunk。
+
+    read_file 读图片时返回含 image 字段的 JSON：
+    - 若配置了 vision 兜底模型，先「看图转文字」把文字喂回主模型（纯文本）；
+    - 否则回退为带 DataBlock 的 ToolChunk，把图片直接给当前模型（需视觉模型）。
+    其余情况原样返回纯文本。
+    """
+    if not raw or not AGENTSCOPE_AVAILABLE:
+        return raw
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return raw
+    if isinstance(data, dict) and isinstance(data.get("image"), dict):
+        img = data["image"]
+        desc = _vision_fallback(img)
+        if desc:
+            return ToolChunk(content=[TextBlock(text=(
+                f"图片文件 {data.get('name', '')} 的识别结果：\n{desc}"))])
+        return ToolChunk(content=[
+            TextBlock(text=f"图片文件 {data.get('name', '')}（{data.get('size', 0)} 字节）："),
+            DataBlock(source=Base64Source(
+                data=img.get("base64", ""),
+                media_type=img.get("media_type", "image/png"),
+            )),
+        ])
+    return raw
+
+
+def _vision_fallback(img: dict) -> str:
+    """用 vision 兜底模型「看图转文字」；未配置或失败返回空串（调用方回退图片直通）。"""
+    prov = llm.get_provider("vision")
+    if isinstance(prov, llm.NotConfiguredProvider):
+        return ""
+    media_type = img.get("media_type", "image/png")
+    messages = [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": _VISION_PROMPT},
+            {"type": "image_url", "image_url": {
+                "url": f"data:{media_type};base64,{img.get('base64', '')}"}},
+        ],
+    }]
+    try:
+        result = prov.chat(messages)
+    except Exception:
+        return ""
+    text = (result or {}).get("content", "").strip()
+    if not text or text.startswith("LLM 调用失败") or "未安装" in text:
+        return ""
+    return text
 
 
 # ── 模型构建（llm 配置中心 → AgentScope 模型）────────────────────────
@@ -327,7 +384,8 @@ class AgentScopeSession:
         def _make(tool_name):
             # 闭包捕获工具名，避免与工具自身参数（如 propose_skill 的 name）冲突
             def _call(**kwargs):
-                return bridge.execute(self.platform, user, tool_name, kwargs)
+                raw = bridge.execute(self.platform, user, tool_name, kwargs)
+                return _as_tool_result(raw)
             return _call
 
         for t in bridge.tool_schemas(self.platform, user):

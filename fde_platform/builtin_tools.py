@@ -19,9 +19,15 @@ IMPORT_DIR = "import-file"
 EXPORT_DIR = "export-file"
 
 TEXT_SUFFIXES = {".csv", ".tsv", ".txt", ".json", ".md", ".log", ".xml", ".yaml", ".yml", ""}
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
+IMAGE_MEDIA_TYPES = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".bmp": "image/bmp", ".webp": "image/webp",
+}
 MAX_TEXT_CHARS = 20000      # 文本截断上限（字符）
 MAX_XLSX_ROWS = 200         # Excel 截断上限（行）
 MAX_WRITE_CHARS = 1_000_000  # 写文件内容上限（字符）
+MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 图片上限 5MB（视觉模型常见限制，base64 后约 6.7MB）
 
 # 平台保留的内置服务名（对外拼接为 <应用名>__<服务名>）
 BUILTIN_SERVICES = ("platform_list_files", "platform_read_file", "platform_write_file")
@@ -80,17 +86,61 @@ def list_files(app_dir: Path, directory: str = IMPORT_DIR) -> dict:
     return {"directory": directory, "count": len(files), "files": files}
 
 
+def _read_text_auto(target: Path) -> str:
+    """UTF-8 优先；失败按 GB18030(含 GBK)→Big5 顺序尝试；仍失败替换解码兜底。
+
+    中文产销场景下非 UTF-8 文本几乎必为 GBK/GB18030，短文本用固定候选列表
+    比 charset_normalizer 自动探测更可靠（后者对短 GBK 易误判为韩文）。"""
+    data = target.read_bytes()
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    for enc in ("gb18030", "big5"):
+        try:
+            text = data.decode(enc)
+            if "�" not in text:
+                return text
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
 def read_file(app_dir: Path, directory: str, file_name: str) -> dict:
     target = _resolve(app_dir, directory, file_name)
     size = target.stat().st_size
     suffix = target.suffix.lower()
 
     if suffix in TEXT_SUFFIXES:
-        raw = target.read_text(encoding="utf-8", errors="replace")
+        raw = _read_text_auto(target)
         truncated = len(raw) > MAX_TEXT_CHARS
         return {
             "name": target.name, "size": size, "truncated": truncated,
             "content": raw[:MAX_TEXT_CHARS],
+        }
+
+    if suffix == ".xls":
+        try:
+            import xlrd
+        except ImportError:
+            raise FdeError("xlrd 未安装，无法解析 xls（pip install xlrd）")
+        wb = xlrd.open_workbook(str(target))
+        sheet_names = wb.sheet_names()
+        sheet = wb.sheet_by_index(0) if wb.nsheets else None
+        rows = []
+        total = sheet.nrows if sheet is not None else 0
+        if sheet is not None:
+            for r in range(min(sheet.nrows, MAX_XLSX_ROWS)):
+                cells = []
+                for c in range(sheet.ncols):
+                    v = sheet.cell_value(r, c)
+                    if isinstance(v, float) and v.is_integer():
+                        v = int(v)
+                    cells.append(str(v))
+                rows.append("\t".join(cells))
+        return {
+            "name": target.name, "size": size, "sheets": sheet_names,
+            "truncated": total > MAX_XLSX_ROWS, "content": "\n".join(rows),
         }
 
     if suffix == ".xlsx":
@@ -112,6 +162,16 @@ def read_file(app_dir: Path, directory: str, file_name: str) -> dict:
         return {
             "name": target.name, "size": size, "sheets": sheets,
             "truncated": total > MAX_XLSX_ROWS, "content": "\n".join(rows),
+        }
+
+    if suffix in IMAGE_SUFFIXES:
+        import base64
+        if size > MAX_IMAGE_BYTES:
+            raise FdeError(f"图片过大（{size} 字节 > {MAX_IMAGE_BYTES}），请压缩后重试")
+        data = base64.b64encode(target.read_bytes()).decode("ascii")
+        return {
+            "name": target.name, "size": size, "truncated": False,
+            "image": {"base64": data, "media_type": IMAGE_MEDIA_TYPES[suffix]},
         }
 
     raise FdeError(f"不支持的文件格式：{suffix or '（无扩展名）'}（二进制请交给应用服务处理）")
@@ -181,9 +241,10 @@ def builtin_tool_defs(prefix: str, *, qualname: str = None,
         {
             "name": f"{prefix}__platform_read_file",
             "description": (
-                "读取该应用 resource 下的文件内容：文本(csv/tsv/txt/json/md 等)按 UTF-8 读取；"
-                "xlsx 转首个工作表为文本表格（需 openpyxl）；过大只返回开头并标记 truncated。"
-                "用于解析导入文件。"
+                "读取该应用 resource 下的文件内容：文本(csv/tsv/txt/json/md 等)自动识别编码（UTF-8/GBK/Big5 等）；"
+                "xls(需 xlrd)/xlsx(需 openpyxl) 转首个工作表为文本表格；"
+                "图片(png/jpg/gif/webp 等)以多模态内容返回，供视觉模型直接识别（限 5MB）。"
+                "过大只返回开头并标记 truncated。用于解析导入文件。"
             ),
             "inputSchema": {
                 "type": "object",
