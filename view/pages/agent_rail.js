@@ -46,6 +46,7 @@ export function agentRail() {
     },
 
     async loadMsgs() {
+      if (self.sending) return;   // 发送中不覆盖，避免首次对话「select 触发 change→loadMsgs」竞态清空消息区
       if (!self.sid) { self.msgs = []; return; }
       const r = await get(`/api/agent/sessions/${encodeURIComponent(self.sid)}/messages`,
         { quiet: true }).catch(() => []);

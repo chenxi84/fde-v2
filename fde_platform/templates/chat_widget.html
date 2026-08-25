@@ -44,6 +44,7 @@
   const chat = document.getElementById("cw-chat");
   const listEl = document.getElementById("cw-list");
   let currentSid = localStorage.getItem(LS_KEY) || null;
+  let sending = false;   // 发送中标记：防止初始化 selectSession 覆盖首次对话刚 push 的消息
 
   async function api(path, opts) {
     opts = opts || {};
@@ -91,6 +92,7 @@
   }
 
   function renderMessages(msgs) {
+    if (sending) return;   // 发送中不覆盖，避免初始化 selectSession 清空首次对话消息
     chat.innerHTML = "";
     const visible = msgs.filter(m => m.role === "user" || m.role === "assistant");
     if (!visible.length) {
@@ -186,6 +188,7 @@
     const input = document.getElementById("cw-input");
     const msg = input.value.trim();
     if (!msg) return;
+    sending = true;
     if (!currentSid) {
       const j = await api("/sessions", { method: "POST" });
       if (!j || j.status !== "ok") return;
@@ -237,6 +240,8 @@
     } catch (err) {
       clearInterval(timer); clearInterval(poller); pb.div.remove();
       bubble("bot", "请求失败：" + err);
+    } finally {
+      sending = false;
     }
   }
 
