@@ -27,7 +27,7 @@
       <div class="sub" x-text="brand.sub"></div>
     </div>
     <template x-for="p in menu" :key="p.key">
-      <div class="nav-item" :class="{ on: route === p.key }" @click="go(p.key)">
+      <div class="nav-item" :class="{ on: route === p.key, main: p.bold }" @click="go(p.key)">
         <span class="ic" x-text="p.ic"></span><span x-text="p.name"></span>
       </div>
     </template>

@@ -85,6 +85,10 @@ def _parse_page_meta(js_path: Path) -> dict:
         mm = re.search(rf'{field}\s*:\s*(-?\d+)', body)
         return int(mm.group(1)) if mm else None
 
+    def b(field):
+        mm = re.search(rf'{field}\s*:\s*(true|false)', body)
+        return mm.group(1) == "true" if mm else None
+
     out = {}
     for f in ("key", "name", "ic", "title", "crumb", "col_default_hidden"):
         v = s(f)
@@ -93,6 +97,9 @@ def _parse_page_meta(js_path: Path) -> dict:
     order = n("order")
     if order is not None:
         out["order"] = order
+    bold = b("bold")
+    if bold is not None:
+        out["bold"] = bold
     return out
 
 
@@ -133,6 +140,8 @@ def _scan() -> dict:
             }
             if meta.get("col_default_hidden"):
                 entry["col_default_hidden"] = meta["col_default_hidden"]
+            if meta.get("bold"):
+                entry["bold"] = True
             pages.append(entry)
             services[pid] = _read_services(vjs)
 
@@ -145,14 +154,17 @@ def _scan() -> dict:
                 key = meta.get("key") or js.stem
                 name = meta.get("name") or key
                 pid = f"{group}:{key}"
-                pages.append({
+                entry2 = {
                     "id": pid, "key": key, "name": name,
                     "ic": meta.get("ic") or "▦",
                     "title": meta.get("title") or name,
                     "crumb": meta.get("crumb") or "",
                     "order": meta.get("order"),
                     "url": f"/view/{group}/{js.name}",
-                })
+                }
+                if meta.get("bold"):
+                    entry2["bold"] = True
+                pages.append(entry2)
                 services[pid] = _read_services(js)
 
         if pages:

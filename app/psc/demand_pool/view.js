@@ -14,6 +14,7 @@ export const PAGE_META = {
   title: "需求池",
   crumb: "三类补库单 · 待下达→已下达→生产中→已完成/已取消",
   order: 150,
+  bold: true,
 };
 
 export default function pageDemandPool() {

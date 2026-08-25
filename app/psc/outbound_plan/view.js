@@ -24,6 +24,7 @@ export const PAGE_META = {
   title: "出库计划",
   crumb: "手工登记出库计划 · 到期自动关闭 · 可延期恢复",
   order: 135,
+  bold: true,
 };
 
 export default function pageOutboundPlan() {

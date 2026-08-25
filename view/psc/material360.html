@@ -1,0 +1,352 @@
+<div class="m360">
+  <style>
+    .m360 .card { margin-bottom: 0; }
+    .m360 .idx { font: 700 10px var(--mono, monospace); color: #fff; background: #0e1b2a; border-radius: 4px; padding: 1px 6px; }
+    .m360 .hd > span:nth-child(2) { font-weight: 800; font-size: 14px; }
+    .m360 .hd .right { margin-left: auto; }
+  </style>
+  <!-- 加载态 -->
+  <div class="loadbox" x-show="loading"><span class="spin">◌</span><br>载入物料视图…</div>
+
+  <div x-show="!loading">
+    <!-- ════════ 顶栏：物料选择器 + 版本标注 + 物料概要芯片 ════════ -->
+    <div class="overline" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <span style="flex:none">物料 360 视图</span>
+      <span class="muted" x-show="!material" style="flex:none">← 请选择一个物料</span>
+      <button x-show="material" @click="analyze()"
+        style="flex:none;display:inline-flex;align-items:center;gap:6px;padding:6px 14px;background:#175e54;color:#fff;border:none;border-radius:999px;font-size:12.5px;font-weight:700;cursor:pointer;letter-spacing:.02em">
+        ✦ 大模型分析
+      </button>
+      <template x-if="versionInfo">
+        <span class="muted mono" style="flex:none;margin-left:auto">
+          活跃版本 <b x-text="versionInfo.version_no"></b>
+          <span x-show="versionInfo.anchor_period"> · 锚定 <b x-text="versionInfo.anchor_period"></b></span>
+        </span>
+      </template>
+    </div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:18px;align-items:flex-end">
+      <!-- 物料 autocomplete -->
+      <div style="flex:1;min-width:260px;position:relative">
+        <label class="muted" style="display:block;font-size:11px;margin-bottom:4px" for="m360-mat">物料号 / 名称</label>
+        <input id="m360-mat" class="mono" style="width:100%;padding:8px 10px;background:#fff;color:#1c2733;border:1px solid #dde2d9;border-radius:7px"
+          x-model="fMaterial" @click.stop="openAc('filter')" @input="acShow = 'filter'; filterMat(fMaterial)"
+          placeholder="输入物料号或名称…" autocomplete="off">
+        <div x-show="acShow === 'filter'" @click.away="acShow = ''"
+          style="position:absolute;top:100%;left:0;right:0;max-height:260px;overflow:auto;background:#fff;border:1px solid #dde2d9;border-radius:7px;margin-top:2px;z-index:50;box-shadow:0 4px 16px -6px rgba(14,27,42,.16)">
+          <div x-show="!matFiltered.length" class="muted" style="padding:10px;text-align:center">
+            无匹配物料（请先在「物料主数据」中创建）
+          </div>
+          <template x-for="no in matFiltered" :key="no">
+            <div @mousedown.prevent="pickMat(no)"
+              style="padding:6px 10px;cursor:pointer;border-bottom:1px solid #eef1ec;display:flex;justify-content:space-between"
+              @mouseover="$event.currentTarget.style.background='#f1f5f3'"
+              @mouseout="$event.currentTarget.style.background='transparent'">
+              <span class="mono" x-text="no"></span>
+              <span class="muted" x-text="matName(no)"></span>
+            </div>
+          </template>
+        </div>
+      </div>
+      <!-- 物料概要芯片（选中后显示） -->
+      <template x-if="materialInfo">
+        <div style="flex:2;min-width:320px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <span class="st st-green"><b x-text="materialInfo.material_no"></b></span>
+          <span class="muted" x-text="materialInfo.material_name || ''"></span>
+          <span class="st" :class="'st-' + (materialInfo.status === '正常' ? 'slate' : 'red')" x-text="materialInfo.status"></span>
+          <span class="st st-amber" x-show="materialInfo.value_class" x-text="'价值：' + dash(materialInfo.value_class)"></span>
+          <span class="st st-slate" x-show="materialInfo.base_method" x-text="'预测方法：' + dash(materialInfo.base_method)"></span>
+          <span class="st st-slate" x-show="materialInfo.fit_version" x-text="'拟合 v' + dash(materialInfo.fit_version)"></span>
+          <button class="b-ghost b-sm" x-show="material" @click="clearMat()">清空</button>
+        </div>
+      </template>
+    </div>
+
+    <!-- ════════ 未选物料提示 ════════ -->
+    <div x-show="!material" class="muted" style="text-align:center;padding:60px 20px;font-size:14px">
+      请在上方选择一个物料以查看全景数据
+    </div>
+
+    <template x-if="material">
+      <div style="display:flex;flex-direction:column">
+
+        <!-- ════════ ① 基础数据 ════════ -->
+        <div class="card">
+          <div class="hd"><span class="idx">①</span><span>基础数据</span></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:14px">
+            <!-- 物料主数据 -->
+            <div style="background:#f7f9f5;border:1px solid #dde2d9;border-radius:8px;padding:12px">
+              <div class="overline" style="margin-top:0">物料属性</div>
+              <template x-if="materialInfo">
+                <div style="display:grid;grid-template-columns:120px 1fr;gap:4px 12px;font-size:12.5px">
+                  <span class="muted">物料号</span><span class="mono" x-text="materialInfo.material_no"></span>
+                  <span class="muted">名称</span><span x-text="materialInfo.material_name || '—'"></span>
+                  <span class="muted">状态</span><span x-text="materialInfo.status || '—'"></span>
+                  <span class="muted">单位价值</span><span x-text="fmt(materialInfo.unit_value)"></span>
+                  <span class="muted">价值等级</span><span x-text="dash(materialInfo.value_class)"></span>
+                  <span class="muted">切换成本</span><span x-text="fmt(materialInfo.change_cost)"></span>
+                  <span class="muted">生产天数</span><span x-text="fmt(materialInfo.prod_days)"></span>
+                  <span class="muted">物流天数</span><span x-text="fmt(materialInfo.logistics_days)"></span>
+                  <span class="muted">切换风险</span><span x-text="dash(materialInfo.change_risk)"></span>
+                  <span class="muted">服务水平</span><span x-text="pct(materialInfo.service_level)"></span>
+                  <span class="muted">批次窗口</span><span x-text="fmt(materialInfo.batch_window)"></span>
+                  <span class="muted">预测方法</span><span x-text="dash(materialInfo.base_method)"></span>
+                  <span class="muted">预测参数</span><span class="mono" x-text="dash(materialInfo.base_params)"></span>
+                  <span class="muted">拟合版本</span><span x-text="dash(materialInfo.fit_version) + ' · ' + dash(materialInfo.fit_effective_at)"></span>
+                </div>
+              </template>
+              <div x-show="!materialInfo" class="muted">暂无物料主数据</div>
+            </div>
+
+            <!-- 所属项目 -->
+            <div style="background:#f7f9f5;border:1px solid #dde2d9;border-radius:8px;padding:12px">
+              <div class="overline" style="margin-top:0">所属项目 <span class="mono right" x-text="'共 ' + projects.length"></span></div>
+              <div x-show="!projects.length" class="muted">暂无项目映射</div>
+              <template x-for="p in projects" :key="p.project_no">
+                <div class="sline" style="gap:8px">
+                  <button class="b-link mono" @click="gotoPage('md_project')" x-text="p.project_no"></button>
+                  <span x-text="p.project_name"></span>
+                  <span class="st" :class="'st-' + hue(p.stage)" x-text="dash(p.stage)"></span>
+                  <span class="muted mono" style="margin-left:auto" x-text="dash(p.veh_model) + ' · 份额 ' + pct(p.share) + ' · 单车用量 ' + dash(p.usage)"></span>
+                </div>
+              </template>
+              <div x-show="projects.length" class="muted" style="font-size:11px;margin-top:6px"
+                x-text="'SOP/EOP：' + (projects[0] && (projects[0].sop_date + ' / ' + projects[0].eop_date) || '—')"></div>
+            </div>
+
+            <!-- 替换关系 -->
+            <div style="background:#f7f9f5;border:1px solid #dde2d9;border-radius:8px;padding:12px">
+              <div class="overline" style="margin-top:0">替换关系 <span class="mono right" x-text="'共 ' + replacements.length"></span></div>
+              <div x-show="!replacements.length" class="muted">暂无替换关系</div>
+              <template x-for="r in replacements" :key="r.rel_no">
+                <div class="sline" style="gap:8px">
+                  <span class="mono" x-text="r.rel_no"></span>
+                  <span class="st" :class="'st-' + hue(r.status)" x-text="dash(r.status)"></span>
+                  <span class="mono" x-text="(r.old_material_no === material ? '→ ' + r.new_material_no : r.old_material_no + ' →')"></span>
+                  <span class="muted mono" style="margin-left:auto" x-text="dash(r.ecn_no)"></span>
+                </div>
+              </template>
+            </div>
+
+            <!-- 断点链 -->
+            <div style="background:#f7f9f5;border:1px solid #dde2d9;border-radius:8px;padding:12px">
+              <div class="overline" style="margin-top:0">断点链 <span class="mono right" x-text="'共 ' + breakpoints.length"></span></div>
+              <div x-show="!breakpoints.length && !bpChain.length" class="muted">暂无断点切换</div>
+              <template x-if="bpChain.length > 1">
+                <div style="font-size:12px;color:#175e54;margin-bottom:6px">
+                  链：<template x-for="(n, i) in bpChain" :key="n">
+                    <span><span class="mono" x-text="n"></span><span x-show="i < bpChain.length - 1"> → </span></span>
+                  </template>
+                </div>
+              </template>
+              <template x-for="b in breakpoints" :key="b.bp_id">
+                <div class="sline" style="gap:8px">
+                  <span class="mono" x-text="b.old_material_no + ' → ' + b.new_material_no"></span>
+                  <span class="muted mono" x-text="dash(b.switch_time)"></span>
+                  <span class="muted" style="margin-left:auto" x-text="dash(b.customer_no)"></span>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <!-- ════════ ② 销售历史 ════════ -->
+        <div class="card">
+          <div class="hd"><span class="idx">②</span><span>销售历史</span>
+            <span class="right mono" x-text="'近 ' + histPoints.length + ' 期 · 达成率 ' + attainment.length + ' 客户'"></span></div>
+          <div style="padding:14px;display:grid;grid-template-columns:1.4fr 1fr;gap:16px">
+            <div x-html="historySvg"></div>
+            <div>
+              <div class="overline">客户达成率（MAPE / bias）</div>
+              <div x-show="!attainment.length" class="muted">暂无达成率</div>
+              <template x-for="a in attainment" :key="a.customer_no">
+                <div class="sline" style="gap:10px">
+                  <span class="mono" x-text="a.customer_no"></span>
+                  <span style="flex:1"></span>
+                  <span class="muted">MAPE</span><b x-text="pct(a.mape)"></b>
+                  <span class="muted">bias</span><b x-text="pct(a.bias)"></b>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <!-- ════════ ③ 预测与库存策略 ════════ -->
+        <div class="card">
+          <div class="hd"><span class="idx">③</span><span>预测与库存策略</span>
+            <span class="right mono" x-text="'版本 ' + dash(fv)"></span></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:14px">
+            <!-- 预测汇总 + 明细 -->
+            <div style="background:#f7f9f5;border:1px solid #dde2d9;border-radius:8px;padding:12px">
+              <div class="overline" style="margin-top:0">滚动月度预测（客户×月度）</div>
+              <div x-show="!fcSummary.length && !fcDetail.length" class="muted">暂无预测</div>
+              <template x-if="fcSummary.length">
+                <div style="display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap">
+                  <template x-for="s in fcSummary" :key="s.rolling_month">
+                    <div style="background:#fff;border:1px solid #dde2d9;border-radius:6px;padding:6px 10px">
+                      <div class="muted mono" style="font-size:11px" x-text="actualMonth(s.rolling_month)"></div>
+                      <b x-text="fmt(s.final_qty_sum)"></b>
+                    </div>
+                  </template>
+                </div>
+              </template>
+              <template x-for="d in fcDetail.slice(0, 10)" :key="d.customer_no + d.rolling_month">
+                <div class="sline" style="gap:8px">
+                  <span class="mono" x-text="d.customer_no"></span>
+                  <span class="mono muted" x-text="actualMonth(d.rolling_month)"></span>
+                  <span class="st st-red" x-show="d.abnormal_flag">异常</span>
+                  <span style="flex:1"></span>
+                  <span class="muted" x-text="dash(d.base_method)"></span>
+                  <b x-text="fmt(d.final_qty)"></b>
+                </div>
+              </template>
+              <div x-show="fcDetail.length > 10" class="muted" style="font-size:11px;margin-top:4px"
+                x-text="'（显示前 10 行，共 ' + fcDetail.length + ' 行）'"></div>
+            </div>
+
+            <!-- 库存策略 + 拟合历史 -->
+            <div style="background:#f7f9f5;border:1px solid #dde2d9;border-radius:8px;padding:12px">
+              <div class="overline" style="margin-top:0">库存策略（A / C / B 三层水位）</div>
+              <template x-if="waterStrategy">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;font-size:12.5px;margin-bottom:10px">
+                  <span class="muted">对冲工具</span><span x-text="dash(waterStrategy.hedge_tool)"></span>
+                  <span class="muted">最低水位 A</span><b x-text="fmt(waterStrategy.min_level)"></b>
+                  <span class="muted">安全水位 C</span><b x-text="fmt(waterStrategy.safety_level)"></b>
+                  <span class="muted">批次水位 B</span><b x-text="fmt(waterStrategy.batch_level)"></b>
+                  <span class="muted">下界 (A+C)</span><span x-text="fmt(waterStrategy.lower)"></span>
+                  <span class="muted">上界 (A+C+B)</span><span x-text="fmt(waterStrategy.upper)"></span>
+                  <span class="muted">服务系数</span><span x-text="pct(waterStrategy.service_factor)"></span>
+                  <span class="muted">需求波动</span><span x-text="fmt(waterStrategy.resp_volatility)"></span>
+                  <span class="muted">批次窗口</span><span x-text="fmt(waterStrategy.batch_window)"></span>
+                </div>
+              </template>
+              <div x-show="!waterStrategy" class="muted">暂无库存策略</div>
+
+              <div class="overline">策略拟合历史</div>
+              <div x-show="!fittingHist.length" class="muted">暂无拟合记录</div>
+              <template x-for="f in fittingHist.slice(0, 6)" :key="f.fit_version">
+                <div class="sline" style="gap:8px">
+                  <span class="mono" x-text="f.fit_version"></span>
+                  <span class="st" :class="'st-' + hue(f.status)" x-text="dash(f.status)"></span>
+                  <span class="st st-red" x-show="f.abnormal_flag">异常</span>
+                  <span class="muted" x-text="dash(f.pred_method)"></span>
+                  <span style="flex:1"></span>
+                  <span class="muted">SMAPE</span><span x-text="pct(f.smape)"></span>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <!-- ════════ ④ 毛需求 / 净需求 ════════ -->
+        <div class="card">
+          <div class="hd"><span class="idx">④</span><span>毛需求 / 净需求</span></div>
+          <div style="padding:14px">
+            <div x-show="!demandRows.length" class="muted">暂无毛/净需求（版本未发布或未 calc_net）</div>
+            <template x-if="demandRows.length">
+              <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+                <thead>
+                  <tr style="border-bottom:2px solid #dde2d9">
+                    <th class="muted" style="padding:6px 8px;text-align:left">滚动月度</th>
+                    <th style="padding:6px 8px;text-align:right">销售预测</th>
+                    <th style="padding:6px 8px;text-align:right">库存策略</th>
+                    <th style="padding:6px 8px;text-align:right;color:#b45309">毛需求</th>
+                    <th style="padding:6px 8px;text-align:right">未发订单</th>
+                    <th style="padding:6px 8px;text-align:right">当前库存</th>
+                    <th style="padding:6px 8px;text-align:right">在途工单</th>
+                    <th style="padding:6px 8px;text-align:right;color:#175e54">净需求</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="d in demandRows" :key="d.rolling_month">
+                    <tr style="border-bottom:1px solid #eef1ec">
+                      <td class="mono" style="padding:6px 8px" x-text="actualMonth(d.rolling_month)"></td>
+                      <td style="padding:6px 8px;text-align:right" x-text="fmt(d.forecast_qty)"></td>
+                      <td style="padding:6px 8px;text-align:right" x-text="fmt(d.inventory_qty)"></td>
+                      <td style="padding:6px 8px;text-align:right;color:#b45309"><b x-text="fmt(d.gross_qty)"></b></td>
+                      <td style="padding:6px 8px;text-align:right" x-text="fmt(d.open_order_qty)"></td>
+                      <td style="padding:6px 8px;text-align:right" x-text="fmt(d.onhand_qty)"></td>
+                      <td style="padding:6px 8px;text-align:right" x-text="fmt(d.in_transit_qty)"></td>
+                      <td style="padding:6px 8px;text-align:right;color:#175e54"><b x-text="fmt(d.net_qty)"></b></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </template>
+          </div>
+        </div>
+
+        <!-- ════════ ⑤ 入库计划 ════════ -->
+        <div class="card">
+          <div class="hd"><span class="idx">⑤</span><span>入库计划（主计划 + 补库单）</span></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:14px">
+            <div>
+              <div class="overline">主计划最新版</div>
+              <div x-show="!masterLatest.length" class="muted">暂无主计划</div>
+              <template x-for="m in masterLatest" :key="m.rolling_month + m.plan_version">
+                <div class="sline" style="gap:8px">
+                  <span class="mono" x-text="actualMonth(m.rolling_month)"></span>
+                  <span class="muted mono">v<span x-text="m.plan_version"></span></span>
+                  <span style="flex:1"></span>
+                  <span class="muted mono" x-text="dash(m.latest_inbound_date)"></span>
+                  <b x-text="fmt(m.plan_qty)"></b>
+                </div>
+              </template>
+            </div>
+            <div>
+              <div class="overline">需求池（补库单） <span class="mono right" x-text="'共 ' + replenishPool.length"></span></div>
+              <div x-show="!replenishPool.length" class="muted">暂无补库单</div>
+              <template x-for="p in replenishPool" :key="p.replenish_no">
+                <div class="sline" style="gap:8px">
+                  <button class="b-link mono" @click="gotoPage('demand_pool')" x-text="p.replenish_no"></button>
+                  <span class="st" :class="'st-' + hue(p.status)" x-text="dash(p.status)"></span>
+                  <span class="muted" x-text="dash(p.replenish_type)"></span>
+                  <span style="flex:1"></span>
+                  <span class="muted mono" x-text="dash(p.required_inbound)"></span>
+                  <b x-text="fmt(p.replenish_qty)"></b>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <!-- ════════ ⑥ 出库计划 ════════ -->
+        <div class="card">
+          <div class="hd"><span class="idx">⑥</span><span>出库计划</span>
+            <span class="right mono" x-text="'共 ' + outbound.length"></span></div>
+          <div style="padding:14px">
+            <div x-show="!outbound.length" class="muted">暂无出库计划</div>
+            <template x-for="o in outbound" :key="o.plan_no">
+              <div class="sline" style="gap:10px">
+                <button class="b-link mono" @click="gotoPage('outbound_plan')" x-text="o.plan_no"></button>
+                <span class="mono" x-text="o.customer_no"></span>
+                <span class="st" :class="'st-' + hue(o.status)" x-text="dash(o.status)"></span>
+                <span style="flex:1"></span>
+                <span class="muted mono" x-text="dash(o.out_date)"></span>
+                <span class="muted mono" x-text="dash(o.actual_out_no)"></span>
+                <b x-text="fmt(o.qty)"></b>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- ════════ ⑦ 库存推移 ════════ -->
+        <div class="card">
+          <div class="hd"><span class="idx">⑦</span><span>库存推移（今日 + 90 天）</span>
+            <span class="right mono" x-text="'共 ' + projRows.length + ' 天'"></span></div>
+          <div style="padding:14px" x-html="projectionSvg"></div>
+          <template x-if="projWater">
+            <div class="overline" style="padding:0 14px 12px">
+              水位参考 ·
+              <span class="mono">A <span x-text="fmt(projWater.min_level)"></span></span> ·
+              <span class="mono">C <span x-text="fmt(projWater.safety_level)"></span></span> ·
+              <span class="mono">B <span x-text="fmt(projWater.batch_level)"></span></span> ·
+              <span class="mono">下界 <span x-text="fmt(projWater.lower)"></span></span> ·
+              <span class="mono">上界 <span x-text="fmt(projWater.upper)"></span></span>
+            </div>
+          </template>
+        </div>
+
+      </div>
+    </template>
+  </div>
+</div>

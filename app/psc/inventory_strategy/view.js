@@ -12,6 +12,7 @@ export const PAGE_META = {
   title: "库存策略",
   crumb: "三层水位(最低/安全/组批) · 品种分层(库存/速度对冲)",
   order: 110,
+  bold: true,
 };
 
 export default function pageInventoryStrategy() {

@@ -11,7 +11,7 @@ import { pageable } from "/view/lib/shell.js";
 export const PAGE_META = {
   key: "attainment", name: "达成率与置信度", ic: "📊",
   title: "达成率与置信度", crumb: "派生指标 · 客户×物料 MAPE/bias",
-  order: 90,
+  order: 535,
 };
 
 export default function pageAttainment() {

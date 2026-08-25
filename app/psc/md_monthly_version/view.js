@@ -11,7 +11,7 @@ export const PAGE_META = {
   ic: "📅",
   title: "月度版本",
   crumb: "主数据 · 计划周期版本(草稿→发布→冻结)",
-  order: 80,
+  order: 570,
 };
 
 export default function pageMdMonthlyVersion() {

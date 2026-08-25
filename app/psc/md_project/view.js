@@ -7,7 +7,7 @@ import { pageable } from "/view/lib/shell.js";
 export const PAGE_META = {
   key: "md_project", name: "项目台账", ic: "📁",
   title: "项目台账", crumb: "主数据 · 项目生命周期(阶段/SOP/EOP)",
-  order: 40,
+  order: 530,
 };
 
 const STAGES = ["进行中", "SOP", "EOP"];

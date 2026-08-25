@@ -11,7 +11,7 @@ export const PAGE_META = {
   ic: "🔁",
   title: "替换关系",
   crumb: "主数据 · 零件替换关系(原件→替换件)",
-  order: 70,
+  order: 560,
   // 关系号(rel_no)为系统生成内部主键，业务价值低，默认隐藏（可经列设置开启）
   col_default_hidden: "关系号",
 };

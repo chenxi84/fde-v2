@@ -12,6 +12,7 @@ export const PAGE_META = {
   title: "主计划",
   crumb: "线下产能平衡结果导回 · 计划版本号版本化",
   order: 130,
+  bold: true,
 };
 
 export default function pageMasterPlan() {

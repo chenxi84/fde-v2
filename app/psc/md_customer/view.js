@@ -7,7 +7,7 @@ import { pageable } from "/view/lib/shell.js";
 export const PAGE_META = {
   key: "md_customer", name: "客户主数据", ic: "🏢",
   title: "客户主数据", crumb: "主数据 · 客户/结算模式/线边缓冲参数",
-  order: 20,
+  order: 510,
 };
 
 export default function pageMdCustomer() {

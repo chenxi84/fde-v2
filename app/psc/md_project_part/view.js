@@ -11,7 +11,7 @@ export const PAGE_META = {
   ic: "🔗",
   title: "项目零件映射",
   crumb: "主数据 · 项目×零件量纲(单车用量/份额)",
-  order: 50,
+  order: 540,
 };
 
 /* 供应份额百分比格式化：0.8 → 80% */

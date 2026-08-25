@@ -13,6 +13,7 @@ export const PAGE_META = {
   title: "毛需求与净需求",
   crumb: "毛需求合成发布 · 净需求运算(毛需求+未发−库存−在途)",
   order: 120,
+  bold: true,
 };
 
 const ROLLING_MONTHS = ["N+1", "N+2", "N+3"];   // BR-03 枚举，与后端 ROLLING_MONTHS 一致

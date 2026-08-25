@@ -15,6 +15,7 @@ export const PAGE_META = {
   title: "策略拟合",
   crumb: "滚动回测拟合最优方法参数 · 待复核→已生效/已否决",
   order: 160,
+  bold: true,
 };
 
 export default function pageStrategyFitting() {

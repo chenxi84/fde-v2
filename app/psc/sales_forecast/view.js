@@ -15,6 +15,7 @@ export const PAGE_META = {
   title: "销售预测",
   crumb: "预测清单→处理→汇总 · 四种方法/异常决策/断点追溯",
   order: 100,
+  bold: true,
 };
 
 export default function pageSalesForecast() {

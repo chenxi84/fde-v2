@@ -46,6 +46,7 @@ export const PAGE_META = {
   title: "库存推移表",
   crumb: "逐日推演库存水位 · 缺货/击穿/呆滞/超储预警",
   order: 140,
+  bold: true,
 };
 
 export default function pageInventoryProjection() {

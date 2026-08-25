@@ -9,7 +9,7 @@ import { pageable } from "/view/lib/shell.js";
 export const PAGE_META = {
   key: "md_material", name: "物料主数据", ic: "⚙",
   title: "物料主数据", crumb: "主数据 · 物料属性/预测方法/库存参数",
-  order: 30,
+  order: 520,
   // 列表默认只显示关键列；其余全字段列由列设置图标按需开启（CONVENTION：list 返回全字段）
   col_default_hidden: "单位货值,切线成本,生产时间,物流时间,满足率,组批窗口,基线参数,拟合版本,拟合生效",
 };

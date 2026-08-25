@@ -12,7 +12,7 @@ export const PAGE_META = {
   ic: "⏱",
   title: "断点基础数据",
   crumb: "主数据 · 新旧件断点切换关系",
-  order: 60,
+  order: 550,
   // 断点标识(bp_id)为内部自增主键，业务价值低，默认隐藏（可经列设置图标开启）
   col_default_hidden: "断点标识",
 };

@@ -1,5 +1,5 @@
 """psc 组级前端验收（第⑨步 · 壳 / 菜单序 / dashboard / 受限用户；playwright，可直接运行）。
-断言：壳品牌与 19 项业务菜单序 → dashboard 三区块（KPI/主链管道/待办队列）→
+断言：壳品牌与 20 项业务菜单序 → dashboard 三区块（KPI/主链管道/待办队列）→
 受限用户菜单收敛 / 直访无授权回落 / 隐式放行有数据 → 全程 0 console error /
 0 pageerror / 0 HTTP≥400（受限会话 403 属预期执法，豁免）。
 用例来源：app/psc/前端测试用例.md（§1 壳与菜单序/dashboard + §5 受限三连 + §6）。
@@ -63,18 +63,11 @@ except Exception:
     pass
 LIMITED_USER, LIMITED_PWD = "limited_psc", "Limited@123"
 
-# 业务菜单 19 项（PAGE_META.order 升序，key 序 == 中文名序，逐字取自组级用例 §1）
+# 业务菜单 20 项（PAGE_META.order 升序，主流程在前 + 基础数据在后）
 EXPECTED_MENU = [
     "产销协同看板",      # dashboard order=10
     "流程总览",          # process order=15
-    "客户主数据",        # md_customer order=20
-    "物料主数据",        # md_material order=30
-    "项目台账",          # md_project order=40
-    "项目零件映射",      # md_project_part order=50
-    "断点基础数据",      # md_breakpoint order=60
-    "替换关系",          # md_part_replace order=70
-    "月度版本",          # md_monthly_version order=80
-    "达成率与置信度",    # attainment order=90
+    "物料 360 视图",     # material_360 order=20
     "销售预测",          # sales_forecast order=100
     "库存策略",          # inventory_strategy order=110
     "毛需求与净需求",    # demand order=120
@@ -84,6 +77,14 @@ EXPECTED_MENU = [
     "需求池",            # demand_pool order=150
     "策略拟合",          # strategy_fitting order=160
     "历史台账",          # sales_history order=170
+    "客户主数据",        # md_customer order=510
+    "物料主数据",        # md_material order=520
+    "项目台账",          # md_project order=530
+    "达成率与置信度",    # attainment order=535
+    "项目零件映射",      # md_project_part order=540
+    "断点基础数据",      # md_breakpoint order=550
+    "替换关系",          # md_part_replace order=560
+    "月度版本",          # md_monthly_version order=570
 ]
 
 # 受限菜单（授权清单 psc:dashboard / psc:md_customer / psc:md_monthly_version + 平台 Agent）
@@ -227,13 +228,13 @@ def main():
             brand_txt = page.locator(".brand .name").first.inner_text().strip()
             assert brand_txt == "FDE·PSC", f"侧栏品牌不符：{brand_txt!r}"
 
-            # §1 VT-SHELL-01 菜单序（前 19 个 .nav-item == 业务菜单 order 升序；
+            # §1 VT-SHELL-01 菜单序（前 20 个 .nav-item == 业务菜单 order 升序；
             #   admin 末尾自动追加平台页 Agent / 服务台，不计入本序断言）
             step("shell-menu")
             names = _nav_names(page)
-            assert len(names) >= 19, f"业务菜单不足 19 项：{names}"
-            assert names[:19] == EXPECTED_MENU, (
-                f"菜单序不符：\n实际 {names[:19]}\n期望 {EXPECTED_MENU}")
+            assert len(names) >= 20, f"业务菜单不足 20 项：{names}"
+            assert names[:20] == EXPECTED_MENU, (
+                f"菜单序不符：\n实际 {names[:20]}\n期望 {EXPECTED_MENU}")
 
             # §1 VT-SHELL-01 Agent 右栏（默认展开 · header 按钮可收起/展开）
             step("agent-rail")
