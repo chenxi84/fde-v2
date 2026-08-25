@@ -311,6 +311,14 @@ class _PgConnection:
             table = m.group(1).lower()
             sql = (f"SELECT ordinal_position, column_name FROM information_schema.columns "
                    f"WHERE table_name = '{table}' ORDER BY ordinal_position")
+        # SQLite「旧库补列」ALTER TABLE ADD COLUMN → PG 幂等化（列已存在则不失败，避免事务 aborted）
+        m = re.match(r'ALTER\s+TABLE\s+([A-Za-z_]\w*)\s+ADD\s+COLUMN\s+(.+?)\s*;?\s*$',
+                     sql, re.IGNORECASE | re.DOTALL)
+        if m:
+            table = m.group(1).lower()
+            col_def = m.group(2).strip().rstrip(';').strip()
+            sql = (f"DO $$ BEGIN ALTER TABLE {table} ADD COLUMN {col_def}; "
+                   f"EXCEPTION WHEN duplicate_column THEN NULL; END $$")
         sql = sql.strip()  # 去首尾空白，保证和 sql_upper 索引对齐
         ctx = getattr(self, "_fde_ctx", None) or {}
         user = (ctx or {}).get("userno", "") or ""
