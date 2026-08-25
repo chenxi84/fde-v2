@@ -163,7 +163,12 @@ export default function pageStrategyFitting() {
     },
 
     /* ---- 批量拟合（run_batch）：整批，仅接受 fit_version；对全部正常状态物料逐物料拟合 ---- */
-    openBatch() { self.batch = { open: true, busy: false, fit_version: "" }; },
+    openBatch() {
+      // 预填当前年月（YYYYMM）：批量拟合默认对当月拟合，用户通常无需改动
+      const now = new Date();
+      const ym = now.getFullYear() + String(now.getMonth() + 1).padStart(2, "0");
+      self.batch = { open: true, busy: false, fit_version: ym };
+    },
     closeBatch() { self.batch.open = false; },
 
     async saveBatch() {

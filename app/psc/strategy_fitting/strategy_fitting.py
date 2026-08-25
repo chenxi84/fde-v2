@@ -1,6 +1,7 @@
 from fde import FdeError
 from typing import Optional
 import re
+from datetime import datetime
 
 
 class StrategyFitting:
@@ -104,8 +105,12 @@ class StrategyFitting:
 
         return self.get(clean_version, clean_material)
 
-    def run_batch(self, fit_version: str):
-        """整批拟合：按 fit_version 对全部正常状态物料逐物料拟合（简化同步实现）。"""
+    def run_batch(self, fit_version: str = None):
+        """整批拟合：按 fit_version 对全部正常状态物料逐物料拟合（简化同步实现）。
+
+        fit_version 缺省/为空时自动取当前年月（YYYYMM），前端批量弹窗亦预填当月。"""
+        if fit_version is None or str(fit_version).strip() == "":
+            fit_version = datetime.now().strftime("%Y%m")
         clean_version = self._clean_fit_version(fit_version)
 
         try:
