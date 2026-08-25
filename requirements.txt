@@ -1,29 +1,17 @@
 # FDE v2 平台依赖
 # 安装：pip install -r requirements.txt
 
-# 核心（必须）
+# 核心（必须，缺一平台无法正常运行）
 flask>=2.0
 waitress>=2.0
 cryptography>=3.0
-
-# 可选：配置管理（.env 文件支持）
 python-dotenv>=1.0
-
-# 可选：PostgreSQL（Docker 部署用，不装则默认 SQLite）
-psycopg2-binary>=2.9
-
-# 可选：AI Agent 对话（AgentScope 编排后端 + 兼容 OpenAI 接口的模型）
 agentscope>=2.0
 openai>=1.0
-
-# 可选：数据导入解析（Excel：xlsx 走 openpyxl、xls 走 xlrd）
 openpyxl>=3.0
 xlrd>=2.0
-
-# 可选：定时任务
 apscheduler>=3.10
+markdown>=3.0
 
-# （/groupbuild 已移除，langgraph 不再需要）
-# langgraph>=0.2,<0.3
-# langgraph-checkpoint>=2.0,<3.0
-# langgraph-checkpoint-sqlite>=2.0
+# 可选：PostgreSQL 驱动（仅 Docker/PostgreSQL 部署需要，默认 SQLite 无需）
+psycopg2-binary>=2.9
