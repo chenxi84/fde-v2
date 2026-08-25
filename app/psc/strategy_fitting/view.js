@@ -141,7 +141,10 @@ export default function pageStrategyFitting() {
 
     /* ---- 发起拟合（run）：单物料，接受 material_no / fit_version 两个可写业务参数 ---- */
     openRun() {
-      self.form = { open: true, busy: false, material_no: "", fit_version: "" };
+      // 预填当前年月（YYYYMM）：发起拟合默认对当月拟合，用户通常无需改动
+      const now = new Date();
+      const ym = now.getFullYear() + String(now.getMonth() + 1).padStart(2, "0");
+      self.form = { open: true, busy: false, material_no: "", fit_version: ym };
       self.matQuery = ""; self.matOpen = false;
     },
     closeRun() { self.form.open = false; self.matOpen = false; },
