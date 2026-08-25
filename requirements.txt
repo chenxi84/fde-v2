@@ -12,8 +12,13 @@ python-dotenv>=1.0
 # 可选：PostgreSQL（Docker 部署用，不装则默认 SQLite）
 psycopg2-binary>=2.9
 
-# 可选：AI Agent 对话（兼容 OpenAI 接口的模型，如 DeepSeek / 通义千问 / 智谱）
+# 可选：AI Agent 对话（AgentScope 编排后端 + 兼容 OpenAI 接口的模型）
+agentscope>=2.0
 openai>=1.0
+
+# 可选：数据导入解析（Excel：xlsx 走 openpyxl、xls 走 xlrd）
+openpyxl>=3.0
+xlrd>=2.0
 
 # 可选：定时任务
 apscheduler>=3.10
