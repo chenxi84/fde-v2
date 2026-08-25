@@ -17,6 +17,7 @@
 - [平台运行期能力](#平台运行期能力)
 - [应用约定（CONVENTION v2）](#应用约定convention-v2)
 - [构建流水线（九步法）](#构建流水线九步法)
+- [迭代（修改现有应用）](#迭代修改现有应用)
 - [测试与验收红线](#测试与验收红线)
 - [配置](#配置)
 - [深入阅读](#深入阅读)
@@ -219,6 +220,14 @@ class Todo:                                  # 类 = 聚合根，PascalCase（�
 
 ---
 
+## 迭代（修改现有应用）
+
+对已有应用组提出改动需求（加字段 / 改规则 / 加服务 / 改前端）时，**先读 `design-plus/迭代执行.md`**，按「先读 → 改代码 → 同步改文档 → 跑测试」推进：
+
+- **先读**：`app/<组>/architecture.md` → 目标应用 `应用详设.md` → `_contracts.md` → `测试用例.md` → `前端详设.md`（缺即补）
+- **改代码 + 同步改文档**：改 `应用详设.md` / `前端详设.md` / `测试用例.md`；改了服务签名必须重跑 `python -m fde_platform.contract_dump <组>` 重新冻结契约
+- **跑测试**：`python -m fde_platform.scanner`（0 问题）→ `verify_chain_<组>.py` → `verify_view_<组>_<应用>.py`（0 报错）
+
 ---
 
 ## 测试与验收红线
@@ -268,7 +277,7 @@ python design-plus/前端验收样板/verify_view_e2e.py            # e2e 前端
 | 聚合根识别方法（第①步，本体驱动 + DDD） | `design-plus/架构设计.md` |
 | 应用详设模板（第②步） | `design-plus/应用设计.md` |
 | 前端视图约定正本（第⑥–⑨步） | `design-plus/VIEW_CONVENTION.md`（+ 参考 `design-plus/view-convention/`） |
-| 上线后持续演进 | 修改详设 → AI 代理单步重执行 → 回归测试 |
+| 迭代（修改现有应用，含读取要求） | `design-plus/迭代执行.md`（先读组文档 → 改代码+改文档 → 跑测试） |
 | 外部系统对接 | `/integration` 集成接口管理（扫描/配置/测试/跟踪） |
 | 平台 MCP 管理 | `python -m fde_platform.mcp_server --user admin` |
 | 部署指南 | `HOW-TO-USE.md`（本地开发 / Docker HTTP / Docker HTTPS+PG / deploy.sh 一键部署） |

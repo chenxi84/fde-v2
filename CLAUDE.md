@@ -45,6 +45,10 @@ python app/<组>/tests/verify_view_<组>.py             # 组级壳/菜单/dashb
 
 参考实现（只读样板）：`app/e2e/`（member/task，九步产物齐全 + dashboard.* / process.* 组级页）。
 
+## 迭代（修改现有应用）
+
+对已有应用组提出改动需求时，**先读 `design-plus/迭代执行.md`**：先读组文档（`architecture.md` / `应用详设.md` / `_contracts.md` / `测试用例.md` / `前端详设.md`）→ 改代码 + 同步改文档（改了服务签名必须重跑 `contract_dump` 重新冻结契约）→ 跑 scanner + verify_chain + verify_view。别只改代码，漏改文档、漏跑测试、漏重冻结契约。
+
 ## 测试与验收红线（不可逾越，规格见 design-plus/测试执行.md）
 
 1. **数据库隔离（最高优先）**：所有 verify 脚本在 `fde_platform/dbguard.py` 的 `isolate_dbs()` 下跑——移走真实库 → 空库跑 → 结束还回，**绝不污染用户 demo 数据**。
