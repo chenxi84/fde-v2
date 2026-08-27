@@ -30,17 +30,15 @@ AI 代理会按九步法自动推进（架构设计 → 应用详设 → 编码 
 
 ---
 
-## 二、运行
+## 二、运行（本机开发 · Windows / Mac / Linux）
+
+> **本机开发一律用这种方式**（直接 pip + Python 启动，无需 Docker）。容器化部署仅用于 Linux 服务器，见「三」。
 
 ```bash
-# 1. （可选）配置 LLM——复制模板并按需填写，不配置也不影响基本使用
-cp config/.env.example config/.env
-
-# 2. 启动
 python main.py
 ```
 
-浏览器访问 **http://127.0.0.1:4000**，默认账号 **admin / admin**（首次登录后建议改密）。
+浏览器访问 **http://127.0.0.1:4000**，默认账号 **admin / admin**（首次登录后建议改密）。大模型配置见下一节「配置大模型」。
 
 ---
 
@@ -72,7 +70,9 @@ cp config/.env.example config/.env
 
 ---
 
-## 三、Docker 部署（可选）
+## 三、Docker 部署（仅 Linux 服务器）
+
+> **仅在 Linux 服务器部署时使用**。本机开发请用「二、运行」，不要用 Docker（Windows 本机跑 Docker 无必要、且需额外装 Docker Desktop）。
 
 适合部署到 Linux 服务器，无需手动安装 Python 和依赖。
 
