@@ -40,6 +40,13 @@ python main.py
 
 浏览器访问 **http://127.0.0.1:4000**，默认账号 **admin / admin**（首次登录后建议改密）。大模型配置见下一节「配置大模型」。
 
+> **Windows 平台注意**：若用 venv 虚拟环境，其可执行文件在 `venv\Scripts\`（`venv\Scripts\pip.exe`、`venv\Scripts\python.exe`），**不是** Linux 的 `venv/bin/`。完整步骤：
+> ```bash
+> python -m venv venv
+> venv\Scripts\pip install -r requirements.txt
+> venv\Scripts\python main.py
+> ```
+
 ---
 
 ## 配置大模型（LLM，AI Agent 对话用）
