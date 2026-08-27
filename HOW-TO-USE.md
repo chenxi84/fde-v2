@@ -44,6 +44,34 @@ python main.py
 
 ---
 
+## 配置大模型（LLM，AI Agent 对话用）
+
+系统内置两种配置方式，任选其一。配置后「AI Agent」才能对话；不配置平台其余功能照常。
+
+### 方式一：网页界面配置（推荐，保存即生效）
+
+1. 用 **admin / admin** 登录后，点顶部导航「大模型」，进入 **`/llm`** 页面。
+2. 页面列出两个配置卡片：
+   - **Agent 对话模型**（operator）：Agent 主对话模型，必配。
+   - **多模态兜底模型**（vision）：遇到图片时临时调用的视觉模型，可选；不配则图片交给主模型处理。
+3. 每个卡片填写：厂商/协议（openai_compat / anthropic）、Base URL、模型名、API Key（加密保存、不回显）、temperature、max_tokens、超时、状态（启用）。
+4. 快捷：点「一键载入 DeepSeek 配置」按钮，自动填好 DeepSeek 的 provider / base_url / 模型名，只需填 API Key。
+5. 点「保存」即时生效，无需重启。
+
+### 方式二：环境变量配置（.env）
+
+```bash
+cp config/.env.example config/.env
+```
+
+填写 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`（OpenAI 兼容接口，如 DeepSeek / 通义千问 / 智谱）。留空则 Agent 走「未配置」降级。
+
+### 不配置会怎样
+
+平台照常运行（应用清单、手工调用、REST API、MCP 均正常），仅「AI Agent」对话会提示「未配置模型」。
+
+---
+
 ## 三、Docker 部署（可选）
 
 适合部署到 Linux 服务器，无需手动安装 Python 和依赖。
