@@ -54,6 +54,37 @@
     return res.json();
   }
 
+  /* 调 confirm 端点（SSE 流式），解析出继续后的 reply 与是否还需确认 */
+  async function confirmStream(sid, decisions) {
+    const resp = await fetch(BASE + "/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sid, decisions }),
+    });
+    if (!resp.ok || !resp.body) throw new Error("HTTP " + resp.status);
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "", reply = "", confirm = null, tools = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const frame = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 2);
+        if (!frame.startsWith("data:")) continue;
+        let evt;
+        try { evt = JSON.parse(frame.slice(5).trim()); } catch { continue; }
+        if (evt.event === "delta") reply += evt.data;
+        else if (evt.event === "done") { reply = evt.data || reply; tools = evt.tools || []; }
+        else if (evt.event === "confirm_required") confirm = evt.data;
+        else if (evt.event === "tool") tools.push(evt.data);
+      }
+    }
+    return { reply, needs_confirm: !!confirm, confirm, tool_calls: tools };
+  }
+
   function bubble(who, text, toolsLog) {
     const div = document.createElement("div");
     div.className = "msg " + who;
@@ -231,11 +262,24 @@
       const j = await res.json();
       clearInterval(timer); clearInterval(poller); pb.div.remove();
       if (j.status !== "ok") { bubble("bot", "出错：" + j.message); return; }
-      const d = j.data;
-      const log = (d.tool_calls && d.tool_calls.length)
+      let d = j.data;
+      // HITL：危险操作需人工确认，确认/拒绝后继续（可多轮）
+      while (d && d.needs_confirm) {
+        const names = (d.confirm || []).map(c => c.name).join("\n");
+        const ok = window.confirm("⚠ Agent 请求执行以下操作（需人工确认）：\n" + names +
+          "\n\n「确定」= 确认执行；「取消」= 拒绝。");
+        const decisions = (d.confirm || []).map(c => ({ id: c.id, confirmed: ok }));
+        try {
+          d = await confirmStream(sid, decisions);
+        } catch (e) {
+          bubble("bot", "确认请求失败：" + e);
+          return;
+        }
+      }
+      const log = (d && d.tool_calls && d.tool_calls.length)
         ? "调用了 " + d.tool_calls.length + " 个工具：" + d.tool_calls.map(toolDispOf).filter(Boolean).join("、")
         : "";
-      bubble("bot", d.reply, log);
+      bubble("bot", d ? d.reply : "", log);
       renderSessions();  // 刷新标题与排序
     } catch (err) {
       clearInterval(timer); clearInterval(poller); pb.div.remove();

@@ -34,16 +34,18 @@
       {% endfor %}
     </div>
 
-    <!-- ── 平台级 Agent（跨应用，含会话历史）── -->
-    <div class="section-title">平台 Agent · 跨应用对话式操作</div>
-    {% with chat_base="/api/agent", chat_scope="platform",
-            chat_greeting="你好，我是平台级操作助手，可跨应用调用服务。告诉我要做什么。",
-            chat_placeholder="例如：同步客户和产品主数据，然后给 C001 创建一张 10000kg 的销售订单" %}
-      {% include "chat_widget.html" %}
-    {% endwith %}
-    <div class="muted" style="margin-top:6px">
-      平台级 Agent 可编排<b>所有应用</b>的服务（按你的服务级授权过滤）；单应用精细操作请用各应用详情页的 Agent。
-    </div>
+    <!-- ── 平台级 Agent（右侧固定栏，复用 agent_rail 组件，常驻展开）── -->
+    <aside class="agent-rail">
+      <div x-data="agentRail()" x-html="tpl"></div>
+    </aside>
+
+    <script type="module">
+      import Alpine from "/view/lib/alpine.esm.js";
+      import { agentRail } from "/view/pages/agent_rail.js";
+      window.Alpine = Alpine;
+      Alpine.data("agentRail", agentRail);
+      Alpine.start();
+    </script>
 
     {% if scan is defined and scan and scan.sites %}
     <details class="scan-detail">

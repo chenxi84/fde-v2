@@ -37,10 +37,12 @@ try:
     from agentscope.credential import AnthropicCredential, OpenAICredential
     from agentscope.event import (
         ConfirmResult,
+        ReplyStartEvent,
         RequireUserConfirmEvent,
         TextBlockDeltaEvent,
         ToolCallStartEvent,
         UserConfirmResultEvent,
+        UserInterruptEvent,
     )
     from agentscope.message import Msg, UserMsg, TextBlock, DataBlock, Base64Source
     from agentscope.model import AnthropicChatModel, OpenAIChatModel
@@ -139,6 +141,24 @@ def _vision_fallback(img: dict) -> str:
     if not text or text.startswith("LLM 调用失败") or "未安装" in text:
         return ""
     return text
+
+
+def _is_parked(state) -> bool:
+    """判断 AgentState 是否停在「等待确认/执行结果」（最后 assistant 消息以 tool_call 结尾、无 tool_result）。"""
+    for m in reversed(state.context or []):
+        if getattr(m, "role", None) == "assistant":
+            types = [getattr(b, "type", None) for b in m.content]
+            return bool(types) and types[-1] == "tool_call"
+    return False
+
+
+async def _interrupt_parked(agent, state) -> None:
+    """用 UserInterruptEvent 中断停车：丢弃 pending 工具、结束回复，恢复到干净状态。"""
+    try:
+        async for _ in agent.reply_stream(UserInterruptEvent(reply_id=state.reply_id)):
+            pass
+    except Exception:
+        pass
 
 
 # ── 模型构建（llm 配置中心 → AgentScope 模型）────────────────────────
@@ -301,6 +321,9 @@ class AgentScopeSession:
                        "data": f"Agent「{label}」未配置 LLM。请在 /llm 配置或设 LLM_* 环境变量。"})
                 return
             agent, state, inputs = prep
+            # 恢复的 state 若停在「等待确认」（上次危险操作未确认就离开），先中断丢弃这些未确认工具
+            if _is_parked(state):
+                await _interrupt_parked(agent, state)
         await self._stream_loop(session_id, agent, state, inputs, q)
 
     async def _resume(self, session_id, decisions, q):
@@ -330,6 +353,9 @@ class AgentScopeSession:
         async for evt in agent.reply_stream(inputs, yield_final_msg=True):
             if isinstance(evt, Msg):
                 final_text = evt.get_text_content() or ""
+            elif isinstance(evt, ReplyStartEvent):
+                # 回复开始（user 消息已 append 到 context）：立即持久化，执行期间切换界面 user 消息不丢
+                agent_state.save_state(session_id, agent.state.model_dump(mode="json"))
             elif isinstance(evt, TextBlockDeltaEvent):
                 q.put({"event": "delta", "data": evt.delta})
             elif isinstance(evt, ToolCallStartEvent):
@@ -448,25 +474,39 @@ def context_to_messages(context) -> list:
         if role == "user":
             msgs.append({"role": "user", "content": (m.get_text_content() or "")})
         elif role == "assistant":
-            text = m.get_text_content() or ""
-            calls, results = [], []
+            # 按 content 块顺序拆解，保持「最终回复在最后」的时序
+            text_parts = []      # 当前 assistant 的文本片段
+            pending_calls = []   # 当前 assistant 待落库的工具调用
             for b in m.content:
                 t = getattr(b, "type", None)
-                if t == "tool_call":
-                    calls.append({"id": b.id, "type": "function",
-                                  "function": {"name": b.name, "arguments": b.input}})
+                if t == "text":
+                    text_parts.append(getattr(b, "text", ""))
+                elif t == "tool_call":
+                    # 先落当前文本（若有），再开启工具调用轮
+                    if text_parts:
+                        txt = "".join(text_parts).strip()
+                        if txt:
+                            msgs.append({"role": "assistant", "content": txt})
+                        text_parts = []
+                    pending_calls.append({"id": b.id, "type": "function",
+                                          "function": {"name": b.name, "arguments": b.input}})
                 elif t == "tool_result":
                     out = b.output
                     if isinstance(out, list):
                         out = "".join(getattr(x, "text", "") for x in out)
-                    results.append({"tool_call_id": b.id, "content": out or ""})
-            if calls:
-                msgs.append({"role": "assistant", "content": text, "tool_calls": calls})
-                for r in results:
-                    msgs.append({"role": "tool", "tool_call_id": r["tool_call_id"],
-                                 "content": r["content"]})
-            elif text:
-                msgs.append({"role": "assistant", "content": text})
+                    # 落当前工具调用为 assistant(tool_calls) + tool 结果
+                    if pending_calls:
+                        msgs.append({"role": "assistant", "content": "", "tool_calls": pending_calls})
+                        pending_calls = []
+                    msgs.append({"role": "tool", "tool_call_id": b.id, "content": out or ""})
+                # thinking 块忽略
+            # 收尾：剩余的工具调用 + 最终的文本（最终回复）
+            if pending_calls:
+                msgs.append({"role": "assistant", "content": "", "tool_calls": pending_calls})
+            if text_parts:
+                txt = "".join(text_parts).strip()
+                if txt:
+                    msgs.append({"role": "assistant", "content": txt})
     return msgs
 
 

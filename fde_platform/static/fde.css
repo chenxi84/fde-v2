@@ -106,6 +106,8 @@ aside.agent-rail {
   width: 380px; flex: none; background: #f8f9fb; border-left: 1px solid #dde3eb;
   position: sticky; top: 0; height: 100vh; display: flex;
 }
+/* 首页（.pf 是 block 布局，非应用页 flex）：右侧固定栏浮在视口右侧，置于顶栏(100)之上 */
+.pf .agent-rail { position: fixed; top: 0; right: 0; height: 100vh; z-index: 101; }
 aside.agent-rail > div { flex: 1; min-width: 0; min-height: 0; display: flex; }
 .agent-rail-inner { flex: 1; min-height: 0; display: flex; flex-direction: column;
   gap: 10px; padding: 12px; }
@@ -566,8 +568,10 @@ details.scan-detail > summary { cursor: pointer; color: var(--prime); font-size:
   margin: 18px 0 8px; user-select: none; font-weight: 700; }
 
 /* ── 首页：内容居中在 1280 可读列 ── */
-.pf.home-bleed main { max-width: none; padding-left: 0; padding-right: 0; padding-top: 0; }
+.pf.home-bleed main { max-width: none; padding-left: 0; padding-right: 380px; padding-top: 0; }
 .pf.home-bleed .col { max-width: 1280px; margin: 0 auto; padding: 0 28px; }
+/* 首页右侧常驻 Agent 栏：顶栏整体让位（宽度减 380px），背景不再占满右侧 */
+.pf.home-bleed .ptop { margin-right: 380px; }
 
 /* ── 清单芯片：视图(主) + 详情 拼接双入口 ── */
 .wl-chip { display: inline-flex; align-items: stretch; vertical-align: top; }

@@ -120,6 +120,8 @@ def _admin_platform_tool_defs() -> list:
         # ── 集成 ──
         _t("platform_list_integrations", "列出全部集成接口配置（app/service/目标/类型/状态）",
            {"type": "object", "properties": {}, "required": []}, "list_integrations", False),
+        _t("platform_discover_integrations", "扫描全部应用，发现可配置的外部系统适配器（如 _http_xxx、_erp_xxx）与网关",
+           {"type": "object", "properties": {}, "required": []}, "discover_integrations", False),
         _t("platform_save_integration",
            "创建/更新某应用某服务的集成接口配置（可含认证凭证，凭证加密落库）",
            {"type": "object", "properties": {
@@ -140,6 +142,9 @@ def _admin_platform_tool_defs() -> list:
                "target": {"type": "string", "description": "按目标过滤（可选）"},
                "limit": {"type": "integer", "description": "条数", "default": 50},
            }, "required": []}, "integration_logs", False),
+        _t("platform_test_integration", "对某条已配置的集成端点做连通测试（发真实请求，返回响应预览）",
+           {"type": "object", "properties": {"endpoint_id": {"type": "integer", "description": "端点 id"}},
+            "required": ["endpoint_id"]}, "test_integration", True),
         # ── 定时任务 ──
         _t("platform_list_jobs", "列出全部定时任务（含启用状态/上次运行结果）",
            {"type": "object", "properties": {}, "required": []}, "list_jobs", False),
@@ -147,7 +152,7 @@ def _admin_platform_tool_defs() -> list:
            "创建定时任务：按 cron 表达式定时调用某应用某服务",
            {"type": "object", "properties": {
                "app_name": {"type": "string", "description": "应用 qualname"},
-               "service": {"type": "string", "description": "服务名"},
+               "service": {"type": "string", "description": "服务名（必须是对外公共服务、非 _ 前缀；外部适配器如 _http_fetch_sales_history 请改用其对外包装服务，如 sync_external_history）"},
                "cron_expr": {"type": "string", "description": "cron 表达式（分 时 日 月 周）"},
                "params": {"type": "object", "description": "服务入参 JSON"},
                "run_as_user": {"type": "string", "description": "运行身份用户名（可选，默认平台身份）"},
@@ -255,6 +260,8 @@ def _call_platform_tool(platform, user, service: str, args: dict):
 
     if service == "list_integrations":
         return integration.list_endpoints()
+    if service == "discover_integrations":
+        return {"external": integration.discover(platform)}
     if service == "save_integration":
         return {"endpoint_id": integration.save_endpoint(
             args.get("app_name", ""), args.get("method_name", ""), args.get("target", ""),
@@ -267,6 +274,8 @@ def _call_platform_tool(platform, user, service: str, args: dict):
         return {"deleted": args.get("endpoint_id")}
     if service == "integration_logs":
         return integration.recent_logs(args.get("target"), int(args.get("limit") or 50))
+    if service == "test_integration":
+        return integration.test_endpoint(int(args.get("endpoint_id")))
     if service == "list_jobs":
         return scheduler.list_jobs()
     if service == "create_job":

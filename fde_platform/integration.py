@@ -316,6 +316,89 @@ def get_endpoint(app_name: str, method_name: str) -> dict | None:
     return dict(row) if row else None
 
 
+def test_endpoint(endpoint_id: int) -> dict:
+    """连通测试：按配置发真实 HTTP 请求到外部 URL，返回响应预览。
+
+    POST 返回 404/405 时自动改用 GET 重试探测（外部「拉取数据」接口常为 GET），
+    结果里带 `method` 与 `note` 提示实际可用方法。
+    """
+    import base64
+    import time
+    import urllib.error
+    import urllib.request
+
+    eps = list_endpoints()
+    ep = next((e for e in eps if e["id"] == endpoint_id), None)
+    if not ep:
+        return {"status": "error", "message": f"端点不存在：{endpoint_id}"}
+    full = get_endpoint(ep["app_name"], ep["method_name"])
+    if not full:
+        return {"status": "error", "message": f"端点不存在：{endpoint_id}"}
+
+    if full.get("mock_enabled"):
+        log_call(full["app_name"], full["method_name"], full["target"],
+                 "Mock 测试", "mock", 0, response_summary=full.get("mock_data") or "{}")
+        return {"status": "ok", "result": "mock"}
+
+    url = (full.get("url") or "").strip()
+    if not url:
+        return {"status": "error", "message": "未配置 URL 且未开启 Mock"}
+
+    def _do_request(method: str):
+        """按指定方法发请求（含鉴权），返回 (status, body)。"""
+        req = urllib.request.Request(url, method=method)
+        req.add_header("Content-Type", full.get("content_type", "application/json"))
+        for k, v in (full.get("extra_headers") or {}).items():
+            req.add_header(k, v)
+        auth_type = full.get("auth_type", "none")
+        cred = full.get("auth_credential") or ""
+        param_name = full.get("auth_param_name") or ""
+        if auth_type == "basic" and cred:
+            req.add_header("Authorization", f"Basic {base64.b64encode(cred.encode()).decode()}")
+        elif auth_type == "bearer" and cred:
+            req.add_header("Authorization", f"Bearer {cred}")
+        elif auth_type == "apikey_header" and param_name and cred:
+            req.add_header(param_name, cred)
+        elif auth_type == "apikey_query":
+            sep = "&" if "?" in url else "?"
+            req = urllib.request.Request(url + f"{sep}{param_name}={cred}", method=method)
+        resp = urllib.request.urlopen(req, timeout=full.get("timeout_s", 30))
+        return resp.status, resp.read().decode("utf-8", errors="replace")
+
+    configured = full.get("http_method", "POST")
+    t0 = time.time()
+    try:
+        code, body = _do_request(configured)
+        dur = int((time.time() - t0) * 1000)
+        log_call(full["app_name"], full["method_name"], full["target"],
+                 f"{configured} {url}", "success", dur, response_summary=body[:500])
+        return {"status": "ok", "code": code, "duration_ms": dur,
+                "body_preview": body[:500], "method": configured}
+    except urllib.error.HTTPError as e:
+        # 原方法返回 404/405（方法不允许）→ 自动用 GET 探测
+        if e.code in (404, 405) and configured.upper() != "GET":
+            try:
+                code, body = _do_request("GET")
+                dur = int((time.time() - t0) * 1000)
+                log_call(full["app_name"], full["method_name"], full["target"],
+                         f"GET {url}", "success", dur, response_summary=body[:500])
+                return {"status": "ok", "code": code, "duration_ms": dur,
+                        "body_preview": body[:500], "method": "GET",
+                        "note": f"原方法 {configured} 返回 {e.code}，已改用 GET 探测成功"}
+            except Exception:
+                pass
+        dur = int((time.time() - t0) * 1000)
+        body = e.read().decode("utf-8", errors="replace")[:500]
+        log_call(full["app_name"], full["method_name"], full["target"],
+                 f"{configured} {url}", "error", dur, error_msg=f"HTTP {e.code}")
+        return {"status": "error", "code": e.code, "duration_ms": dur, "body_preview": body}
+    except Exception as e:
+        dur = int((time.time() - t0) * 1000)
+        log_call(full["app_name"], full["method_name"], full["target"],
+                 f"{configured} {url}", "error", dur, error_msg=str(e))
+        return {"status": "error", "duration_ms": dur, "error": str(e)}
+
+
 # ── 执行日志 ──────────────────────────────────────────────
 
 def log_call(app_name: str, method_name: str, target: str, request_summary: str,
