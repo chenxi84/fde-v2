@@ -116,70 +116,48 @@ def _decrypt(data: str) -> str:
 
 # ── 发现 ──────────────────────────────────────────────────
 
-# 已知外部系统前缀（大写，供 _is_external_adapter 白名单匹配）
-_KNOWN_SYSTEM_PREFIXES = {
-    "sap", "mom", "wms", "mdm", "erp", "crm", "scm",
-    "api", "http", "rest", "rpc", "soap", "grpc",
-    "sms", "mail", "push", "msg", "mqs", "kfk", "mq",
-    "oauth", "sso", "ldap", "ftp", "sftp", "s3",
-}
+def _external_adapters(cls) -> tuple:
+    """读应用类显式声明的外部适配器方法名（`_EXTERNAL_ADAPTERS`）；未声明返回空。
 
-
-def _is_external_adapter(method_name: str) -> bool:
-    """判定 `_` 前缀方法是否为外部系统适配器。
-
-    规则：
-    1. 排除 Python 魔术方法（__xxx__）
-    2. 方法名须为 `_<系统>_<操作>` 格式，且 <系统> 必须在已知外部系统白名单中
-    3. 方法名不能匹配常见内部辅助方法前缀（二次确认）
+    适配器不再靠「`_<系统>_<操作>` 命中白名单」推导，而由应用显式声明——
+    内部辅助方法（`_do_http_call`、`_http_get` 等）命名自由，不会误判。
     """
-    if method_name.startswith("__"):
-        return False
-    parts = method_name[1:].split("_", 1)
-    if len(parts) < 2:
-        return False
-    system = parts[0].lower()
-    return system in _KNOWN_SYSTEM_PREFIXES
+    return tuple(getattr(cls, "_EXTERNAL_ADAPTERS", ()) or ())
 
 
 def _is_gateway_app(cls, app_name: str) -> tuple:
-    """判定是否为网关应用（封装外部系统调用）。返回 (是否网关, 目标系统名)。"""
-    # 1. 应用名含 gateway
+    """判定是否为网关应用（应用名含 gateway）。返回 (是否网关, 目标系统名)。"""
     if "gateway" in app_name.lower():
         parts = app_name.split("/")[-1].replace("_gateway", "")
         return True, parts.upper()
-    # 2. 类内有 _http_call 辅助方法
-    if hasattr(cls, "_http_call") and callable(getattr(cls, "_http_call", None)):
-        return True, app_name.split("/")[-1].upper()
     return False, ""
 
 
 def discover(platform) -> list[dict]:
     """扫描全部应用，发现外部适配器与跨组调用。
-    识别两类：1) `_` 前缀外部适配器方法  2) 网关应用的全部公共服务。
+    识别两类：1) 显式声明的外部适配器（`_EXTERNAL_ADAPTERS`）  2) 网关应用的全部公共服务。
     """
     results = []
     for qn in platform.app_names():
         h = platform.handle(qn)
         is_gw, gw_target = _is_gateway_app(h.cls, qn)
 
-        for name in dir(h.cls):
-            if not callable(getattr(h.cls, name, None)):
-                continue
+        # 类别 1：显式声明的外部适配器
+        for name in _external_adapters(h.cls):
+            parts = name[1:].split("_", 1)
+            target = parts[0].upper() if parts else "UNKNOWN"
+            results.append({
+                "app_name": qn, "method_name": name, "target": target,
+                "kind": "external", "url": None, "timeout_s": 30,
+                "retries": 1, "mock_enabled": False,
+                "configured": _is_configured(qn, name),
+            })
 
-            # 类别 1：`_` 前缀外部适配器
-            if name.startswith("_") and _is_external_adapter(name):
-                parts = name[1:].split("_", 1)
-                target = parts[0].upper() if parts else "UNKNOWN"
-                results.append({
-                    "app_name": qn, "method_name": name, "target": target,
-                    "kind": "external", "url": None, "timeout_s": 30,
-                    "retries": 1, "mock_enabled": False,
-                    "configured": _is_configured(qn, name),
-                })
-
-            # 类别 2：网关应用的公共服务
-            elif is_gw and not name.startswith("_"):
+        # 类别 2：网关应用的公共服务
+        if is_gw:
+            for name in dir(h.cls):
+                if name.startswith("_") or not callable(getattr(h.cls, name, None)):
+                    continue
                 results.append({
                     "app_name": qn, "method_name": name, "target": gw_target,
                     "kind": "external", "url": None, "timeout_s": 30,

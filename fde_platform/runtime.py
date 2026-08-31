@@ -361,7 +361,7 @@ def _log_integration_call(handle, service, caller_group, params, status, dur_ms,
         req = str({k: str(v)[:50] for k, v in (params or {}).items()})[:200]
         # 判定类型：外部适配器 / 网关应用 → external；跨组 → cross_group
         is_gw, gw_target = integration._is_gateway_app(handle.cls, handle.qualname)
-        if integration._is_external_adapter(service):
+        if service in integration._external_adapters(handle.cls):
             target_sys = service[1:].split("_")[0].upper()
             integration.log_call(handle.qualname, service, target_sys, req, status, dur_ms,
                                  error_msg=error[:200])

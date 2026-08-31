@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from fde import FdeError
 import re
 
@@ -10,6 +12,9 @@ class SalesHistory:
     与 purchasing_customers（历史采购客户集），供预测/库存/拟合消费。"""
 
     _PERIOD_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+
+    # 显式声明可配置的外部适配器（供 /integration 发现；其余 _ 方法均为内部辅助）
+    _EXTERNAL_ADAPTERS = ("_http_fetch_sales_history",)
 
     def upsert(self, material_no: str, customer_no: str, period: str, qty):
         """ERP 单条回写：同 物料+客户+期间 存在则覆盖 qty，不存在则插入（幂等）。"""
@@ -38,7 +43,7 @@ class SalesHistory:
         return {"material_no": material_no, "customer_no": customer_no, "period": period,
                 "qty": qty, "forecast_qty": forecast}
 
-    def import_batch(self, rows):
+    def import_batch(self, rows: list):
         """批量导入（upsert 语义）：逐行校验，合法行入库，失败行返回错误明细，不阻断其余行。"""
         if not isinstance(rows, (list, tuple)):
             raise FdeError("导入数据必须为列表")
