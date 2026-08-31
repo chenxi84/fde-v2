@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 from fde import FdeError
 
@@ -15,43 +16,6 @@ class MdMaterial:
     _VALUE_CLASS = ("高", "低")
     _CHANGE_RISK = ("高", "低")
     _BASE_METHODS = ("移动平均", "指数平滑", "阶跃检测", "借用参考")
-
-    # ---- 生命周期（必选）：加载时由平台调用，幂等建表 ----
-    def _init_db(self):
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS md_material (
-                material_no      TEXT PRIMARY KEY,
-                material_name    TEXT NOT NULL,
-                status           TEXT NOT NULL DEFAULT '正常',
-                unit_value       REAL,
-                value_class      TEXT,
-                change_cost      REAL,
-                prod_days        REAL,
-                logistics_days   REAL,
-                change_risk      TEXT,
-                service_level    REAL,
-                batch_window     REAL,
-                base_method      TEXT,
-                base_params      TEXT,
-                fit_version      TEXT,
-                fit_effective_at TIMESTAMP
-            )
-        """)
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS md_material_param_version (
-                material_no   TEXT NOT NULL,
-                fit_version   TEXT NOT NULL,
-                base_method   TEXT,
-                base_params   TEXT,
-                batch_window  REAL,
-                service_level REAL,
-                effective_at  TIMESTAMP,
-                PRIMARY KEY (material_no, fit_version)
-            )
-        """)
-        self.db.execute("CREATE INDEX IF NOT EXISTS idx_md_material_status ON md_material (status)")
-
-    # ---- 对外服务（公共方法）----
 
     def create(self, material_no: str, material_name: str, status: str = "正常",
                unit_value: float = None, value_class: str = None, change_cost: float = None,
@@ -273,11 +237,13 @@ class MdMaterial:
         if not fit_version:
             raise FdeError("拟合版本不能为空")
 
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         self.db.execute(
             "UPDATE md_material SET base_method = ?, base_params = ?, batch_window = ?, "
-            "service_level = ?, fit_version = ?, fit_effective_at = datetime('now','localtime') "
+            "service_level = ?, fit_version = ?, fit_effective_at = ? "
             "WHERE material_no = ?",
-            (base_method, params_norm, bw, sl, fit_version, material_no),
+            (base_method, params_norm, bw, sl, fit_version, now, material_no),
         )
 
         # 记录参数版本快照（material_no + fit_version 唯一，重复版本覆盖更新），供回滚追溯
@@ -288,16 +254,16 @@ class MdMaterial:
         if existing:
             self.db.execute(
                 "UPDATE md_material_param_version SET base_method = ?, base_params = ?, "
-                "batch_window = ?, service_level = ?, effective_at = datetime('now','localtime') "
+                "batch_window = ?, service_level = ?, effective_at = ? "
                 "WHERE material_no = ? AND fit_version = ?",
-                (base_method, params_norm, bw, sl, material_no, fit_version),
+                (base_method, params_norm, bw, sl, now, material_no, fit_version),
             )
         else:
             self.db.execute(
                 "INSERT INTO md_material_param_version (material_no, fit_version, base_method, "
                 "base_params, batch_window, service_level, effective_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, datetime('now','localtime'))",
-                (material_no, fit_version, base_method, params_norm, bw, sl),
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (material_no, fit_version, base_method, params_norm, bw, sl, now),
             )
 
         return self._to_dict(self._row(material_no))

@@ -129,11 +129,11 @@ def _is_external_adapter(method_name: str) -> bool:
     """判定 `_` 前缀方法是否为外部系统适配器。
 
     规则：
-    1. 排除 Python 魔术方法（__xxx__）和平台约定方法（_init_db）
+    1. 排除 Python 魔术方法（__xxx__）
     2. 方法名须为 `_<系统>_<操作>` 格式，且 <系统> 必须在已知外部系统白名单中
     3. 方法名不能匹配常见内部辅助方法前缀（二次确认）
     """
-    if method_name.startswith("__") or method_name in ("_init_db",):
+    if method_name.startswith("__"):
         return False
     parts = method_name[1:].split("_", 1)
     if len(parts) < 2:

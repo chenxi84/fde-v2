@@ -30,7 +30,7 @@ python app/<组>/tests/verify_view_<组>.py             # 组级壳/菜单/dashb
   - `self.fde`：跨应用网关 `self.fde.call("应用", "服务", **kw)`——**按名调用、不 import、运行期绑定**。
   - `self.ctx`：身份上下文 `{userno, departmentno, role}`——平台权威、自动透传、不可伪造；**应用不实现鉴权**。
 - **公共方法 = 服务**；业务失败 `raise FdeError("人话")`（跨调用原样传播）；返回直接返回可 JSON 序列化值。
-- 必选 `_init_db()`：平台加载时调用，幂等建表。
+- 必选 `schema.sql`：应用同目录 DDL 文件，平台加载时解析建表（SQLite/PG 双兼容）。
 
 ### 前端
 - 每个应用 `app/<组>/<应用>/view.{js,html}`：`view.js` 导出 `PAGE_META`（key/name/ic/title/crumb/order）+ 默认导出工厂；模板经 `new URL("view.html", import.meta.url)` 抓取。落盘即被扫描装配进菜单，**零接线**。

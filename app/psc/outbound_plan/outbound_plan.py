@@ -14,33 +14,6 @@ class OutboundPlan:
 
     VALID_STATUSES = ("待出库", "已关闭")
 
-    def _init_db(self):
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS outbound_plan (
-                plan_no        TEXT PRIMARY KEY NOT NULL,
-                customer_no    TEXT NOT NULL,
-                material_no    TEXT NOT NULL,
-                qty            REAL NOT NULL,
-                out_date       TEXT NOT NULL,
-                actual_out_no  TEXT,
-                status         TEXT NOT NULL DEFAULT '待出库'
-            )
-        """)
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_outbound_plan_material_no ON outbound_plan (material_no)"
-        )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_outbound_plan_customer_no ON outbound_plan (customer_no)"
-        )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_outbound_plan_status ON outbound_plan (status)"
-        )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_outbound_plan_out_date ON outbound_plan (out_date)"
-        )
-
-    # ---- 对外服务（公共方法）----
-
     def create(self, customer_no: str, material_no: str, qty, out_date: str,
                actual_out_no: Optional[str] = None):
         """手工新建出库计划：校验主数据引用，按日期判定初始状态。"""

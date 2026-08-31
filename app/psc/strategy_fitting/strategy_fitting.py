@@ -11,36 +11,6 @@ class StrategyFitting:
     VALID_STATUSES = ("待复核", "已生效", "已否决")
     VALID_PRED_METHODS = ("移动平均", "指数平滑", "阶跃检测", "借用参考")
 
-    # ---- 生命周期（必选）：加载时由平台调用，幂等建表 ----
-    def _init_db(self):
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS strategy_fitting (
-                material_no     TEXT NOT NULL,
-                fit_version     TEXT NOT NULL,
-                pred_method     TEXT,
-                pred_params     TEXT,
-                smape           REAL,
-                service_factor  REAL,
-                safety_level    REAL,
-                batch_window    REAL,
-                fulfill_rate    REAL,
-                inv_days        REAL,
-                changeover_cnt  INTEGER,
-                abnormal_flag   INTEGER NOT NULL DEFAULT 0,
-                status          TEXT NOT NULL DEFAULT '待复核'
-                    CHECK (status IN ('待复核', '已生效', '已否决')),
-                PRIMARY KEY (fit_version, material_no)
-            )
-        """)
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_strategy_fitting_status ON strategy_fitting (status)"
-        )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_strategy_fitting_material_no ON strategy_fitting (material_no)"
-        )
-
-    # ---- 对外服务（公共方法）----
-
     def run(self, material_no: str, fit_version: str):
         """对指定物料发起一次策略拟合（预测拟合 + 库存拟合），结果落表（待复核）。"""
         clean_material = self._clean_material_no(material_no)

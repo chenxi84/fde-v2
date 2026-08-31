@@ -82,7 +82,7 @@ class Task:
 聚合根的**公共方法**就是它对外暴露的**服务**（操作）：
 
 - **服务名 = 方法名**。`submit(...)` 这个方法，对外就是名为 `submit` 的服务。
-- **`_` 前缀的方法是内部辅助**，平台**不**对外暴露（如 `_init_db`、`_row`）。
+- **`_` 前缀的方法是内部辅助**，平台**不**对外暴露（如 `_row`、`_clean`）。
 - 方法的参数与类型标注，即该服务的入参契约（平台据此生成调用表单 / 工具定义）。
 
 ## 4. 平台向应用注入的三样东西（核心契约）
@@ -114,7 +114,7 @@ self.ctx = {
 ### 4.2 `self.db` —— 本应用的 SQLite 连接
 
 - 连接由平台创建并注入，指向该应用文件夹内的同名库（如 `app/e2e/member/member.db`），已开启良好默认（`WAL` 日志模式、`busy_timeout`、`foreign_keys`、行工厂）。
-- **建表是应用的必选职责**：每个聚合根**必须**定义 `_init_db()` 方法，在其中用幂等纯 SQL（`CREATE TABLE IF NOT EXISTS`）建好本应用的全部表。这是应用声明自身数据结构的唯一地方（见 §6）。
+- **建表由 `schema.sql` 声明**：每个聚合根目录内**必须**放 `schema.sql`（与 `<应用>.py` 同级），用 SQLite 方言 DDL（`CREATE TABLE IF NOT EXISTS` + `CREATE [UNIQUE] INDEX`）声明全部表。这是应用声明自身数据结构的唯一地方（见 §6）。
 - **事务由平台管理**：公共方法正常返回 → 平台 `commit`；抛出异常 → 平台 `rollback`。应用只管 `execute`，不手动 `commit`。
 
 ### 4.3 `self.fde.call(...)` —— 跨应用调用（按名、运行期绑定）
@@ -141,15 +141,15 @@ result = self.fde.call("forecast", "latest", month="2026-08")
 - **静态扫描器（已提供）**：平台提供静态扫描器（`fde_platform/scanner.py`），在**不运行**的前提下用 AST 检查所有 `self.fde.call`：① 指向的应用/服务是否真实存在；② **调用参数与目标服务签名的契约**（未知参数/缺必传参数/重复传参/位置参数过多）——把运行期错误（含跨应用参数名漂移）左移到开发期。含 `**` 展开的调用仅校验目标。
   结果展示于**平台首页**（接口 `/api/scan`），亦可命令行 `python -m fde_platform.scanner`（存在问题时退出码为 1，可入 CI）。
 
-## 6. 生命周期方法 `_init_db`（必选）
+## 6. Schema 声明文件 `schema.sql`（必选）
 
-- `_init_db(self)`：**每个聚合根都必须定义**。平台在**加载该应用时调用它**，
-  应用在此用幂等 SQL（`CREATE TABLE IF NOT EXISTS ...`）建好本应用所需的全部表。
-- 因建表语句幂等，即便重启或重新加载再次调用也安全；应用数据结构的后续演进（加列、建索引）也在此维护。
-- `_init_db` 以 `_` 开头，**不是对外服务**，不会被平台当服务暴露。
-- **开销**：`_init_db` 只在**加载时**执行（每应用一次并缓存），**不在每次服务调用时执行**。`CREATE TABLE IF NOT EXISTS` 对已有表只是一次元数据存在性检查（微秒级，查 `sqlite_master` 即返回），不扫描、不重建数据；幂等性是重启 / 首次运行 / 重新加载的正确性保险，非热点路径。（运行期每次调用另有微秒级库存在性检查，仅当库被外部删除才触发空库自愈，见 §10.6。）
-- **平台自动审计**：`_init_db` 里写的 `CREATE TABLE`，平台会**自动追加** `created_at`、`updated_at`、`created_by`、`updated_by` 四个审计列；应用代码里的 `INSERT` / `UPDATE` 语句，平台会**自动注入**当前时间和 `self.ctx["userno"]` 到对应审计列。**应用开发者不需要在 DDL 或 DML 里手写审计字段**——完全是平台透明的。
-- **时机辨析**：`import` 应用文件只是**定义**类与方法，**并不会执行** `_init_db`；建表发生在平台**加载该应用**时——平台造一个实例（已注入 `db`）并在其上调用 `_init_db()`，随后缓存该应用。若平台在启动期统一加载所有应用，则建表就发生在**平台初始化阶段**，每个应用一次。
+- **`schema.sql`**：每个聚合根目录内**必须**放置的 DDL 文件（与 `<应用>.py` 同级），用 SQLite 方言纯 SQL
+  声明本应用的全部表与索引（`CREATE TABLE IF NOT EXISTS ...` + `CREATE [UNIQUE] INDEX ...`）。这是应用声明自身数据结构的唯一地方。
+- **平台加载时建表**：平台读取 `schema.sql`，经 DDL 引擎（`fde_platform/ddl.py`）解析——① 注入 `created_at/updated_at/created_by/updated_by` 四个审计列；② 按方言生成 DDL（SQLite 原样 / PostgreSQL transpile）；③ 建表建索引。
+- **DDL 子集白名单**：仅支持 `CREATE TABLE`（类型 `TEXT/INTEGER/REAL/DATETIME/TIMESTAMP`，列级/表级 `PRIMARY KEY`、`NOT NULL`、`UNIQUE`、`DEFAULT`、`CHECK`）与 `CREATE [UNIQUE] INDEX`。触发器/视图/存储过程/外键不在子集内。
+- **应用不再写 `_init_db`**：建表逻辑从代码抽离到 `schema.sql`，应用类里无 `_init_db` 方法。
+- **平台自动审计**：`schema.sql` 里的 `CREATE TABLE`，平台自动追加 4 个审计列；应用 `INSERT`/`UPDATE` 里平台自动注入当前时间与 `self.ctx["userno"]` 到对应审计列——应用零感知。
+- **开销**：只在加载时执行（每应用一次并缓存），不在每次服务调用时执行。
 
 ## 7. 返回与错误约定
 
@@ -183,16 +183,7 @@ from fde import FdeError                 # 平台提供的业务异常基类
 class Todo:
     """待办事项聚合根（示意）。公共方法即对外服务，如 todo.create / todo.list。"""
 
-    # ---- 生命周期（必选）：加载时由平台调用，幂等建表 ----
-    def _init_db(self):
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS todo (
-                id        INTEGER PRIMARY KEY AUTOINCREMENT,  -- SQLite；PG 部署时平台自动转为 IDENTITY
-                title     TEXT    NOT NULL,
-                owner_no  TEXT    NOT NULL,
-                done      INTEGER NOT NULL DEFAULT 0
-            )
-        """)
+    # 建表在同目录 schema.sql 声明（平台加载时解析建表，见 §6），应用不再写 _init_db
 
     # ---- 对外服务（公共方法）----
     def create(self, title: str):
@@ -227,12 +218,12 @@ class Todo:
 
 应用只需满足上述约定；以下全部由 FDE 平台承担：
 
-1. **发现与加载**：扫描 `app/` 下的应用文件夹（分组放置 `app/<组>/<名>/` 与直接放置 `app/<名>/` 皆可，见 §1；组即一级目录，首页按组展示），按**唯一模块名**（`fde_app_<组>__<名>`）动态加载其主文件（避免 v1 的 `sys.modules` 撞名竞争），**加载结果缓存、每个应用只加载一次**；应用名**组内唯一、跨组可重名**，注册表以组限定名 qualname（`组/名`）为键；加载后调用其**必选**的 `_init_db()` 完成建表（每次加载至多执行一次，**不计入单次服务调用的开销**）。
+1. **发现与加载**：扫描 `app/` 下的应用文件夹（分组放置 `app/<组>/<名>/` 与直接放置 `app/<名>/` 皆可，见 §1；组即一级目录，首页按组展示），按**唯一模块名**（`fde_app_<组>__<名>`）动态加载其主文件（避免 v1 的 `sys.modules` 撞名竞争），**加载结果缓存、每个应用只加载一次**；应用名**组内唯一、跨组可重名**，注册表以组限定名 qualname（`组/名`）为键；加载后读其**必选**的 `schema.sql` 完成建表（每次加载至多执行一次，**不计入单次服务调用的开销**）。
 2. **实例化与注入**：每次调用构造聚合根实例，注入 `self.ctx` / `self.db` / `self.fde`。
 3. **身份与鉴权**：认证调用人、注入权威 `ctx`、跨应用透传、防伪造；**授权维度是"应用下的开放服务"**（`应用.服务`，如 `user.create`）——能否调用某服务取决于是否被授权该服务，能否进入某应用取决于该应用下是否有≥1 被授权服务；admin 全通。该约束在 Web 闸门、MCP、Agent、定时任务四处一致强制。
 4. **服务暴露**：把公共方法按 `应用.服务` 对外暴露（应用以 qualname 标识；界面 / API / Agent / 定时任务等多入口）。
 5. **跨应用路由**：实现 `self.fde.call` 的按名解析与运行期绑定。
-6. **db 连接管理**：在应用文件夹内创建/打开同名库连接、设 WAL/busy_timeout、每操作的事务提交/回滚。**空库自愈**：每次调用若发现库文件被外部删除/清空（SQLite 会自动重建空库 → 无表），自动经幂等 `_init_db` 重建表结构（数据不恢复，服务回到「未初始化/未同步」业务态，而不是抛 OperationalError）。
+6. **db 连接管理**：在应用文件夹内创建/打开同名库连接、设 WAL/busy_timeout、每操作的事务提交/回滚。**空库自愈**：每次调用若发现库文件被外部删除/清空（SQLite 会自动重建空库 → 无表），自动经 `schema.sql` 重建表结构（数据不恢复，服务回到「未初始化/未同步」业务态，而不是抛 OperationalError）。
 7. **错误归一与日志**：区分业务失败（`FdeError`）与系统异常，统一记录。
 8. **静态调用扫描器**：用 AST 在**不运行**的前提下校验所有 `self.fde.call` 的目标（应用 / 服务）真实存在，且**调用参数符合目标服务签名契约**（未知参数/缺必传/重复/位置过多）；结果展示于平台首页（`/api/scan`），CLI `python -m fde_platform.scanner`（有问题退出码 1）。
 9. **Agent 操作指南**：加载应用文件夹内的 `README.md`（若有），整体注入该应用 Agent 的 system prompt（见 §11）；无 README 时 Agent 回落到仅用服务签名。
@@ -293,9 +284,9 @@ system prompt**（见 §10 职责⑨）。Agent 据此理解业务、按「标�
 
 ### 12.3 缩进铁律 ⚠️
 缩进**只用空格、禁用 Tab**，宽度为 **4 的倍数**：`class` 行顶格（0 空格）；**类内方法定义行
-（`def _init_db`、`def create` 等，含 `_` 前缀适配器）恰好缩进 4 个空格**；方法体 8 空格；嵌套逐层 +4。
+（`def create`、`def list` 等，含 `_` 前缀适配器）恰好缩进 4 个空格**；方法体 8 空格；嵌套逐层 +4。
 方法定义行**绝不可顶格**（会被解析为模块级函数、服务无法暴露）或缩进 8 空格（`IndentationError`）。
-分段生成续写类内方法时，新段每个 `def` 行必须与上一段的 `_init_db` 保持**完全相同**的 4 空格缩进。
+分段生成续写类内方法时，新段每个 `def` 行必须与上一段的 `def` 行保持**完全相同**的 4 空格缩进。
 
 ---
 
@@ -304,7 +295,7 @@ system prompt**（见 §10 职责⑨）。Agent 据此理解业务、按「标�
 - [ ] 主文件 `app/<组>/<应用>/<应用>.py` 存在；应用名 snake_case 且**组内唯一**（跨组可重名，注册表按 qualname 登记）
 - [ ] 文件顶部 `from fde import FdeError`
 - [ ] 聚合根类 `class <应用名PascalCase>`（与文件夹同名推导）
-- [ ] `def _init_db(self)` 幂等 `CREATE TABLE IF NOT EXISTS`
+- [ ] `schema.sql` 存在且含 `CREATE TABLE IF NOT EXISTS`（§6）
 - [ ] 公共方法**无**返回类型注解（§12.1）；`_` 前缀方法不暴露
 - [ ] 缩进全空格、4 的倍数；类内方法定义行恰好 4 空格（§12.3）
 - [ ] 不 `sqlite3.connect`、不 `import` 其它应用（跨应用一律 `self.fde.call`）

@@ -11,25 +11,6 @@ class MdCustomer:
     _USCC_CHARS = "0123456789ABCDEFGHJKLMNPQRTUWXY"
     _USCC_WEIGHTS = (1, 3, 9, 27, 19, 26, 16, 17, 20, 29, 25, 13, 8, 24, 10, 30, 28)
 
-    def _init_db(self):
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS md_customer (
-                customer_no        TEXT    NOT NULL PRIMARY KEY,
-                customer_name      TEXT    NOT NULL,
-                credit_code        TEXT,
-                settle_mode        TEXT    CHECK (settle_mode IS NULL OR settle_mode IN ('现售', '寄售')),
-                line_stock_days    INTEGER NOT NULL DEFAULT 0,
-                transfer_lead_days INTEGER
-            )
-        """)
-        # 兼容旧库：补列（已存在则忽略）
-        try:
-            self.db.execute("ALTER TABLE md_customer ADD COLUMN credit_code TEXT")
-        except Exception:
-            pass
-
-    # ---- 对外服务（公共方法）----
-
     def create(self, customer_no: str, customer_name: str, settle_mode: str = None,
                line_stock_days: int = None, transfer_lead_days: int = None,
                credit_code: str = None):

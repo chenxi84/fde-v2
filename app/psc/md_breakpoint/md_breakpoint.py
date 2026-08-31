@@ -5,31 +5,6 @@ from typing import Optional
 class MdBreakpoint:
     """断点基础数据聚合根，管理「客户 × 原/新物料号 × 切换时间」的新旧件断点关系。"""
 
-    def _init_db(self):
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS md_breakpoint (
-                bp_id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                customer_no     TEXT NOT NULL,
-                old_material_no TEXT NOT NULL,
-                new_material_no TEXT NOT NULL,
-                switch_time     TEXT NOT NULL,
-                ecn_no          TEXT,
-                disabled        INTEGER NOT NULL DEFAULT 0,
-                UNIQUE (customer_no, old_material_no, new_material_no, switch_time)
-            )
-        """)
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_md_breakpoint_customer_no ON md_breakpoint (customer_no)"
-        )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_md_breakpoint_old_material_no ON md_breakpoint (old_material_no)"
-        )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_md_breakpoint_new_material_no ON md_breakpoint (new_material_no)"
-        )
-
-    # ---- 对外服务（公共方法）----
-
     def create(self, customer_no: str, old_material_no: str, new_material_no: str, switch_time: str, ecn_no: Optional[str] = None):
         """新建断点：校验物料存在、原≠新、切换时间非空、组合唯一后入库。"""
         clean_customer = self._clean_required(customer_no, "客户")

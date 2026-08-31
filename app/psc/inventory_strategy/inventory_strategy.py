@@ -8,29 +8,6 @@ class InventoryStrategy:
     VALID_HEDGE_TOOLS = ("库存", "速度")
     SERVICE_FACTORS = {0.90: 1.28, 0.95: 1.65, 0.98: 2.05, 0.99: 2.33}
 
-    def _init_db(self):
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS inventory_strategy (
-                version_no      TEXT NOT NULL,
-                material_no     TEXT NOT NULL,
-                hedge_tool      TEXT NOT NULL DEFAULT '库存' CHECK (hedge_tool IN ('库存', '速度')),
-                min_level       REAL NOT NULL DEFAULT 0,
-                service_factor  REAL NOT NULL DEFAULT 1.65,
-                resp_volatility REAL NOT NULL DEFAULT 0,
-                safety_level    REAL NOT NULL DEFAULT 0,
-                batch_window    REAL NOT NULL DEFAULT 0,
-                batch_level     REAL NOT NULL DEFAULT 0,
-                basis           TEXT,
-                PRIMARY KEY (version_no, material_no)
-            )
-        """)
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_inventory_strategy_hedge_tool ON inventory_strategy (hedge_tool)"
-        )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_inventory_strategy_material_no ON inventory_strategy (material_no)"
-        )
-
     def calc(self, version_no: str, material_no: str, customer_no: str = None):
         """计算单物料库存策略（三层水位+对冲工具），同物料同版本重复计算即覆盖更新。"""
         version_no = self._validate_version(version_no)

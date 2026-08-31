@@ -10,22 +10,6 @@ class MdMonthlyVersion:
     # 锚定期间格式：与历史台账 sales_history.period 一致（YYYY-MM）
     _PERIOD_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
-    def _init_db(self):
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS md_monthly_version (
-                version_no    TEXT PRIMARY KEY,
-                anchor_period TEXT NOT NULL,
-                opening_date  TEXT NOT NULL,
-                lock_status   TEXT NOT NULL DEFAULT '草稿'
-                    CHECK (lock_status IN ('草稿', '发布（锁定）', '冻结'))
-            )
-        """)
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_mdv_lock_status ON md_monthly_version (lock_status)"
-        )
-
-    # ---- 对外服务（公共方法）----
-
     def create(self, version_no: str, anchor_period: str, opening_date: str):
         version_no = self._clean(version_no)
         if not version_no:

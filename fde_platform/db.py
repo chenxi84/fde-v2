@@ -34,54 +34,6 @@ def db_mode() -> str:
     return "SQLite"
 
 
-# ── DDL 翻译 ─────────────────────────────────────────────
-
-def _add_audit_columns(sql: str) -> str:
-    """在 CREATE TABLE 语句逐列追加缺失的审计列。
-
-    列定义必须放在表约束（PRIMARY KEY / FOREIGN KEY / CHECK / UNIQUE / CONSTRAINT）之前，
-    否则 SQLite 报 syntax error。"""
-    if not re.search(r'CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS', sql, re.IGNORECASE):
-        return sql
-    missing = []
-    sql_lower = sql.lower()
-    if 'created_at' not in sql_lower:
-        missing.append('created_at TEXT')
-    if 'updated_at' not in sql_lower:
-        missing.append('updated_at TEXT')
-    if 'created_by' not in sql_lower:
-        missing.append('created_by TEXT')
-    if 'updated_by' not in sql_lower:
-        missing.append('updated_by TEXT')
-    if not missing:
-        return sql
-    audit_cols = ', ' + ', '.join(missing)
-    # 找到第一个表级约束（独立行，非列内约束），在其前插入审计列
-    c_match = re.search(
-        r'^\s*(PRIMARY\s+KEY\s*\(|FOREIGN\s+KEY\s*\(|UNIQUE\s*\(|CONSTRAINT\s+\w+|CHECK\s*\()',
-        sql, re.IGNORECASE | re.MULTILINE)
-    if c_match:
-        pos = c_match.start()
-        sql = sql[:pos].rstrip().rstrip(',') + audit_cols + ',\n' + sql[pos:]
-    else:
-        # 无表级约束 → 追加到最后一个 ) 之前
-        sql = re.sub(r'\)\s*;?\s*$', audit_cols + '\n);', sql, flags=re.IGNORECASE)
-    return sql
-
-
-def _translate_ddl(sql: str) -> str:
-    """SQLite DDL → PostgreSQL DDL + 自动追加审计列。"""
-    sql = re.sub(r'\bAUTOINCREMENT\b', '', sql, flags=re.IGNORECASE)
-    sql = re.sub(
-        r"INTEGER PRIMARY KEY\b(?!\s*GENERATED)",
-        "INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY",
-        sql, flags=re.IGNORECASE)
-    sql = re.sub(r"\bdatetime\('now'\)\b", "NOW()", sql)
-    sql = re.sub(r"\bdatetime\('now','localtime'\)\b", "NOW()", sql)
-    sql = re.sub(r'\bDATETIME\b', 'TIMESTAMP', sql, flags=re.IGNORECASE)
-    return _add_audit_columns(sql)
-
-
 # ── 审计值注入 ──────────────────────────────────────────
 
 def _inject_audit(sql: str, params, ctx: dict) -> tuple:
@@ -166,7 +118,6 @@ class _SqliteAuditWrapper:
         self._conn.row_factory = val
 
     def execute(self, sql, params=None):
-        sql = _add_audit_columns(sql)  # 建表时加审计列（SQLite / PG 通用）
         ctx = getattr(self, "_fde_ctx", None) or {}
         sql, params = _inject_audit(sql, params, ctx)
         return self._conn.execute(sql, params or ())
@@ -304,21 +255,6 @@ class _PgConnection:
         self._conn = conn
 
     def execute(self, sql, params=None):
-        sql = _translate_ddl(sql)
-        # SQLite PRAGMA table_info(X) → PG information_schema（r[1]=列名，兼容应用取列名的口径）
-        m = re.match(r'PRAGMA\s+table_info\s*\(\s*([A-Za-z_]\w*)\s*\)', sql, re.IGNORECASE)
-        if m:
-            table = m.group(1).lower()
-            sql = (f"SELECT ordinal_position, column_name FROM information_schema.columns "
-                   f"WHERE table_name = '{table}' ORDER BY ordinal_position")
-        # SQLite「旧库补列」ALTER TABLE ADD COLUMN → PG 幂等化（列已存在则不失败，避免事务 aborted）
-        m = re.match(r'ALTER\s+TABLE\s+([A-Za-z_]\w*)\s+ADD\s+COLUMN\s+(.+?)\s*;?\s*$',
-                     sql, re.IGNORECASE | re.DOTALL)
-        if m:
-            table = m.group(1).lower()
-            col_def = m.group(2).strip().rstrip(';').strip()
-            sql = (f"DO $$ BEGIN ALTER TABLE {table} ADD COLUMN {col_def}; "
-                   f"EXCEPTION WHEN duplicate_column THEN NULL; END $$")
         sql = sql.strip()  # 去首尾空白，保证和 sql_upper 索引对齐
         ctx = getattr(self, "_fde_ctx", None) or {}
         user = (ctx or {}).get("userno", "") or ""

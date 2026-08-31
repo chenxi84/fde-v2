@@ -16,30 +16,6 @@ class MdProject:
         "EOP": None,
     }
 
-    def _init_db(self):
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS md_project (
-                project_no   TEXT NOT NULL PRIMARY KEY,
-                project_name TEXT NOT NULL,
-                stage        TEXT NOT NULL DEFAULT '进行中' CHECK (stage IN ('进行中', 'SOP', 'EOP')),
-                sop_date     TEXT NOT NULL DEFAULT '',
-                eop_date     TEXT NOT NULL DEFAULT '',
-                owner        TEXT NOT NULL,
-                veh_model    TEXT NOT NULL DEFAULT '',
-                share        REAL
-            )
-        """)
-        self.db.execute("CREATE INDEX IF NOT EXISTS idx_md_project_stage ON md_project (stage)")
-        # 兼容旧库：补列（已存在则忽略）
-        for ddl in ("ALTER TABLE md_project ADD COLUMN veh_model TEXT NOT NULL DEFAULT ''",
-                    "ALTER TABLE md_project ADD COLUMN share REAL"):
-            try:
-                self.db.execute(ddl)
-            except Exception:
-                pass
-
-    # ---- 对外服务（公共方法）----
-
     def create(self, project_no: str, project_name: str, owner: str, stage: str = None,
                sop_date: str = None, eop_date: str = None, veh_model: str = None, share=None):
         """新建项目台账。project_no 全局唯一，stage 默认「进行中」。"""

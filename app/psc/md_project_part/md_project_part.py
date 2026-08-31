@@ -4,37 +4,6 @@ from fde import FdeError
 class MdProjectPart:
     """项目零件映射聚合根：定义「项目 × 零件 × 车型」的用量/份额量纲关系。"""
 
-    def _init_db(self):
-        # 车型/供应份额不存映射表（项目级信息，关联 md_project 显示），映射只存零件级「单车用量」。
-        # 旧库若仍带 veh_model/share 列则重建迁移（保留 usage，丢弃冗余列）。
-        cols = {r[1] for r in self.db.execute("PRAGMA table_info(md_project_part)").fetchall()}
-        if cols and ("veh_model" in cols or "share" in cols):
-            old = self.db.execute(
-                "SELECT project_no, material_no, usage FROM md_project_part"
-            ).fetchall()
-            self.db.execute("DROP TABLE md_project_part")
-            self._create_table()
-            for r in old:   # 逐行回迁（保留单车用量，丢弃冗余 veh_model/share）
-                self.db.execute(
-                    "INSERT INTO md_project_part (project_no, material_no, usage) VALUES (?, ?, ?)",
-                    (r["project_no"], r["material_no"], r["usage"]),
-                )
-        else:
-            self._create_table()
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_md_project_part_material ON md_project_part (material_no)"
-        )
-
-    def _create_table(self):
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS md_project_part (
-                project_no  TEXT NOT NULL,
-                material_no TEXT NOT NULL,
-                usage       INTEGER NOT NULL CHECK (usage > 0),
-                PRIMARY KEY (project_no, material_no)
-            )
-        """)
-
     def create(self, project_no: str, material_no: str, usage):
         """新建项目×物料映射，校验项目/物料引用存在与单车用量范围。车型/份额由项目关联，不入库。"""
         data, err = self._validate_fields({

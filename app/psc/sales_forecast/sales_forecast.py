@@ -19,55 +19,6 @@ class SalesForecast:
     ROLLING_MONTHS = ("N+1", "N+2", "N+3")
     DRAFT_STATUS = "草稿"
 
-    # ---- 生命周期（必选）：加载时由平台调用，幂等建表 ----
-    def _init_db(self):
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS sales_forecast_line (
-                version_no      TEXT    NOT NULL,
-                material_no     TEXT    NOT NULL,
-                customer_no     TEXT    NOT NULL,
-                rolling_month   TEXT    NOT NULL,
-                orig_qty        REAL,
-                mape            REAL,
-                bias            REAL,
-                adj_qty         REAL,
-                base_method     TEXT,
-                base_params     TEXT,
-                base_qty        REAL,
-                event_analysis  TEXT,
-                event_adj       REAL    NOT NULL DEFAULT 0,
-                base_event_qty  REAL,
-                bp_material_no  TEXT,
-                switch_time     TEXT,
-                abnormal_flag   INTEGER NOT NULL DEFAULT 0,
-                final_qty       REAL,
-                PRIMARY KEY (version_no, material_no, customer_no, rolling_month)
-            )
-        """)
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS sales_forecast_summary (
-                version_no      TEXT    NOT NULL,
-                material_no     TEXT    NOT NULL,
-                rolling_month   TEXT    NOT NULL,
-                final_qty_sum   REAL    NOT NULL DEFAULT 0,
-                PRIMARY KEY (version_no, material_no, rolling_month)
-            )
-        """)
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sf_line_version ON sales_forecast_line (version_no)"
-        )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sf_line_material ON sales_forecast_line (material_no)"
-        )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sf_line_customer ON sales_forecast_line (customer_no)"
-        )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sf_line_abnormal ON sales_forecast_line (version_no, abnormal_flag)"
-        )
-
-    # ---- 对外服务（公共方法）----
-
     def open_version(self, version_no: str):
         """开启月度版本：按正常状态物料 × 该物料的历史采购客户生成清单并拆 N+1/N+2/N+3 进处理表。
         某物料无任何历史采购记录时，客户字段为空、仅初始化一行（避免 300 客户 × 3 月铺满）。"""

@@ -12,30 +12,6 @@ class DemandPool:
     # 三类补库优先级：缺货 > 最低库存 > 安全库存（BR-05，由触发方据此判定类型）
     REPLENISH_PRIORITY = ("缺货补库", "最低库存补库", "安全库存补库")
 
-    def _init_db(self):
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS demand_pool (
-                replenish_no      TEXT PRIMARY KEY NOT NULL,
-                material_no       TEXT NOT NULL,
-                replenish_type    TEXT NOT NULL,
-                replenish_qty     REAL NOT NULL,
-                required_inbound  TEXT NOT NULL,
-                promised_inbound  TEXT,
-                status            TEXT NOT NULL DEFAULT '待下达'
-            )
-        """)
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_demand_pool_material_no ON demand_pool (material_no)"
-        )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_demand_pool_replenish_type ON demand_pool (replenish_type)"
-        )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_demand_pool_status ON demand_pool (status)"
-        )
-
-    # ---- 对外服务（公共方法）----
-
     def create(self, material_no: str, replenish_type: str, replenish_qty, required_inbound: str,
                stock_on_hand=None, min_level_a=None, safety_level_c=None, batch_level_b=None,
                capacity_tight=None):

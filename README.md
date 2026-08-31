@@ -138,7 +138,7 @@ Claude 会读规范、逐步推进，你只需在「第①步 应用划分」「
 
 | 能力 | 说明 |
 |---|---|
-| **发现与加载** | 扫描 `app/` 下应用（分组或直接放置皆可），按路径动态加载主文件、缓存、调用其必选的 `_init_db()` 幂等建表。 |
+| **发现与加载** | 扫描 `app/` 下应用（分组或直接放置皆可），按路径动态加载主文件、缓存、读其必选的 `schema.sql` 解析建表。 |
 | **多入口服务暴露** | 公共方法以 `应用名.方法名` 暴露，经 Web 控制台 / REST API / Agent / MCP / 定时任务多入口调用，走同一 `platform.call` 调用链。 |
 | **跨应用路由** | 实现 `self.fde.call` 的按名解析与运行期绑定，身份 `ctx` 自动透传且不可伪造。 |
 | **身份与鉴权** | 平台认证调用人、注入权威 `ctx`；授权维度是「应用下的开放服务」，Web / MCP / Agent / 调度四处一致强制。 |
@@ -167,8 +167,7 @@ Claude 会读规范、逐步推进，你只需在「第①步 应用划分」「
 from fde import FdeError
 
 class Todo:                                  # 类 = 聚合根，PascalCase（文件夹名 snake_case）
-    def _init_db(self):                       # 必选：加载时平台调用，幂等建表
-        self.db.execute("CREATE TABLE IF NOT EXISTS todo (id INTEGER PRIMARY KEY, title TEXT, owner_no TEXT)")
+    # 建表在同目录 schema.sql（平台加载时解析建表，见 CONVENTION §6）
 
     def create(self, title: str):             # 公共方法 = 对外服务（服务名 = 方法名）
         if not title.strip():

@@ -12,6 +12,7 @@ openpyxl>=3.0
 xlrd>=2.0
 apscheduler>=3.10
 markdown>=3.0
+sqlglot>=25.0
 
 # 可选：PostgreSQL 驱动（仅 Docker/PostgreSQL 部署需要，默认 SQLite 无需）
 psycopg2-binary>=2.9

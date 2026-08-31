@@ -8,29 +8,6 @@ class MdPartReplace:
 
     VALID_STATUSES = ("生效", "失效")
 
-    def _init_db(self):
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS md_part_replace (
-                rel_no          TEXT PRIMARY KEY NOT NULL,
-                old_material_no TEXT NOT NULL,
-                new_material_no TEXT NOT NULL,
-                ecn_no          TEXT,
-                status          TEXT NOT NULL DEFAULT '生效',
-                UNIQUE (old_material_no, new_material_no)
-            )
-        """)
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_md_part_replace_status ON md_part_replace (status)"
-        )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_md_part_replace_old_material_no ON md_part_replace (old_material_no)"
-        )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_md_part_replace_new_material_no ON md_part_replace (new_material_no)"
-        )
-
-    # ---- 对外服务（公共方法）----
-
     def create(self, old_material_no: str, new_material_no: str, ecn_no: Optional[str] = None):
         """新建替换关系：校验原/替换物料存在、原≠替换、组合唯一后入库，status 默认「生效」。"""
         clean_old = self._clean_material_no(old_material_no, "原物料号")

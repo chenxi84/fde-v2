@@ -12,28 +12,6 @@ class Demand:
 
     ROLLING_MONTHS = ("N+1", "N+2", "N+3")
 
-    def _init_db(self):
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS demand (
-                version_no      TEXT    NOT NULL,
-                material_no     TEXT    NOT NULL,
-                rolling_month   TEXT    NOT NULL,
-                forecast_qty    REAL    NOT NULL DEFAULT 0,
-                inventory_qty   REAL    NOT NULL DEFAULT 0,
-                gross_qty       REAL    NOT NULL DEFAULT 0,
-                open_order_qty  REAL    NOT NULL DEFAULT 0,
-                onhand_qty      REAL    NOT NULL DEFAULT 0,
-                in_transit_qty  REAL    NOT NULL DEFAULT 0,
-                net_qty         REAL    NOT NULL DEFAULT 0,
-                PRIMARY KEY (version_no, material_no, rolling_month)
-            )
-        """)
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_demand_material_no ON demand (material_no)"
-        )
-
-    # ---- 对外服务（公共方法） ----
-
     def build_gross(self, version_no: str):
         """合成毛需求：替换件/断点合并加工 + 叠加库存策略水位（期末 N+3）。幂等重算更新。"""
         version_no = self._clean_version_no(version_no)

@@ -10,7 +10,7 @@
   → strategy_fitting(run→approve 回填 md_material)
 
 外部系统出向适配器走本地 stub（清外部基址）；异步回执由测试手动调用回写服务模拟。
-隔离初始化：经 fde_platform.dbguard.isolate_dbs 将真实库临时移走、测试在空库上 _init_db 重建，
+隔离初始化：经 fde_platform.dbguard.isolate_dbs 将真实库临时移走、测试在空库上经 schema.sql 重建，
 退出时删除残料、原样还回用户数据——绝不触碰真实库（运行期间需停掉平台服务器，避免库文件被占用）。
 运行：python app/psc/tests/verify_chain_psc.py
 """
@@ -98,7 +98,7 @@ PARTS = [
 
 
 def main():
-    # 真实库已由 isolate_dbs 移走，FdePlatform 在空库上 _init_db 重建（审计列就位）。
+    # 真实库已由 isolate_dbs 移走，FdePlatform 在空库上经 schema.sql 重建（审计列就位）。
     pf = FdePlatform()
     pf.load_all()
 

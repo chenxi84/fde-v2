@@ -4,20 +4,6 @@ from fde import FdeError
 class Member:
     """成员主数据聚合根。"""
 
-    def _init_db(self):
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS member (
-                member_no TEXT NOT NULL PRIMARY KEY,
-                name TEXT NOT NULL,
-                email TEXT NOT NULL UNIQUE,
-                role TEXT NOT NULL CHECK (role IN ('admin', 'member')),
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        self.db.execute("CREATE INDEX IF NOT EXISTS idx_member_role ON member (role)")
-        self.db.execute("CREATE INDEX IF NOT EXISTS idx_member_name ON member (name)")
-        self.db.execute("CREATE INDEX IF NOT EXISTS idx_member_created_at ON member (created_at)")
-
     def create(self, member_no: str, name: str, email: str, role: str):
         member_no = self._clean(member_no)
         if not member_no:

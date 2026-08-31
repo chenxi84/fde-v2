@@ -6,18 +6,6 @@ class Attainment:
     _load_attainment 适配器冗余回写。数据来源类型：自动参考创建——前端禁止创建入口，
     不提供 create 服务。"""
 
-    def _init_db(self):
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS attainment (
-                customer_no TEXT NOT NULL,
-                material_no TEXT NOT NULL,
-                mape REAL,
-                bias REAL,
-                PRIMARY KEY (customer_no, material_no)
-            )
-        """)
-        self.db.execute("CREATE INDEX IF NOT EXISTS idx_attainment_material_no ON attainment (material_no)")
-
     def upsert(self, customer_no: str, material_no: str, mape: float, bias: float):
         """ERP 统计回写 MAPE/bias：同客户+物料存在则覆盖更新，不存在则插入（幂等）。"""
         customer_no = self._clean(customer_no)

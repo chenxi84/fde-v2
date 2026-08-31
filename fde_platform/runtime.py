@@ -4,7 +4,7 @@
 1. **发现与加载**：扫描 `app/` 下的应用文件夹（支持**应用组**：`app/<组>/<名>/` 分组放置
    与 `app/<名>/` 直接放置，见 `discover_apps`），按**唯一模块名** `fde_app_<名>` 加载
    主文件 `<名>.py`（避免 v1 的 `sys.modules` 撞名竞争），**加载一次并缓存**；
-2. **加载时建表**：调用聚合根**必选**的 `_init_db()`（缺则加载失败，§6）；
+2. **加载时建表**：读应用**必选**的 `schema.sql`，经 ddl 引擎解析建表（缺则加载失败，§6）；
 3. **每次调用造新实例**：注入权威 `ctx` / 全新 `db` 连接 / 绑定 ctx 的网关 `fde`；
    方法正常返回 → `commit`，抛异常 → `rollback`（事务归平台，§4.2）。每调用独立连接，线程安全；
 4. **跨应用路由**：`self.fde.call` 按名运行期解析，`ctx` 自动透传且**不可伪造**（§4.1/§5）。
@@ -12,7 +12,7 @@
 import importlib.util
 import sqlite3
 import time
-from fde_platform import db
+from fde_platform import db, ddl
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -201,9 +201,10 @@ class FdePlatform:
 
         cls = _find_aggregate_class(module, module_name, name)
 
-        # 必选的 _init_db（§6）：缺失即加载失败
-        if not callable(getattr(cls, "_init_db", None)):
-            raise FdeError(f"应用 {qn} 缺少必选的 _init_db()（CONVENTION §6）")
+        # 必选的 schema.sql：缺失即加载失败
+        schema_path = folder / "schema.sql"
+        if not schema_path.exists():
+            raise FdeError(f"应用 {qn} 缺少必选的 schema.sql")
 
         db_path = folder / f"{name}.db"
         handle = AppHandle(
@@ -214,16 +215,14 @@ class FdePlatform:
         # 平台自动创建约定资源目录（import-file / export-file，见 builtin_tools）
         builtin_tools.ensure_resource_dirs(folder)
 
-        # 加载时建表：造临时实例 → 注入连接 → _init_db → commit → 关连接。
-        # 仅加载时执行一次，不计入单次服务调用开销（§6）。
+        # 加载时建表：读 schema.sql → ddl 引擎解析建表（SQLite/PG 双兼容）。
+        # 仅加载时执行一次，不计入单次服务调用开销。
+        schema_sql = schema_path.read_text(encoding="utf-8")
+        dialect = "postgres" if db.using_postgresql() else "sqlite"
         conn = db.get_connection(qn, db_path)
         conn._fde_ctx = dict(self.default_ctx)
         try:
-            inst = cls()
-            inst.ctx = dict(self.default_ctx)
-            inst.db = conn
-            inst.fde = BoundFde(self, self.default_ctx, group)
-            inst._init_db()
+            ddl.execute_schema(conn, schema_sql, dialect)
             conn.commit()
         finally:
             conn.close()
@@ -329,12 +328,13 @@ class FdePlatform:
         inst.db = conn
         inst.fde = BoundFde(self, ctx, handle.group)
         try:
-            # SQLite 自愈：库文件被外部删除/清空时用幂等的 _init_db 重建（§6）
+            # SQLite 自愈：库文件被外部删除/清空时用 schema.sql 重建
             if not db.using_postgresql():
                 if conn.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1"
                 ).fetchone() is None:
-                    inst._init_db()
+                    schema_sql = (handle.folder / "schema.sql").read_text(encoding="utf-8")
+                    ddl.execute_schema(conn, schema_sql, "sqlite")
             t0 = time.time()
             result = method(inst, **params)
             dur_ms = int((time.time() - t0) * 1000)

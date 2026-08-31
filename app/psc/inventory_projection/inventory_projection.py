@@ -15,27 +15,6 @@ class InventoryProjection:
     BREACH_ALERT_TYPES = ("缺货", "击穿最低", "击穿安全")
     PROJECTION_DAYS = 90
 
-    def _init_db(self):
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS inventory_projection (
-                material_no  TEXT NOT NULL,
-                biz_date     TEXT NOT NULL,
-                inbound_qty  REAL NOT NULL DEFAULT 0,
-                outbound_qty REAL NOT NULL DEFAULT 0,
-                balance      REAL NOT NULL DEFAULT 0,
-                alert_type   TEXT NOT NULL DEFAULT '无',
-                PRIMARY KEY (material_no, biz_date)
-            )
-        """)
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_inventory_projection_biz_date ON inventory_projection (biz_date)"
-        )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_inventory_projection_alert_type ON inventory_projection (alert_type)"
-        )
-
-    # ---- 对外服务（公共方法）----
-
     def refresh(self, material_no: str, biz_date: str, opening_stock: Optional[float] = None):
         """对单个物料逐日推演未来 3 个月库存水位并落盘（含预警标记）。"""
         material_no = self._clean(material_no)

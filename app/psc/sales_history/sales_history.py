@@ -11,27 +11,6 @@ class SalesHistory:
 
     _PERIOD_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
-    def _init_db(self):
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS sales_history (
-                material_no  TEXT NOT NULL,
-                customer_no  TEXT NOT NULL,
-                period       TEXT NOT NULL,
-                qty          REAL NOT NULL DEFAULT 0,
-                forecast_qty REAL,
-                PRIMARY KEY (material_no, customer_no, period)
-            )
-        """)
-        # 旧库补列：forecast_qty（原始预测，可空）
-        try:
-            self.db.execute("ALTER TABLE sales_history ADD COLUMN forecast_qty REAL")
-        except Exception:
-            pass
-        self.db.execute("CREATE INDEX IF NOT EXISTS idx_sales_history_period ON sales_history (period)")
-        self.db.execute("CREATE INDEX IF NOT EXISTS idx_sales_history_customer ON sales_history (customer_no)")
-
-    # ---- 写服务（ERP 冗余回写；无 create）----
-
     def upsert(self, material_no: str, customer_no: str, period: str, qty):
         """ERP 单条回写：同 物料+客户+期间 存在则覆盖 qty，不存在则插入（幂等）。"""
         material_no = self._require(material_no, "物料号")

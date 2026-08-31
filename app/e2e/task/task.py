@@ -10,32 +10,6 @@ class Task:
     VALID_PRIORITIES = ("low", "high")
     VALID_STATUSES = ("待办", "进行中", "已完成")
 
-    def _init_db(self):
-        self.db.execute("""
-            CREATE TABLE IF NOT EXISTS task (
-                task_no TEXT PRIMARY KEY NOT NULL UNIQUE,
-                title TEXT NOT NULL,
-                description TEXT,
-                assignee_member_no TEXT NOT NULL,
-                priority TEXT NOT NULL CHECK (priority IN ('low', 'high')),
-                status TEXT NOT NULL DEFAULT '待办' CHECK (status IN ('待办', '进行中', '已完成')),
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_task_assignee_member_no ON task (assignee_member_no)"
-        )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_task_status ON task (status)"
-        )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_task_priority ON task (priority)"
-        )
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_task_status_assignee ON task (status, assignee_member_no)"
-        )
-
     def create(
         self,
         title: str,

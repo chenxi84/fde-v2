@@ -84,7 +84,7 @@ def list_services(cls) -> list[dict]:
     services = []
     for name, fn in vars(cls).items():
         if name.startswith("_") or not inspect.isfunction(fn):
-            continue  # 只暴露公共方法；内部辅助（_init_db/_row…）不暴露
+            continue  # 只暴露公共方法；内部辅助（_row/_clean…）不暴露
 
         sig = inspect.signature(fn)
         docstring = inspect.getdoc(fn) or ""
