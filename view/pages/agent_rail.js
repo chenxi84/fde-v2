@@ -213,15 +213,18 @@ export function agentRail() {
 
     /* ---- 附件上传（跟随当前页应用 → resource/import-file/） ---- */
 
-    /* 从 window.__fdePage 解析目标应用 qualname（如 psc:sales_forecast → psc/sales_forecast）；
-       平台页 / 组级无对应应用页时返回 null */
+    /* 从 window.__fdePage 解析目标应用 qualname（如 psc:md_customer → psc/md_customer）。
+       仅「有后端应用」的页面可上传（bootShell 标记的 __fdeAppPages）；组级聚合页（如流程总览
+       process）/ 平台页 / 首页均无对应应用，返回 null。 */
     resolveUploadApp() {
       const page = window.__fdePage || "";
+      const apps = window.__fdeAppPages;
+      if (!apps || !apps.has(page)) return null;
       const idx = page.indexOf(":");
       if (idx < 0) return null;
       const grp = page.slice(0, idx);
       const key = page.slice(idx + 1);
-      if (!grp || grp === "_platform" || !key) return null;
+      if (!grp || !key) return null;
       return `${grp}/${key}`;
     },
 
@@ -237,7 +240,7 @@ export function agentRail() {
       if (!files || !files.length) return;
       const target = self.resolveUploadApp();
       if (!target) {
-        toast("当前页面无对应应用，请先进入某个应用页再上传附件", "warn");
+        toast("当前页面没有对应的数据应用（附件只能上传到具体应用）。请先进入某个应用页，如「客户主数据」「销售预测」，再上传附件。", "warn");
         evt.target.value = "";
         return;
       }
@@ -256,7 +259,7 @@ export function agentRail() {
         }
         const names = uploaded.join("、");
         self.msgs.push({ role: "assistant", content: `📎 已上传附件：${names} → ${target}/resource/import-file/` });
-        self.input = `请解析 ${names}（${target}/resource/import-file/）并导入客户预测，列为 material_no、customer_no、rolling_month、orig_qty（版本为当前草稿版本）`;
+        self.input = `请读取 ${names}（${target}/resource/import-file/）解析内容，并按该应用的导入服务导入数据`;
         self.scrollEnd();
       } catch (e) {
         toast((e && e.message) || "上传失败", "err");

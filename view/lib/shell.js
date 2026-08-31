@@ -141,6 +141,10 @@ export async function bootShell(module) {
   }
 
   const pages = (man && man.pages) || [];
+  /* 标记「有后端应用」的页面（url 以 /view.js 结尾 = 应用页；组级页如 process.js / dashboard.js
+     无后端应用）。agent_rail 上传附件据此判断当前页能否落盘到某应用 resource/import-file/。 */
+  window.__fdeAppPages = new Set(
+    pages.filter((p) => p.url && p.url.endsWith("/view.js")).map((p) => p.id));
   /* 每页「默认隐藏列」（PAGE_META.col_default_hidden 逗号串）→ 供列控制无个人配置时套用 */
   window.__fdeColDefaults = {};
   pages.forEach((p) => {
