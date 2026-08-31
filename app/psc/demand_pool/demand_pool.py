@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from fde import FdeError
 from typing import Optional
 from datetime import datetime

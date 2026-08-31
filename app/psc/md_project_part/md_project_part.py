@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from fde import FdeError
 
 
@@ -128,7 +130,7 @@ class MdProjectPart:
         ).fetchall()
         return [self._to_dict(row) for row in rows]
 
-    def import_batch(self, rows):
+    def import_batch(self, rows: list):
         """批量导入/更新（upsert）：逐行校验，失败行返回错误明细，不阻断其余行。"""
         if not isinstance(rows, (list, tuple)):
             raise FdeError("导入数据须为列表")

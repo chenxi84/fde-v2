@@ -164,6 +164,7 @@ Claude 会读规范、逐步推进，你只需在「第①步 应用划分」「
 
 ```python
 # app/<组>/<应用>/<应用>.py
+from __future__ import annotations          # 必须置于最前（防 list 方法名遮蔽内置 list 类型）
 from fde import FdeError
 
 class Todo:                                  # 类 = 聚合根，PascalCase（文件夹名 snake_case）

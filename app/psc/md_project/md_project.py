@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from fde import FdeError
 import re
 from datetime import datetime
@@ -154,7 +156,7 @@ class MdProject:
         )
         return self.get(project_no)
 
-    def import_batch(self, rows):
+    def import_batch(self, rows: list):
         """批量导入/更新项目台账（upsert）。已存在主键行更新，新行新增；逐行校验，失败行记录错误明细。"""
         if not rows:
             raise FdeError("导入数据不能为空")
