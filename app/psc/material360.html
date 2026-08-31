@@ -154,7 +154,7 @@
           <div class="hd"><span class="idx">②</span><span>销售历史</span>
             <span class="right mono" x-text="'近 ' + histPoints.length + ' 期 · 达成率 ' + attainment.length + ' 客户'"></span></div>
           <div style="padding:14px;display:grid;grid-template-columns:1.4fr 1fr;gap:16px">
-            <div x-html="historySvg"></div>
+            <div id="m360HistoryChart" style="height:260px"></div>
             <div>
               <div class="overline">客户达成率（MAPE / bias）</div>
               <div x-show="!attainment.length" class="muted">暂无达成率</div>
@@ -333,7 +333,7 @@
         <div class="card">
           <div class="hd"><span class="idx">⑦</span><span>库存推移（今日 + 90 天）</span>
             <span class="right mono" x-text="'共 ' + projRows.length + ' 天'"></span></div>
-          <div style="padding:14px" x-html="projectionSvg"></div>
+          <div id="m360ProjChart" style="height:300px;padding:0 14px"></div>
           <template x-if="projWater">
             <div class="overline" style="padding:0 14px 12px">
               水位参考 ·

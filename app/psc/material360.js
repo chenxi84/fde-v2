@@ -21,83 +21,6 @@ const alertHue = (t) => ALERT_HUES[t] || "slate";
    prime #175e54 松绿（主折线）、amber #d97706 熔琥珀（预警）、prime-soft #e3eee9（水位带）、
    line #dde2d9（网格）、muted #69758a（轴标签）。 */
 
-/* SVG 销售历史趋势：points=[{period,qty}] → 折线 + 点 + 实际 YYYY-MM 刻度 */
-function buildHistorySvg(points) {
-  if (!points || !points.length) return '<div class="muted" style="padding:20px;text-align:center">暂无销售历史</div>';
-  const W = 760, H = 220, PAD = 46;
-  const max = Math.max(...points.map((p) => p.qty), 1);
-  const step = points.length > 1 ? (W - PAD * 2) / (points.length - 1) : 0;
-  const pts = points.map((p, i) => [PAD + i * step, H - PAD - (p.qty / max) * (H - PAD * 2)]);
-  const path = pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
-  const every = Math.max(1, Math.floor(points.length / 9));
-  const dots = pts.map((p, i) =>
-    `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="3" fill="#175e54"></circle>` +
-    (i % every === 0 ? `<text x="${p[0].toFixed(1)}" y="${p[1].toFixed(1) - 8}" text-anchor="middle" fill="#69758a" font-size="10">${Math.round(points[i].qty)}</text>` : "")
-  ).join("");
-  const xaxis = points.map((p, i) => i % every === 0
-    ? `<text x="${pts[i][0].toFixed(1)}" y="${H - PAD + 16}" text-anchor="middle" fill="#69758a" font-size="10">${p.period}</text>` : "").join("");
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block">` +
-    `<line x1="${PAD}" y1="${H - PAD}" x2="${W - PAD}" y2="${H - PAD}" stroke="#dde2d9" stroke-width="1"></line>` +
-    `<path d="${path}" stroke="#175e54" stroke-width="2" fill="none"></path>${dots}${xaxis}</svg>`;
-}
-
-/* SVG 库存推移：Y 轴刻度 + 网格线 + balance 折线 + 水位参考带（lower/upper）+ 预警标记 */
-function buildProjectionSvg(rows, water) {
-  if (!rows || !rows.length) return '<div class="muted" style="padding:20px;text-align:center">暂无推移序列</div>';
-  const W = 900, H = 280, PAD = 56, BOT = 34;
-  const allVals = rows.map((r) => Number(r.balance) || 0);
-  if (water) allVals.push(Number(water.lower) || 0, Number(water.upper) || 0);
-  const min = Math.min(...allVals, 0);
-  const max = Math.max(...allVals, 1);
-  const span = max - min || 1;
-  const chartH = H - PAD - BOT;
-  const step = rows.length > 1 ? (W - PAD * 2) / (rows.length - 1) : 0;
-  const yOf = (v) => H - BOT - ((Number(v) - min) / span) * chartH;
-  const pts = rows.map((r, i) => [PAD + i * step, yOf(r.balance)]);
-  const path = pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
-
-  /* Y 轴刻度 + 网格线（4 段 5 档） */
-  let grid = "";
-  for (let i = 0; i <= 4; i++) {
-    const v = min + (span * i) / 4;
-    const y = yOf(v);
-    const label = Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + "k" : String(Math.round(v));
-    grid += `<line x1="${PAD}" y1="${y.toFixed(1)}" x2="${W - PAD}" y2="${y.toFixed(1)}" stroke="#eef1ec" stroke-width="1"></line>` +
-      `<text x="${PAD - 8}" y="${(y + 3).toFixed(1)}" text-anchor="end" fill="#69758a" font-size="10">${label}</text>`;
-  }
-
-  /* 水位参考带 + 参考线 */
-  let waterBand = "";
-  if (water && water.lower != null && water.upper != null) {
-    const yLow = yOf(water.lower), yUp = yOf(water.upper);
-    if (Math.abs(yLow - yUp) < 1) {
-      /* 下界 == 上界（安全/批次水位为 0）：单一水位线 */
-      waterBand = `<line x1="${PAD}" y1="${yLow.toFixed(1)}" x2="${W - PAD}" y2="${yLow.toFixed(1)}" stroke="#175e54" stroke-dasharray="5 4" stroke-width="1.8"></line>` +
-        `<text x="${PAD + 6}" y="${(yLow - 7).toFixed(1)}" fill="#175e54" font-size="11" font-weight="700">水位 ${fmt(water.lower)}</text>`;
-    } else {
-      const bandH = Math.max(0, yLow - yUp);
-      waterBand = `<rect x="${PAD}" y="${yUp.toFixed(1)}" width="${W - PAD * 2}" height="${bandH.toFixed(1)}" fill="#e3eee9"></rect>` +
-        `<line x1="${PAD}" y1="${yUp.toFixed(1)}" x2="${W - PAD}" y2="${yUp.toFixed(1)}" stroke="#175e54" stroke-dasharray="5 4" stroke-width="1.6"></line>` +
-        `<line x1="${PAD}" y1="${yLow.toFixed(1)}" x2="${W - PAD}" y2="${yLow.toFixed(1)}" stroke="#175e54" stroke-dasharray="5 4" stroke-width="1.6"></line>` +
-        `<text x="${PAD + 6}" y="${(yUp - 6).toFixed(1)}" fill="#175e54" font-size="11" font-weight="700">上界 ${fmt(water.upper)}</text>` +
-        `<text x="${PAD + 6}" y="${(yLow - 6).toFixed(1)}" fill="#175e54" font-size="11" font-weight="700">下界 ${fmt(water.lower)}</text>`;
-    }
-  }
-
-  const alerts = rows.map((r, i) => {
-    if (!r.alert_type || r.alert_type === "无") return "";
-    const c = { 缺货: "#dc2626", 击穿最低: "#dc2626", 击穿安全: "#d97706", 呆滞: "#d97706", 超储: "#d97706" }[r.alert_type] || "#69758a";
-    return `<circle cx="${pts[i][0].toFixed(1)}" cy="${pts[i][1].toFixed(1)}" r="4.5" fill="${c}"></circle>`;
-  }).join("");
-  const every = Math.max(1, Math.floor(rows.length / 10));
-  const xaxis = rows.map((r, i) => i % every === 0
-    ? `<text x="${pts[i][0].toFixed(1)}" y="${H - BOT + 16}" text-anchor="middle" fill="#69758a" font-size="10">${(r.biz_date || "").slice(5)}</text>` : "").join("");
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block">` +
-    grid + waterBand +
-    `<line x1="${PAD}" y1="${H - BOT}" x2="${W - PAD}" y2="${H - BOT}" stroke="#dde2d9" stroke-width="1"></line>` +
-    `<path d="${path}" stroke="#d97706" stroke-width="2" fill="none"></path>${alerts}${xaxis}</svg>`;
-}
-
 /* 默认零值回落：list 类返回 {items, total}，其余返回 null */
 function pick(s, def = { items: [], total: 0 }) {
   return (s.status === "fulfilled" && s.value != null) ? s.value : def;
@@ -159,6 +82,14 @@ export default function pageMaterial360() {
         self.loadVersion(),
       ]);
       self.loading = false;
+      window.addEventListener("resize", () => {
+        const E = window.echarts;
+        if (!E) return;
+        ["m360HistoryChart", "m360ProjChart"].forEach(id => {
+          const el = document.getElementById(id);
+          if (el) { const c = E.getInstanceByDom(el); if (c) c.resize(); }
+        });
+      });
     },
 
     gotoPage(key) { window.location.hash = "#/" + key; },
@@ -408,6 +339,7 @@ export default function pageMaterial360() {
       await self.loadRest();
 
       self.loading = false;
+      Alpine.nextTick(() => self.renderCharts());
     },
 
     /* 版本相关 + 其余分区（③ 预测/策略、④ 毛净需求、⑤ 入库计划、⑥ 出库、⑦ 库存推移） */
@@ -459,12 +391,64 @@ export default function pageMaterial360() {
       self.projRows = []; self.projWater = null;
     },
 
-    /* ── SVG 构建器 ── */
-    get historySvg() { return buildHistorySvg(self.histPoints); },
-    get projectionSvg() {
-      /* 水位参考：优先 get_water_level，回落 get（waterStrategy 亦含 lower/upper） */
+    /* ── ECharts 渲染（销售历史 + 库存推移，复用 histPoints / projRows / projWater，零新增后端） ── */
+    renderCharts() {
+      this.renderHistoryChart();
+      this.renderProjChart();
+    },
+    renderHistoryChart() {
+      const el = document.getElementById("m360HistoryChart");
+      const E = window.echarts;
+      if (!el || !E) return;
+      if (E.getInstanceByDom(el)) E.getInstanceByDom(el).dispose();
+      const pts = self.histPoints || [];
+      if (!pts.length) return;
+      const chart = E.init(el);
+      chart.setOption({
+        grid: { top: 30, left: 56, right: 24, bottom: 40 },
+        tooltip: { trigger: "axis" },
+        xAxis: { type: "category", data: pts.map(p => p.period), boundaryGap: false },
+        yAxis: { type: "value", name: "销量" },
+        series: [{ type: "line", smooth: true, data: pts.map(p => p.qty),
+          areaStyle: { opacity: .08 }, lineStyle: { color: "#175e54", width: 2 },
+          itemStyle: { color: "#175e54" } }],
+      });
+    },
+    renderProjChart() {
+      const el = document.getElementById("m360ProjChart");
+      const E = window.echarts;
+      if (!el || !E) return;
+      if (E.getInstanceByDom(el)) E.getInstanceByDom(el).dispose();
+      const rows = self.projRows || [];
+      if (!rows.length) return;
+      const chart = E.init(el);
       const w = self.projWater || self.waterStrategy;
-      return buildProjectionSvg(self.projRows, w);
+      const breach = ["缺货", "击穿最低", "击穿安全"];
+      chart.setOption({
+        grid: { top: 44, left: 60, right: 24, bottom: 44 },
+        tooltip: { trigger: "axis" },
+        legend: { top: 8 },
+        xAxis: { type: "category", data: rows.map(r => r.biz_date), boundaryGap: false,
+          axisLabel: { rotate: 45, fontSize: 10 } },
+        yAxis: { type: "value", name: "库存水位", scale: true },
+        series: [
+          { name: "库存水位", type: "line", smooth: true, showSymbol: false,
+            data: rows.map(r => Number(r.balance)),
+            areaStyle: { opacity: .08 }, lineStyle: { color: "#d97706", width: 2 },
+            itemStyle: { color: "#d97706" },
+            markLine: { symbol: "none", silent: true,
+              data: w ? [
+                { yAxis: w.min_level, name: "最低 A", lineStyle: { color: "#ef4444", type: "dashed" } },
+                { yAxis: w.lower, name: "下界 A+C", lineStyle: { color: "#d97706", type: "dashed" } },
+                { yAxis: w.upper, name: "上界 A+C+B", lineStyle: { color: "#0ea5e9", type: "dashed" } },
+              ] : [],
+              label: { position: "insideEndTop", formatter: "{b}" } } },
+          { name: "击穿点", type: "scatter", symbolSize: 9,
+            data: rows.filter(r => breach.includes(r.alert_type))
+                      .map(r => [r.biz_date, Number(r.balance)]),
+            itemStyle: { color: "#dc2626" } },
+        ],
+      });
     },
 
     /* ── 工具 ── */

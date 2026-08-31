@@ -30,6 +30,7 @@
       <div class="chips">
         <span class="fchip" :class="{on: viewMode === 'list'}" @click="switchView('list')">列表</span>
         <span class="fchip" :class="{on: viewMode === 'cal'}" @click="switchView('cal')">日历</span>
+        <span class="fchip" :class="{on: viewMode === 'trend'}" @click="switchView('trend')">趋势</span>
       </div>
       <template x-if="viewMode === 'list'">
         <div class="tagline" style="gap:8px; flex-wrap:wrap">
@@ -106,8 +107,8 @@
     </div>
   </div>
 
-  <!-- ══ 日历视图：单物料月历（余额 + 入/出小字，按预警上色，严格从今天起） ══ -->
-  <div x-show="viewMode === 'cal'">
+  <!-- ══ 单物料视图（日历 / 趋势 共用头：物料选择 + 三层水位） ══ -->
+  <div x-show="viewMode === 'cal' || viewMode === 'trend'">
     <div class="tagline" style="padding:0 16px 12px; gap:8px; flex-wrap:wrap">
       <span class="muted" style="font-size:12px">物料：</span>
       <div style="position:relative">
@@ -130,7 +131,8 @@
           </template>
         </div>
       </div>
-      <div class="right tagline" style="gap:8px">
+      <!-- 月历导航：仅日历 -->
+      <div class="right tagline" style="gap:8px" x-show="viewMode === 'cal'">
         <button class="b-ghost b-sm" @click="calShift(-1)">◀ 上月</button>
         <span class="mono" style="font-weight:600" x-text="cal.month"></span>
         <button class="b-ghost b-sm" @click="calShift(1)">下月 ▶</button>
@@ -146,7 +148,10 @@
       <span style="font-size:12px">组批上限 <b class="mono" x-text="cal.water ? fmt(cal.water.batch_level) : '—'"></b></span>
       <span class="muted" style="font-size:11px" x-show="!cal.water">暂无库存策略水位（该物料未计算库存策略）</span>
     </div>
+  </div>
 
+  <!-- ══ 日历视图：单物料月历（余额 + 入/出小字，按预警上色，严格从今天起） ══ -->
+  <div x-show="viewMode === 'cal'">
     <div class="scroll-x" style="padding:0 16px 12px">
       <table class="tbl tight cal-tbl">
         <tr><th>周一</th><th>周二</th><th>周三</th><th>周四</th><th>周五</th><th>周六</th><th>周日</th></tr>
@@ -178,6 +183,17 @@
       <span class="muted" style="font-size:12px" x-show="cal.material_no && !cal.rows.length && !cal.loading">该物料暂无推移记录（请先刷新）</span>
       <span class="muted" style="font-size:12px" x-show="cal.loading">载入中…</span>
       <div class="right muted" style="font-size:11px">红=缺货/击穿 · 橙=击穿安全/超储 · 白=无 · 今日蓝框</div>
+    </div>
+  </div>
+
+  <!-- ══ 趋势视图：90 天库存水位折线 + 三条水位虚线 ══ -->
+  <div x-show="viewMode === 'trend'">
+    <div id="projChart" style="height:440px; margin:0 16px 12px"></div>
+    <div class="tagline" style="padding:0 16px 12px">
+      <span class="muted" style="font-size:12px" x-show="!cal.material_no">请先选择物料</span>
+      <span class="muted" style="font-size:12px" x-show="cal.material_no && !cal.rows.length && !cal.loading">该物料暂无推移记录（请先刷新）</span>
+      <span class="muted" style="font-size:12px" x-show="cal.loading">载入中…</span>
+      <div class="right muted" style="font-size:11px">折线=库存水位 · 虚线=最低/安全/组批水位 · 红点=击穿</div>
     </div>
   </div>
 </div></div>

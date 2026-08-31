@@ -335,3 +335,23 @@ foot = <组名> 组 · N 页面     （N = 扫描到的页面数）
 
 7. **暗色主题**：底色深墨 `#0f1b2a`、节点暗卡 `#182432`、完成深绿 `#12271c` + 亮绿点/字，连线暗灰，
    与右栏 Agent 视觉统一。
+
+## 9. 图表类需求：ECharts（折线 / 柱状 / 趋势等）
+
+**适用场景**：折线、柱状、饼图、趋势 / 水位等**数据图表**，一律用 **ECharts**（平台已内置，零外网依赖）；
+**不要手写 SVG**——手写 SVG 只用于 §8 的「流程图 / 拓扑」这类非数据图表场景。
+
+**接入方式**（平台已就绪，应用零配置）：
+- `view/lib/echarts.min.js` 本地打包（~1MB），`view_shell.html` 头部已 `<script src>` 加载，全局 `window.echarts`。
+
+**用法范式**（照抄参考实现即可）：
+1. **容器**：模板放 `<div id="<唯一id>" style="height:300px">`——**高度必须显式给**，否则 ECharts init 尺寸为 0。
+2. **渲染方法**：JS 里 `renderXxx()` 用 `echarts.init(el)` + `setOption(...)`；数据直接复用页面已加载的响应式字段，**零新增后端**。
+3. **防重复 init**：init 前先 `echarts.getInstanceByDom(el)`，已存在则 `dispose()`（切视图 / 重渲染会复用同一 DOM）。
+4. **时机**：`x-show` / `x-if` 隐藏时容器尺寸为 0，务必在**切到该视图且 DOM 就绪后**渲染（`Alpine.nextTick(() => self.renderXxx())`）。
+5. **自适应**：窗口 resize 时 `chart.resize()`；在页面 `init()` 里挂一个 `window.addEventListener("resize", ...)`。
+6. **实例不进 Alpine 响应式**：ECharts 实例（含循环引用）放进 `Alpine.reactive` 对象会被 Proxy 代理破坏——用闭包变量持有，或靠 `echarts.getInstanceByDom` 现取现用。
+
+**参考实现**：
+- `app/psc/inventory_projection/view.{js,html}` ——「趋势」视图（90 天水位折线 + 三条水位虚线 + 击穿红点）。
+- `app/psc/material360.{js,html}` —— 销售历史折线 + 库存推移折线（组级聚合页，`PAGE_META.key="material_360"`）。

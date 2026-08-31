@@ -50,6 +50,7 @@ export const PAGE_META = {
 };
 
 export default function pageInventoryProjection() {
+  let chartInstance = null;   // ECharts 实例（闭包持有，不进 Alpine 响应式，避免被 Proxy 破坏）
   const self = Alpine.reactive({
     tpl: "",
     fmt, alertHue,
@@ -101,6 +102,7 @@ export default function pageInventoryProjection() {
       await self.loadMaterials();
       self.tpl = await fetch(new URL("view.html", import.meta.url)).then((r) => r.text());
       await self.list.load();
+      window.addEventListener("resize", () => { if (chartInstance) chartInstance.resize(); });
     },
 
     /* 物料下拉数据源：quiet 探测，失败不喷 toast；零值兜底 → 过滤仅「全部」、弹窗显示空态 */
@@ -172,8 +174,49 @@ export default function pageInventoryProjection() {
       if (mode === "cal") {
         if (!self.cal.month) self.cal.month = localToday().slice(0, 7);
         if (self.cal.material_no) self.loadCal();
+      } else if (mode === "trend") {
+        Alpine.nextTick(() => self.renderChart());
       }
     },
+
+    /* 趋势折线：90 天库存水位 + 三条水位虚线 + 击穿红点（复用 cal.rows / cal.water，零新增后端） */
+    renderChart() {
+      const el = document.getElementById("projChart");
+      if (!el || !window.echarts) return;
+      if (chartInstance) { chartInstance.dispose(); chartInstance = null; }
+      const rows = self.cal.rows || [];
+      if (!rows.length) return;                       // 无数据：由模板空态提示
+      const chart = echarts.init(el);
+      chartInstance = chart;
+      const w = self.cal.water;
+      const breach = ["缺货", "击穿最低", "击穿安全"];
+      chart.setOption({
+        grid: { top: 44, left: 60, right: 24, bottom: 48 },
+        tooltip: { trigger: "axis" },
+        legend: { top: 8 },
+        xAxis: { type: "category", data: rows.map(r => r.biz_date), boundaryGap: false,
+          axisLabel: { rotate: 45, fontSize: 10 } },
+        yAxis: { type: "value", name: "库存水位", scale: true },
+        series: [
+          { name: "库存水位", type: "line", smooth: true, showSymbol: false,
+            data: rows.map(r => Number(r.balance)),
+            areaStyle: { opacity: .08 }, lineStyle: { color: "#175e54", width: 2 },
+            itemStyle: { color: "#175e54" },
+            markLine: { symbol: "none", silent: true,
+              data: w ? [
+                { yAxis: w.min_level, name: "最低 A", lineStyle: { color: "#ef4444", type: "dashed" } },
+                { yAxis: w.min_level + w.safety_level, name: "安全 A+C", lineStyle: { color: "#d97706", type: "dashed" } },
+                { yAxis: w.batch_level, name: "组批 B", lineStyle: { color: "#0ea5e9", type: "dashed" } },
+              ] : [],
+              label: { position: "insideEndTop", formatter: "{b}" } } },
+          { name: "击穿点", type: "scatter", symbolSize: 9,
+            data: rows.filter(r => breach.includes(r.alert_type))
+                      .map(r => [r.biz_date, Number(r.balance)]),
+            itemStyle: { color: "#ef4444" } },
+        ],
+      });
+    },
+
     async loadCal() {
       const no = self.cal.material_no;
       self.cal.loading = true;
