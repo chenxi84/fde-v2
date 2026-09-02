@@ -121,9 +121,10 @@
     <template x-for="m in team.members" :key="m.name">
       <div class="fp-worker">
         <div class="fp-worker-hd">
-          <span class="fp-name" x-text="m.name + (m.done ? ' ✓' : (m.tools.length ? '' : ' · 思考中'))"></span>
+          <span class="fp-name" x-text="m.name + (m.done ? ' ✓' : ' …')"></span>
         </div>
         <div class="fp-worker-tools" x-show="m.tools.length" x-text="m.tools.join('、')"></div>
+        <div class="fp-worker-tools" x-show="!m.tools.length && !m.done">思考中…</div>
         <div class="fp-worker-text" x-show="m.text" x-text="m.text.slice(0, 100)"></div>
       </div>
     </template>
