@@ -24,6 +24,8 @@ import time
 import traceback
 from pathlib import Path
 
+import httpx
+
 from flask import (
     Flask,
     Response,
@@ -635,6 +637,51 @@ def api_delete_file(app_name, directory, filename):
     except OSError as e:
         return jsonify({"status": "error", "message": f"删除失败：{e}"})
     return jsonify({"status": "ok", "message": f"已删除：{target.name}"})
+
+
+# ── 多智能体 agent_service 反代 ─────────────────────────
+# AgentScope agent_service（独立 FastAPI，:4100）作为多智能体编排层，
+# FDE Flask 反代其 REST/SSE 端点并桥接身份（登录态 → X-User-ID）。
+# 鉴权由 auth.gate（/api/* 需登录）兜底；agent_service 内部按 X-User-ID 隔离租户。
+
+AGENT2_BASE = os.environ.get("AGENT_SERVICE_URL", "http://127.0.0.1:4100")
+
+
+@app.route("/api/agent2/<path:path>", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+def api_agent2_proxy(path):
+    """反代 agent_service 请求；注入 X-User-ID（当前登录用户名）。"""
+    u = users.session_user()
+    if u is None:
+        return jsonify({"status": "error", "message": "未登录"}), 401
+    url = f"{AGENT2_BASE}/{path}"
+    headers = {"X-User-ID": u["username"]}
+    params = request.args.to_dict()
+    body = request.get_json(silent=True)
+    method = request.method  # 提前提取：gen() 在响应流式阶段执行，request 上下文已结束
+
+    try:
+        if path.endswith("/stream"):
+            # SSE 流式：原样转发字节流（长连接，不超时）
+            def gen():
+                with httpx.stream(
+                    method, url, headers=headers, params=params,
+                    json=body, timeout=None,
+                ) as r:
+                    for chunk in r.iter_bytes():
+                        yield chunk
+
+            return Response(gen(), mimetype="text/event-stream")
+
+        resp = httpx.request(
+            method, url, headers=headers, params=params, json=body, timeout=120,
+        )
+        return Response(
+            resp.content, status=resp.status_code,
+            content_type=resp.headers.get("content-type", "application/json"),
+        )
+    except httpx.ConnectError:
+        return jsonify({"status": "error",
+                        "message": "agent_service 未启动（python -m fde_platform.agent_service）"}), 503
 
 
 # ── Agent ─────────────────────────────────────────────────
