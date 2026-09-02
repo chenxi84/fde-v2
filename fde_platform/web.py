@@ -19,6 +19,7 @@
 
 按安全约束，本地 DEMO 只绑回环地址 127.0.0.1（由 main.py 指定 host）。
 """
+import json
 import os
 import time
 import traceback
@@ -682,6 +683,310 @@ def api_agent2_proxy(path):
     except httpx.ConnectError:
         return jsonify({"status": "error",
                         "message": "agent_service 未启动（python -m fde_platform.agent_service）"}), 503
+
+
+# ── agent_service 适配层（多智能体，模拟现有 /api/agent/* 形状）────────
+# 前端 agent_rail 只需把 URL 前缀从 /api/agent 改成 /api/agent2，协议不变。
+# 后端封装 agent_service 细节：credential/agent 初始化、chat 触发+SSE 翻译、HITL 缓存。
+
+_AGENT2_CRED = None
+_AGENT2_AGENT = None
+_AGENT2_MODEL = None
+_AGENT2_PENDING = {}  # session_id -> {"reply_id": str, "tool_calls": [ToolCallBlock]}
+
+_LEADER_PROMPT = (
+    "你是产销协同的多智能体编排 leader。你持有团队工具（TeamCreate/AgentCreate/TeamSay），"
+    "遇到需要多领域协作的复杂任务时必须组建团队：先 TeamCreate 建团队，再用 AgentCreate "
+    "按 subagent_type 创建成员（可选：sales/planning/inventory/delivery/integration/scheduler），"
+    "用 TeamSay 给成员派活并汇总回报。简单查询可直接调用业务工具回答。"
+)
+
+
+def _agent2_headers():
+    u = users.session_user()
+    return {"X-User-ID": u["username"] if u else "anon"}
+
+
+def _ensure_agent2():
+    """确保 agent_service 有 credential + leader agent（幂等，缓存全局）。"""
+    global _AGENT2_CRED, _AGENT2_AGENT, _AGENT2_MODEL
+    if _AGENT2_CRED and _AGENT2_AGENT:
+        return True
+    u = users.session_user()
+    if u is None:
+        return False
+    from fde_platform import llm
+    p = llm.load_profile("operator")
+    if not p:
+        return False
+    headers = _agent2_headers()
+    try:
+        api_key = llm.decrypt_key(p["api_key_enc"])
+        r = httpx.post(f"{AGENT2_BASE}/credential/", json={"data": {
+            "type": "deepseek_credential", "api_key": api_key,
+            "base_url": p["base_url"],
+        }}, headers=headers, timeout=30)
+        r.raise_for_status()
+        _AGENT2_CRED = r.json()["credential_id"]
+        r = httpx.post(f"{AGENT2_BASE}/agent/", json={
+            "name": "leader", "system_prompt": _LEADER_PROMPT,
+        }, headers=headers, timeout=30)
+        r.raise_for_status()
+        _AGENT2_AGENT = r.json()["agent_id"]
+        _AGENT2_MODEL = p["model"]
+        return True
+    except Exception:
+        _AGENT2_CRED = None
+        _AGENT2_AGENT = None
+        return False
+
+
+def _agent2_new_session() -> str | None:
+    """新建 agent_service session（带 chat_model_config），返回 session_id。"""
+    headers = _agent2_headers()
+    try:
+        r = httpx.post(f"{AGENT2_BASE}/sessions/", json={
+            "agent_id": _AGENT2_AGENT,
+            "name": "对话",
+            "chat_model_config": {
+                "type": "deepseek_credential", "credential_id": _AGENT2_CRED,
+                "model": _AGENT2_MODEL or "deepseek-v4-pro",
+                "parameters": {},
+            },
+        }, headers=headers, timeout=30)
+        r.raise_for_status()
+        return r.json()["session_id"]
+    except Exception:
+        return None
+
+
+@app.route("/api/agent2/chat/stream", methods=["POST"])
+def api_agent2_chat_stream():
+    """多智能体对话（SSE）：触发 chat + 订阅 stream，翻译成现有事件格式。"""
+    data = request.get_json(silent=True) or {}
+    message = (data.get("message") or "").strip()
+    session_id = data.get("session_id", "")
+    if not message:
+        return jsonify({"status": "error", "message": "消息不能为空"})
+    if not _ensure_agent2():
+        def _err():
+            yield "data: " + json.dumps(
+                {"event": "error", "data": "agent_service 未配置或未启动（python -m fde_platform.agent_service）"},
+                ensure_ascii=False) + "\n\n"
+        return Response(_err(), mimetype="text/event-stream")
+
+    sid = session_id if session_id else _agent2_new_session()
+    if sid is None:
+        def _err2():
+            yield "data: " + json.dumps({"event": "error", "data": "会话创建失败"}, ensure_ascii=False) + "\n\n"
+        return Response(_err2(), mimetype="text/event-stream")
+
+    headers = _agent2_headers()
+    msg = {"role": "user", "name": "user",
+           "content": [{"type": "text", "text": message}]}
+    full_text = {"v": ""}
+    pending = {"reply_id": None, "tool_calls": []}
+
+    def _translate(evt):
+        t = evt.get("type")
+        if t == "TEXT_BLOCK_DELTA":
+            d = evt.get("delta", "") or ""
+            full_text["v"] += d
+            return {"event": "delta", "data": d}
+        if t == "TOOL_CALL_START":
+            name = evt.get("tool_call_name") or ""
+            return {"event": "tool", "data": name}
+        if t == "REQUIRE_USER_CONFIRM":
+            pending["reply_id"] = evt.get("reply_id")
+            pending["tool_calls"] = evt.get("tool_calls") or []
+            _AGENT2_PENDING[sid] = pending
+            return {"event": "confirm_required", "data": [
+                {"id": tc.get("id"), "name": tc.get("name"), "input": tc.get("input")}
+                for tc in pending["tool_calls"]
+            ]}
+        if t == "REPLY_END":
+            return {"event": "done", "data": full_text["v"]}
+        return None
+
+    def gen():
+        try:
+            # 触发 chat（异步返回 started）
+            r = httpx.post(f"{AGENT2_BASE}/chat/", json={
+                "agent_id": _AGENT2_AGENT, "session_id": sid, "input": msg,
+            }, headers=headers, timeout=60)
+            if r.status_code >= 400:
+                yield "data: " + json.dumps({"event": "error", "data": f"HTTP {r.status_code}"}, ensure_ascii=False) + "\n\n"
+                return
+            # 订阅 stream 并翻译
+            with httpx.stream("GET", f"{AGENT2_BASE}/sessions/{sid}/stream",
+                              params={"agent_id": _AGENT2_AGENT}, headers=headers, timeout=120) as up:
+                for line in up.iter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    try:
+                        evt = json.loads(line[5:].strip())
+                    except Exception:
+                        continue
+                    translated = _translate(evt)
+                    if translated:
+                        yield "data: " + json.dumps(translated, ensure_ascii=False) + "\n\n"
+                    if evt.get("type") == "REPLY_END":
+                        break  # stream 在 REPLY_END 后不关闭，必须主动断（否则 iter_lines 挂起）
+        except Exception:
+            yield "data: " + json.dumps({"event": "error", "data": "agent_service 调用失败"}, ensure_ascii=False) + "\n\n"
+
+    return Response(gen(), mimetype="text/event-stream")
+
+
+@app.route("/api/agent2/sessions", methods=["GET"])
+def api_agent2_sessions():
+    """列会话（翻译成现有 [{session_id, title}] 形状）。"""
+    _ensure_agent2()
+    headers = _agent2_headers()
+    try:
+        r = httpx.get(f"{AGENT2_BASE}/sessions/", params={"agent_id": _AGENT2_AGENT},
+                      headers=headers, timeout=30)
+        r.raise_for_status()
+        sessions = r.json().get("sessions") or []
+        out = []
+        for s in sessions:
+            out.append({
+                "session_id": s.get("session_id") or s.get("id"),
+                "title": s.get("name") or "对话",
+            })
+        return jsonify({"status": "ok", "data": out})
+    except Exception:
+        return jsonify({"status": "error", "message": "agent_service 不可用"})
+
+
+@app.route("/api/agent2/sessions", methods=["POST"])
+def api_agent2_session_create():
+    """新建会话。"""
+    if not _ensure_agent2():
+        return jsonify({"status": "error", "message": "agent_service 不可用"})
+    sid = _agent2_new_session()
+    if sid is None:
+        return jsonify({"status": "error", "message": "会话创建失败"})
+    return jsonify({"status": "ok", "data": {"session_id": sid}})
+
+
+@app.route("/api/agent2/sessions/<sid>", methods=["DELETE"])
+def api_agent2_session_delete(sid):
+    """删除会话。"""
+    headers = _agent2_headers()
+    try:
+        httpx.delete(f"{AGENT2_BASE}/sessions/{sid}",
+                     params={"agent_id": _AGENT2_AGENT}, headers=headers, timeout=30)
+    except Exception:
+        pass
+    return jsonify({"status": "ok", "message": "已删除"})
+
+
+@app.route("/api/agent2/sessions/<sid>/messages", methods=["GET"])
+def api_agent2_session_messages(sid):
+    """历史消息（翻译成现有 OpenAI 格式）。"""
+    headers = _agent2_headers()
+    try:
+        r = httpx.get(f"{AGENT2_BASE}/sessions/{sid}/messages",
+                      params={"agent_id": _AGENT2_AGENT}, headers=headers, timeout=30)
+        r.raise_for_status()
+        raw = r.json().get("messages") or []
+        return jsonify({"status": "ok", "data": _agent2_to_openai(raw)})
+    except Exception:
+        return jsonify({"status": "ok", "data": []})
+
+
+def _agent2_to_openai(raw_msgs):
+    """agent_service Msg JSON → OpenAI 格式 [{role, content, tool_calls}]。"""
+    out = []
+    for m in raw_msgs or []:
+        role = m.get("role")
+        blocks = m.get("content") or []
+        text = ""
+        tool_calls = []
+        for b in blocks:
+            bt = b.get("type")
+            if bt == "text":
+                text += b.get("text", "")
+            elif bt == "tool_call":
+                tool_calls.append({"id": b.get("id"), "type": "function",
+                                   "function": {"name": b.get("name"), "arguments": b.get("input", "")}})
+        if role == "user":
+            out.append({"role": "user", "content": text})
+        elif role == "assistant":
+            out.append({"role": "assistant", "content": text,
+                        "tool_calls": tool_calls if tool_calls else None})
+    return out
+
+
+@app.route("/api/agent2/confirm", methods=["POST"])
+def api_agent2_confirm():
+    """HITL 确认：decisions=[{id, confirmed}] → UserConfirmResultEvent 续跑。"""
+    data = request.get_json(silent=True) or {}
+    session_id = data.get("session_id", "default")
+    decisions = data.get("decisions") or []
+    pending = _AGENT2_PENDING.get(session_id)
+    if not pending:
+        def _err():
+            yield "data: " + json.dumps({"event": "error", "data": "无待确认操作"}, ensure_ascii=False) + "\n\n"
+        return Response(_err(), mimetype="text/event-stream")
+
+    headers = _agent2_headers()
+    full_text = {"v": ""}
+
+    def _translate(evt):
+        t = evt.get("type")
+        if t == "TEXT_BLOCK_DELTA":
+            d = evt.get("delta", "") or ""
+            full_text["v"] += d
+            return {"event": "delta", "data": d}
+        if t == "TOOL_CALL_START":
+            return {"event": "tool", "data": evt.get("tool_call_name") or ""}
+        if t == "REQUIRE_USER_CONFIRM":
+            pending2 = {"reply_id": evt.get("reply_id"), "tool_calls": evt.get("tool_calls") or []}
+            _AGENT2_PENDING[session_id] = pending2
+            return {"event": "confirm_required", "data": [
+                {"id": tc.get("id"), "name": tc.get("name"), "input": tc.get("input")}
+                for tc in pending2["tool_calls"]
+            ]}
+        if t == "REPLY_END":
+            return {"event": "done", "data": full_text["v"]}
+        return None
+
+    def gen():
+        try:
+            confirm_results = []
+            by_id = {tc.get("id"): tc for tc in pending["tool_calls"]}
+            for d in decisions:
+                tc = by_id.get((d or {}).get("id"))
+                if tc is not None:
+                    confirm_results.append({"confirmed": bool(d.get("confirmed")), "tool_call": tc})
+            input_event = {"type": "USER_CONFIRM_RESULT", "reply_id": pending["reply_id"],
+                           "confirm_results": confirm_results}
+            r = httpx.post(f"{AGENT2_BASE}/chat/", json={
+                "agent_id": _AGENT2_AGENT, "session_id": session_id, "input": input_event,
+            }, headers=headers, timeout=60)
+            if r.status_code >= 400:
+                yield "data: " + json.dumps({"event": "error", "data": f"HTTP {r.status_code}"}, ensure_ascii=False) + "\n\n"
+                return
+            with httpx.stream("GET", f"{AGENT2_BASE}/sessions/{session_id}/stream",
+                              params={"agent_id": _AGENT2_AGENT}, headers=headers, timeout=120) as up:
+                for line in up.iter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    try:
+                        evt = json.loads(line[5:].strip())
+                    except Exception:
+                        continue
+                    translated = _translate(evt)
+                    if translated:
+                        yield "data: " + json.dumps(translated, ensure_ascii=False) + "\n\n"
+                    if evt.get("type") == "REPLY_END":
+                        break
+        except Exception as e:
+            yield "data: " + json.dumps({"event": "error", "data": str(e)}, ensure_ascii=False) + "\n\n"
+
+    return Response(gen(), mimetype="text/event-stream")
 
 
 # ── Agent ─────────────────────────────────────────────────

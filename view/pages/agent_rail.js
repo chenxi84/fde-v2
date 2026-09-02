@@ -1,4 +1,4 @@
-/* Agent 右栏（平台级跨应用，复用 /api/agent/* 端点）。
+/* Agent 右栏（平台级跨应用，复用 /api/agent2/* 端点）。
    服务级授权由后端 AgentSession 保证：工具清单 = 当前用户被授权的服务，
    执行时 fail-closed；本组件只是换个窄栏入口，不新增任何授权逻辑。 */
 import { get, post, del, toast } from "../lib/api.js";
@@ -51,13 +51,13 @@ export function agentRail() {
     },
 
     async loadSessions() {
-      self.sessions = (await get("/api/agent/sessions").catch(() => [])) || [];
+      self.sessions = (await get("/api/agent2/sessions").catch(() => [])) || [];
     },
 
     async loadMsgs() {
       if (self.sending) return;   // 发送中不覆盖，避免首次对话「select 触发 change→loadMsgs」竞态清空消息区
       if (!self.sid) { self.msgs = []; return; }
-      const r = await get(`/api/agent/sessions/${encodeURIComponent(self.sid)}/messages`,
+      const r = await get(`/api/agent2/sessions/${encodeURIComponent(self.sid)}/messages`,
         { quiet: true }).catch(() => []);
       self.msgs = self.toDisplayMsgs(r || []);
       self.scrollEnd();
@@ -111,7 +111,7 @@ export function agentRail() {
       const tools = [];
       try {
         if (!self.sid) {
-          const s = await post("/api/agent/sessions", {});
+          const s = await post("/api/agent2/sessions", {});
           self.sid = s.session_id;
           await self.loadSessions();
         }
@@ -137,7 +137,7 @@ export function agentRail() {
           }
           self.scrollEnd();
         };
-        await this.streamRequest("/api/agent/chat/stream", { message: m, session_id: sid }, onEvent);
+        await this.streamRequest("/api/agent2/chat/stream", { message: m, session_id: sid }, onEvent);
         // HITL：危险操作需人工确认，确认/拒绝后继续（可多轮）
         while (self.confirm) {
           const names = self.confirm.map(c => c.name).join("\n");
@@ -145,7 +145,7 @@ export function agentRail() {
             "\n\n「确定」= 确认执行；「取消」= 拒绝。");
           const decisions = self.confirm.map(c => ({ id: c.id, confirmed: ok }));
           self.confirm = null;
-          await this.streamRequest("/api/agent/confirm", { session_id: sid, decisions }, onEvent);
+          await this.streamRequest("/api/agent2/confirm", { session_id: sid, decisions }, onEvent);
         }
         self.progress = "";
         this.commitLive();
@@ -201,7 +201,7 @@ export function agentRail() {
     },
 
     async newSession() {
-      const r = await post("/api/agent/sessions", {});
+      const r = await post("/api/agent2/sessions", {});
       self.sid = r.session_id;
       self.msgs = [];
       self.progress = "";
@@ -213,7 +213,7 @@ export function agentRail() {
     async delSession() {
       if (!self.sid) return;
       if (!confirm("删除当前会话及其全部历史？")) return;
-      await del(`/api/agent/sessions/${encodeURIComponent(self.sid)}`).catch(() => {});
+      await del(`/api/agent2/sessions/${encodeURIComponent(self.sid)}`).catch(() => {});
       self.sid = "";
       self.msgs = [];
       self.progress = "";
