@@ -57,3 +57,39 @@ class RoleToolFilterMiddleware(MiddlewareBase):
                 message=f"角色 {self.role} 无权调用 {name}",
             )
         return await next_handler(**input_kwargs)
+
+
+# leader 是编排者：只保留查询类服务（回答简单问题）+ propose_skill；
+# 写操作（create/update/delete/import/publish 等）与文件工具交给 worker 承担。
+_QUERY_PREFIXES = ("list", "get", "query", "calc", "fit", "search")
+_QUERY_KEYWORDS = ("summary", "history", "sequence", "purchasing", "water", "latest")
+
+
+def is_query_service(service: str) -> bool:
+    """按服务名判定查询类服务（无副作用，leader 可安全直调）。"""
+    return service.startswith(_QUERY_PREFIXES) or any(k in service for k in _QUERY_KEYWORDS)
+
+
+class LeaderToolFilterMiddleware(MiddlewareBase):
+    """leader 工具收窄：只保留查询类服务 + propose_skill。
+
+    leader 是编排者：查询可直调（如「查客户数」），写操作/文件工具交给 worker。
+    仅过滤 FDE 工具（``组__应用__服务`` / ``platform_*``），AgentScope 内置工具不受影响。
+    """
+
+    async def on_model_call(self, agent, input_kwargs, next_handler):
+        tools = input_kwargs.get("tools") or []
+        kept = []
+        for t in tools:
+            name = _tool_name(t)
+            if not is_fde_tool(name):
+                kept.append(t)  # 内置工具（TeamSay/Bash 等）保留
+                continue
+            if name in GLOBAL_PLATFORM_TOOLS:
+                kept.append(t)  # propose_skill 保留
+                continue
+            service = name.rsplit("__", 1)[-1]
+            if is_query_service(service):
+                kept.append(t)  # 查询类业务服务保留
+        input_kwargs["tools"] = kept
+        return await next_handler(**input_kwargs)

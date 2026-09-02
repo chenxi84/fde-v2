@@ -970,8 +970,6 @@ def api_agent2_confirm():
                 {"id": tc.get("id"), "name": tc.get("name"), "input": tc.get("input")}
                 for tc in pending2["tool_calls"]
             ]}
-        if t == "REPLY_END":
-            return {"event": "done", "data": full_text["v"]}
         return None
 
     def gen():
@@ -991,7 +989,8 @@ def api_agent2_confirm():
                 yield "data: " + json.dumps({"event": "error", "data": f"HTTP {r.status_code}"}, ensure_ascii=False) + "\n\n"
                 return
             with httpx.stream("GET", f"{AGENT2_BASE}/sessions/{session_id}/stream",
-                              params={"agent_id": _AGENT2_AGENT}, headers=headers, timeout=120) as up:
+                              params={"agent_id": _AGENT2_AGENT}, headers=headers,
+                              timeout=(None, 10, None, None)) as up:
                 for line in up.iter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -1002,10 +1001,14 @@ def api_agent2_confirm():
                     translated = _translate(evt)
                     if translated:
                         yield "data: " + json.dumps(translated, ensure_ascii=False) + "\n\n"
-                    if evt.get("type") == "REPLY_END":
-                        break
+                    if evt.get("type") == "REQUIRE_USER_CONFIRM":
+                        return  # 再次停车，等下一次 confirm
+        except httpx.ReadTimeout:
+            pass  # 静默超时：leader 已收敛
         except Exception as e:
             yield "data: " + json.dumps({"event": "error", "data": str(e)}, ensure_ascii=False) + "\n\n"
+        finally:
+            yield "data: " + json.dumps({"event": "done", "data": full_text["v"]}, ensure_ascii=False) + "\n\n"
 
     return Response(gen(), mimetype="text/event-stream")
 

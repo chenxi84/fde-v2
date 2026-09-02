@@ -131,15 +131,19 @@ async def _fde_middleware_factory(
     角色从 system_prompt 的 <!--FDE_ROLE:xxx--> 标记提取，可靠不依赖 LLM 起名。
     """
     record = await _storage.get_agent(user_id, agent_id)
-    if record is None or record.source != "team":
+    if record is None:
         return []
-    role = agent_roles.extract_role(record.data.system_prompt)
-    if role is None:
-        return []
-    user = users.get_user_by_name(user_id)
-    tool_defs = bridge.tool_schemas(_platform, user)
-    allowed = agent_roles.allowed_tools_for_role(role, tool_defs)
-    return [agent_tool_filter.RoleToolFilterMiddleware(role, allowed)]
+    if record.source == "team":
+        # worker：按角色过滤到各自域
+        role = agent_roles.extract_role(record.data.system_prompt)
+        if role is None:
+            return []
+        user = users.get_user_by_name(user_id)
+        tool_defs = bridge.tool_schemas(_platform, user)
+        allowed = agent_roles.allowed_tools_for_role(role, tool_defs)
+        return [agent_tool_filter.RoleToolFilterMiddleware(role, allowed)]
+    # leader：去掉内置文件工具 + 平台配置工具（编排不需要，收窄缓解全量工具慢）
+    return [agent_tool_filter.LeaderToolFilterMiddleware()]
 
 
 app = create_app(
