@@ -301,19 +301,21 @@ export function agentRail() {
     async loadFiles() {
       const app = self.resolveUploadApp();
       if (!app) { self.importFiles = []; self.exportFiles = []; return; }
+      const seq = (self._filesSeq = (self._filesSeq || 0) + 1);  // 请求序号，防并发覆盖
       self.filesLoading = true;
       try {
         const [imp, exp] = await Promise.all([
           get(`/api/apps/${app}/files?directory=import-file`, { quiet: true }).catch(() => null),
           get(`/api/apps/${app}/files?directory=export-file`, { quiet: true }).catch(() => null),
         ]);
+        if (seq !== self._filesSeq) return;  // 已有更新的请求，丢弃本次结果
         // get() 已解包 .data：返回即 {directory, count, files}
         self.importFiles = (imp && imp.files) || [];
         self.exportFiles = (exp && exp.files) || [];
       } catch {
-        self.importFiles = []; self.exportFiles = [];
+        if (seq === self._filesSeq) { self.importFiles = []; self.exportFiles = []; }
       } finally {
-        self.filesLoading = false;
+        if (seq === self._filesSeq) self.filesLoading = false;
       }
     },
 
