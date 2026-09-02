@@ -24,6 +24,9 @@ export function pageAgentOverview() {
     /* 应用短名：psc/md_customer → md_customer */
     appShort(app) { return String(app).split("/").pop(); },
 
+    /* 工具短名：platform_list_integrations → list_integrations */
+    toolShort(tool) { return String(tool).replace(/^platform_/, ""); },
+
     /* 刷新运行时状态 */
     async refresh() { await self.load(); },
   });

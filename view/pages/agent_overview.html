@@ -16,10 +16,10 @@
           <div class="role-desc" x-text="r.description"></div>
           <div class="role-bind">
             <template x-if="r.apps.length">
-              <span x-text="'绑定应用：' + r.apps.map(appShort).join('、')"></span>
+              <div x-text="'绑定应用：' + r.apps.map(appShort).join('、')"></div>
             </template>
             <template x-if="r.tools.length">
-              <span x-text="'绑定工具：' + r.tools.length + ' 个'"></span>
+              <div x-text="'绑定工具：' + r.tools.map(toolShort).join('、')"></div>
             </template>
           </div>
         </div>
