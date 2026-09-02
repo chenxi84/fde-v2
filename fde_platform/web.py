@@ -850,10 +850,25 @@ def api_agent2_sessions():
         sessions = r.json().get("sessions") or []
         out = []
         for s in sessions:
-            out.append({
-                "session_id": s.get("session_id") or s.get("id"),
-                "title": s.get("name") or "对话",
-            })
+            sess = s.get("session") or {}
+            item = {
+                "session_id": sess.get("id"),
+                "title": sess.get("name") or "对话",
+            }
+            # 提取 team 成员（worker session_id + agent_id + name），供前端订阅 worker 进度
+            team = s.get("team")
+            if isinstance(team, dict):
+                members = []
+                for m in (team.get("members") or []):
+                    agent = m.get("agent") or {}
+                    members.append({
+                        "name": (agent.get("data") or {}).get("name") or "worker",
+                        "agent_id": agent.get("id"),
+                        "session_id": m.get("session_id"),
+                    })
+                if members:
+                    item["team"] = {"members": members}
+            out.append(item)
         return jsonify({"status": "ok", "data": out})
     except Exception:
         return jsonify({"status": "error", "message": "agent_service 不可用"})
@@ -884,11 +899,12 @@ def api_agent2_session_delete(sid):
 
 @app.route("/api/agent2/sessions/<sid>/messages", methods=["GET"])
 def api_agent2_session_messages(sid):
-    """历史消息（翻译成现有 OpenAI 格式）。"""
+    """历史消息（翻译成现有 OpenAI 格式）。agent_id 可由调用方指定（查 worker 历史时传 worker agent）。"""
     headers = _agent2_headers()
+    agent_id = request.args.get("agent_id") or _AGENT2_AGENT
     try:
         r = httpx.get(f"{AGENT2_BASE}/sessions/{sid}/messages",
-                      params={"agent_id": _AGENT2_AGENT}, headers=headers, timeout=30)
+                      params={"agent_id": agent_id}, headers=headers, timeout=30)
         r.raise_for_status()
         raw = r.json().get("messages") or []
         return jsonify({"status": "ok", "data": _agent2_to_openai(raw)})
