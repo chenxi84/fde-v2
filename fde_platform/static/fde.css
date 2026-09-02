@@ -164,6 +164,13 @@ aside.agent-rail > div { flex: 1; min-width: 0; min-height: 0; display: flex; }
   background: none; border: none; padding: 0 2px; line-height: 1; }
 .fp-act:hover { color: var(--prime); }
 
+/* 团队 worker 行（实时流式） */
+.fp-worker { padding: 5px 10px; border-bottom: 1px solid #eef0f3; }
+.fp-worker:last-child { border-bottom: none; }
+.fp-worker-hd { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.fp-worker-text { font-size: 11px; color: #8896a8; line-height: 1.5; margin-top: 2px;
+  word-break: break-all; }
+
 /* 列表页占满屏幕：不设 max-width 上限（平台控制台页另有 .pf main 覆盖，不受影响） */
 main { padding: 18px 24px 36px; width: 100%; margin: 0 auto; }
 

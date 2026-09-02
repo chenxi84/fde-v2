@@ -129,6 +129,10 @@ export function agentRail() {
             tools.push(toolDisp(evt.data));
             self.live.tool_calls = [...tools];
             self.progress = `正在调用 ${toolDisp(evt.data)}`;
+            // leader 建队：启动团队实时监控（轮询成员 + 订阅 worker 流式）
+            if (evt.data === "TeamCreate" || evt.data === "AgentCreate") {
+              this.watchTeam(sid);
+            }
           }
           else if (evt.event === "done") {
             self.live.content = evt.data || self.live.content;
@@ -155,8 +159,6 @@ export function agentRail() {
         self.progress = "";
         this.commitLive();
         await self.loadSessions();
-        // 多智能体：leader 收敛后，加载 team 成员 + 各 worker 最近工具（状态可见）
-        if (sid) this.loadTeam(sid);
       } catch (e) {
         self.progress = "";
         if (self.live && !self.live.content) self.live.content = "⚠ 请求失败，请重试";
@@ -346,41 +348,65 @@ export function agentRail() {
       }
     },
 
-    /* ---- 多智能体团队可见（方案 3 第一步）---- */
+    /* ---- 多智能体团队实时监控（方案 3：成员实时出现 + worker 流式）---- */
 
-    /* 加载当前会话的 team 成员 + 各 worker 最近工具调用。
+    /* leader 建队后启动：轮询 team 成员，出现后订阅各 worker 的 stream 实时更新。
        只展示「谁 + 调了什么工具」，不展示结论文本（避免与 leader 收敛报告重复）。 */
-    async loadTeam(sid) {
-      if (!sid) { self.team = null; return; }
-      const sessions = await get("/api/agent2/sessions", { quiet: true }).catch(() => []);
-      const cur = (sessions || []).find((s) => s.session_id === sid);
-      if (!cur || !cur.team || !cur.team.members || !cur.team.members.length) {
-        self.team = null;
-        return;
+    async watchTeam(sid) {
+      if (self._teamWatching === sid) return;  // 已在监控，避免重复启动
+      self._teamWatching = sid;
+      let members = null;
+      for (let i = 0; i < 10; i++) {
+        const sessions = await get("/api/agent2/sessions", { quiet: true }).catch(() => []);
+        const cur = (sessions || []).find((s) => s.session_id === sid);
+        if (cur && cur.team && cur.team.members && cur.team.members.length) {
+          members = cur.team.members;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 1000));
       }
-      const members = [];
-      for (const m of cur.team.members) {
-        const tools = await this.collectWorkerTools(m);
-        members.push({ name: m.name, tools });
-      }
-      self.team = { members };
+      if (!members) { self._teamWatching = null; return; }
+      self.team = {
+        members: members.map((m) => ({
+          name: m.name, agent_id: m.agent_id, session_id: m.session_id,
+          tools: [], text: "", done: false,
+        })),
+      };
+      for (const member of self.team.members) this.watchWorker(member);
     },
 
-    /* 读单个 worker 的历史，提取其调用过的工具名 */
-    async collectWorkerTools(member) {
-      const msgs = await get(
-        `/api/agent2/sessions/${encodeURIComponent(member.session_id)}/messages?agent_id=${encodeURIComponent(member.agent_id)}`,
-        { quiet: true }).catch(() => null);
-      const tools = [];
-      for (const m of (msgs || [])) {
-        if (m && m.role === "assistant") {
-          for (const tc of (m.tool_calls || [])) {
-            const name = (tc && tc.function && tc.function.name) || (tc && tc.name) || "";
-            if (name) tools.push(toolDisp(name));
+    /* 订阅单个 worker 的 stream，实时累积其工具调用 + 流式文本 */
+    async watchWorker(member) {
+      try {
+        const url = `/api/agent2/sessions/${encodeURIComponent(member.session_id)}/stream?agent_id=${encodeURIComponent(member.agent_id)}`;
+        const resp = await fetch(url);
+        if (!resp.ok || !resp.body) { member.done = true; return; }
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let idx;
+          while ((idx = buf.indexOf("\n\n")) >= 0) {
+            const frame = buf.slice(0, idx).trim();
+            buf = buf.slice(idx + 2);
+            if (!frame.startsWith("data:")) continue;
+            let evt; try { evt = JSON.parse(frame.slice(5).trim()); } catch { continue; }
+            const t = evt.type;
+            if (t === "TOOL_CALL_START") {
+              const name = toolDisp(evt.tool_call_name || "");
+              if (name && !member.tools.includes(name)) member.tools.push(name);
+            } else if (t === "TEXT_BLOCK_DELTA") {
+              member.text += (evt.delta || "");
+            } else if (t === "REPLY_END") {
+              member.done = true;
+              return;
+            }
           }
         }
-      }
-      return tools;
+      } catch { member.done = true; }
     },
 
     /* 文件大小人可读格式 */

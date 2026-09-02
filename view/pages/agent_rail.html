@@ -113,15 +113,18 @@
     </div>
   </div>
 
-  <!-- ── 多智能体团队可见（方案 3 第一步：成员 + 最近工具）── -->
+  <!-- ── 多智能体团队实时监控（方案 3：成员实时出现 + worker 流式）── -->
   <div class="fp" x-show="team && team.members && team.members.length" x-cloak>
     <div class="fp-sec-hd">
       <span class="fp-sec-title">👥 团队专家</span>
     </div>
     <template x-for="m in team.members" :key="m.name">
-      <div class="fp-row">
-        <span class="fp-name" x-text="m.name"></span>
-        <span class="fp-meta" x-text="m.tools.length ? m.tools.join('、') : '（执行中…）'"></span>
+      <div class="fp-worker">
+        <div class="fp-worker-hd">
+          <span class="fp-name" x-text="m.name + (m.done ? ' ✓' : ' …')"></span>
+          <span class="fp-meta" x-text="m.tools.length ? m.tools.join('、') : '（思考中）'"></span>
+        </div>
+        <div class="fp-worker-text" x-show="m.text" x-text="m.text.slice(0, 100)"></div>
       </div>
     </template>
   </div>
