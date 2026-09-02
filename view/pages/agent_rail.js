@@ -47,7 +47,9 @@ export function agentRail() {
       });
       /* 页面切换时刷新文件列表（shell.js 路由变化后触发） */
       window.addEventListener("fde:route-changed", () => { if (self.filesOpen) self.loadFiles(); });
-      self.loadFiles();   // 默认自动展开，初始即加载当前页文件
+      // 初始加载延迟到 window.__fdePage 稳定：shell 的 syncRoute 要等 /api/my_pages
+      // 异步返回后才把 __fdePage 从初始 dashboard 更新为实际页，过早读会导致 resolveUploadApp 返回 null
+      setTimeout(() => self.loadFiles(), 600);
     },
 
     async loadSessions() {
