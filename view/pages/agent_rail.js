@@ -300,7 +300,8 @@ export function agentRail() {
     /* 同时加载 import-file / export-file 两个目录 */
     async loadFiles() {
       const app = self.resolveUploadApp();
-      if (!app) { self.importFiles = []; self.exportFiles = []; return; }
+      if (!app) { self.hasApp = false; self.importFiles = []; self.exportFiles = []; return; }
+      self.hasApp = true;  // 显式更新（getter 会被 Alpine 缓存，见上方定义）
       const seq = (self._filesSeq = (self._filesSeq || 0) + 1);  // 请求序号，防并发覆盖
       self.filesLoading = true;
       try {
@@ -368,8 +369,8 @@ export function agentRail() {
       return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
     },
 
-    /* 当前页是否有关联应用（控制文件面板可用性） */
-    get hasApp() { return !!self.resolveUploadApp(); },
+    /* 当前页是否有关联应用（普通响应式属性，loadFiles 里显式更新——getter 会被 Alpine 缓存失效） */
+    hasApp: false,
   });
   return self;
 }
