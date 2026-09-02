@@ -41,8 +41,10 @@ async def main():
         r = await c.post(f"{BASE}/agent/", json={
             "name": "leader",
             "system_prompt": (
-                "你是 FDE 平台助手，能调用业务服务工具（工具名形如 psc__md_customer__list）。"
-                "用户要查数据或操作业务时，直接调用对应工具，用结果回答。"
+                "你是产销协同的多智能体编排 leader。你持有团队工具（TeamCreate/AgentCreate/TeamSay），"
+                "遇到需要多领域协作的任务时必须组建团队：先 TeamCreate 建团队，再用 AgentCreate "
+                "按 subagent_type 创建成员（可选类型：sales/planning/inventory/delivery），"
+                "用 TeamSay 给成员派活。"
             ),
         }, headers=h)
         r.raise_for_status()
@@ -63,11 +65,11 @@ async def main():
         session_id = r.json()["session_id"]
         print(f"[4] session_id = {session_id}")
 
-        # 5. 触发「调 FDE 工具」任务
+        # 5. 触发建队任务
         msg = {"role": "user", "name": "user",
                "content": [{"type": "text", "text": (
-                   "请调用工具查一下客户主数据列表（psc 组的 md_customer 应用），"
-                   "告诉我一共有多少客户。"
+                   "客户突然加单，请组建一个团队，分别由销售、计划、库存、交付四位专家"
+                   "协同分析应对。先建团队，再按角色类型创建成员并派活。"
                )}]}
         r = await c.post(f"{BASE}/chat/", json={
             "agent_id": agent_id, "session_id": session_id, "input": msg,
@@ -75,9 +77,9 @@ async def main():
         r.raise_for_status()
         print(f"[5] chat 触发: {r.json()}")
 
-        # 6. 读 SSE stream：打印工具调用事件（看 FDE 工具是否被真实调用），
+        # 6. 读 SSE stream：打印工具调用事件（看 subagent_type 建对角色），
         #    文本增量只累积，最后打印完整回复。
-        print("[6] 订阅 stream，观察 FDE 工具调用…")
+        print("[6] 订阅 stream，观察建队 + 角色类型…")
         text_parts = []
         async with c.stream("GET", f"{BASE}/sessions/{session_id}/stream",
                             params={"agent_id": agent_id}, headers=h) as resp:
@@ -90,11 +92,12 @@ async def main():
                 t = evt.get("type")
                 if t == "TEXT_BLOCK_DELTA":
                     text_parts.append(evt.get("delta", "") or "")
-                elif t in ("TEXT_BLOCK_END", "REPLY_END", "TOOL_CALL_START",
-                           "TOOL_CALL_END", "TOOL_RESULT", "REPLY_START"):
-                    extra = {k: v for k, v in evt.items() if k in (
-                        "tool_call_name", "tool_name", "name", "input", "output")}
-                    print(f"    [{t}] {extra}")
+                elif t == "TOOL_CALL_START":
+                    name = evt.get("tool_call_name") or evt.get("name") or ""
+                    inp = evt.get("input") or evt.get("tool_input") or evt.get("arguments") or ""
+                    print(f"    [TOOL_CALL] {name} {str(inp)[:160]}")
+                elif t in ("REPLY_END", "REPLY_START", "TOOL_CALL_END"):
+                    print(f"    [{t}]")
                     if t == "REPLY_END":
                         break
         print("\n=== leader 最终回复 ===")

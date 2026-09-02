@@ -20,6 +20,7 @@ from agentscope.permission import PermissionBehavior, PermissionDecision
 from agentscope.tool import FunctionTool
 
 from fde_platform import agentscope_bridge as bridge
+from fde_platform import agent_roles
 from fde_platform import users
 from fde_platform.runtime import FdePlatform
 
@@ -121,6 +122,7 @@ app = create_app(
     message_bus=InMemoryMessageBus(),
     workspace_manager=LocalWorkspaceManager(basedir=_WORKDIR),
     extra_agent_tools=_fde_tool_factory,
+    custom_subagent_templates=agent_roles.AGENT_ROLES,
     title="FDE Agent Service",
 )
 
