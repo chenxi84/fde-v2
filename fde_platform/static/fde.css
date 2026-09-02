@@ -136,6 +136,34 @@ aside.agent-rail > div { flex: 1; min-width: 0; min-height: 0; display: flex; }
 .agent-rail .empty, .agent-rail .muted { color: #8896a8; }
 .agent-rail .tcall { background: #e8f4f2; color: #2a7a6e; }
 
+/* ── Agent 右栏 · 文件面板 ─────────────────────────────── */
+.fp { border: 1px solid #dde3eb; border-radius: 8px; background: #fff; overflow: hidden; }
+.fp-hd { width: 100%; display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 10px; border: none; background: #f0f2f5; cursor: pointer; font-size: 13px; color: #3a4a5e; }
+.fp-hd:hover { background: #e8ebef; }
+.fp-arrow { transition: transform .2s; font-size: 11px; color: #8896a8; }
+.fp-arrow.open { transform: rotate(180deg); }
+.fp-body { max-height: 220px; overflow-y: auto; }
+.fp-empty, .fp-empty-sm { padding: 12px 10px; font-size: 12px; color: #8896a8; text-align: center; }
+.fp-empty-sm { padding: 6px 10px; }
+.fp-sections { display: flex; flex-direction: column; }
+.fp-sec { border-bottom: 1px solid #eef0f3; }
+.fp-sec:last-child { border-bottom: none; }
+.fp-sec-hd { display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 10px; background: #f8f9fb; font-size: 12px; }
+.fp-sec-title { font-weight: 600; color: #3a4a5e; }
+.fp-upload-btn { font-size: 11px; color: var(--prime); cursor: pointer; padding: 2px 8px;
+  border: 1px solid var(--prime); border-radius: 4px; background: transparent; }
+.fp-upload-btn:hover { background: var(--prime); color: #fff; }
+.fp-row { display: flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 12px; }
+.fp-row:hover { background: #f8f9fb; }
+.fp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: #2a3a4e; }
+.fp-meta { flex: none; color: #8896a8; font-size: 11px; white-space: nowrap; }
+.fp-act { flex: none; font-size: 13px; color: #6b7a8f; text-decoration: none; cursor: pointer;
+  background: none; border: none; padding: 0 2px; line-height: 1; }
+.fp-act:hover { color: var(--prime); }
+
 /* 列表页占满屏幕：不设 max-width 上限（平台控制台页另有 .pf main 覆盖，不受影响） */
 main { padding: 18px 24px 36px; width: 100%; margin: 0 auto; }
 

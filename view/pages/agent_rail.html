@@ -50,6 +50,69 @@
     </template>
   </div>
 
+  <!-- ── 文件面板（折叠，展开时展示当前应用 import/export 文件）── -->
+  <div class="fp">
+    <button class="fp-hd" @click="toggleFiles()">
+      <span>📂 应用文件</span>
+      <span class="fp-arrow" :class="{ open: filesOpen }">▾</span>
+    </button>
+    <div class="fp-body" x-show="filesOpen" x-cloak>
+      <template x-if="!hasApp">
+        <div class="fp-empty">当前页无关联应用</div>
+      </template>
+      <template x-if="hasApp && filesLoading">
+        <div class="fp-empty">加载中…</div>
+      </template>
+      <template x-if="hasApp && !filesLoading && !importFiles.length && !exportFiles.length">
+        <div class="fp-empty">当前页没有文件</div>
+      </template>
+      <template x-if="hasApp && !filesLoading && (importFiles.length || exportFiles.length)">
+        <div class="fp-sections">
+          <!-- 导入文件 -->
+          <div class="fp-sec">
+            <div class="fp-sec-hd">
+              <span class="fp-sec-title">📥 导入文件</span>
+              <label class="fp-upload-btn" title="上传到 import-file/">
+                + 上传
+                <input type="file" multiple style="display:none" @change="onFileUpload($event)">
+              </label>
+            </div>
+            <template x-if="!importFiles.length">
+              <div class="fp-empty-sm">暂无文件</div>
+            </template>
+            <template x-for="f in importFiles" :key="f.name">
+              <div class="fp-row">
+                <span class="fp-name" :title="f.name" x-text="f.name"></span>
+                <span class="fp-meta" x-text="fmtSize(f.size)"></span>
+                <a class="fp-act" :href="`/api/apps/${resolveUploadApp()}/files/import-file/${encodeURIComponent(f.name)}`"
+                   title="下载">⬇</a>
+                <button class="fp-act" @click="deleteFile('import-file', f.name)" title="删除">🗑</button>
+              </div>
+            </template>
+          </div>
+          <!-- 导出文件 -->
+          <div class="fp-sec">
+            <div class="fp-sec-hd">
+              <span class="fp-sec-title">📤 导出文件</span>
+            </div>
+            <template x-if="!exportFiles.length">
+              <div class="fp-empty-sm">暂无文件</div>
+            </template>
+            <template x-for="f in exportFiles" :key="f.name">
+              <div class="fp-row">
+                <span class="fp-name" :title="f.name" x-text="f.name"></span>
+                <span class="fp-meta" x-text="fmtSize(f.size)"></span>
+                <a class="fp-act" :href="`/api/apps/${resolveUploadApp()}/files/export-file/${encodeURIComponent(f.name)}`"
+                   title="下载">⬇</a>
+                <button class="fp-act" @click="deleteFile('export-file', f.name)" title="删除">🗑</button>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
   <div class="agent-rail-input">
     <textarea x-model="input" rows="4" @keydown.enter.prevent="send()"
       placeholder="告诉 Agent 要做什么（Enter 发送）…"></textarea>

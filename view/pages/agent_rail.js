@@ -28,6 +28,12 @@ export function agentRail() {
     confirm: null,    // 待人工确认的危险操作 [{id,name,input}]
     uploading: false, // 附件上传中
 
+    /* ---- 文件面板 ---- */
+    filesOpen: true,        // 面板默认自动展开
+    importFiles: [],        // import-file 目录文件列表
+    exportFiles: [],        // export-file 目录文件列表
+    filesLoading: false,
+
     async init() {
       self.tpl = await fetch(new URL("agent_rail.html", import.meta.url)).then((r) => r.text());
       await self.loadSessions();
@@ -39,6 +45,9 @@ export function agentRail() {
         const msg = e.detail && e.detail.message;
         if (msg) { self.input = msg; self.send(); }
       });
+      /* 页面切换时刷新文件列表（shell.js 路由变化后触发） */
+      window.addEventListener("fde:route-changed", () => { if (self.filesOpen) self.loadFiles(); });
+      self.loadFiles();   // 默认自动展开，初始即加载当前页文件
     },
 
     async loadSessions() {
@@ -261,6 +270,7 @@ export function agentRail() {
         self.msgs.push({ role: "assistant", content: `📎 已上传附件：${names} → ${target}/resource/import-file/` });
         self.input = `请读取 ${names}（${target}/resource/import-file/）解析内容，并按该应用的导入服务导入数据`;
         self.scrollEnd();
+        if (self.filesOpen) self.loadFiles();  // 文件面板展开时同步刷新
       } catch (e) {
         toast((e && e.message) || "上传失败", "err");
       } finally {
@@ -268,6 +278,85 @@ export function agentRail() {
         evt.target.value = "";
       }
     },
+
+    /* ---- 文件面板 ---- */
+
+    toggleFiles() {
+      self.filesOpen = !self.filesOpen;
+      if (self.filesOpen) self.loadFiles();
+    },
+
+    /* 同时加载 import-file / export-file 两个目录 */
+    async loadFiles() {
+      const app = self.resolveUploadApp();
+      if (!app) { self.importFiles = []; self.exportFiles = []; return; }
+      self.filesLoading = true;
+      try {
+        const [imp, exp] = await Promise.all([
+          get(`/api/apps/${app}/files?directory=import-file`, { quiet: true }).catch(() => null),
+          get(`/api/apps/${app}/files?directory=export-file`, { quiet: true }).catch(() => null),
+        ]);
+        // get() 已解包 .data：返回即 {directory, count, files}
+        self.importFiles = (imp && imp.files) || [];
+        self.exportFiles = (exp && exp.files) || [];
+      } catch {
+        self.importFiles = []; self.exportFiles = [];
+      } finally {
+        self.filesLoading = false;
+      }
+    },
+
+    async deleteFile(dir, name) {
+      const app = self.resolveUploadApp();
+      if (!app) return;
+      if (!confirm(`删除 ${dir}/${name}？`)) return;
+      try {
+        await del(`/api/apps/${app}/files/${dir}/${encodeURIComponent(name)}`);
+        await self.loadFiles();
+      } catch { /* api.js 统一 toast */ }
+    },
+
+    /* 文件面板内的上传（复用 onAttachChange 逻辑，上传后刷新列表） */
+    async onFileUpload(evt) {
+      const files = evt.target && evt.target.files;
+      if (!files || !files.length) return;
+      const target = self.resolveUploadApp();
+      if (!target) { toast("当前页面没有对应的数据应用", "warn"); evt.target.value = ""; return; }
+      self.uploading = true;
+      try {
+        const fd = new FormData();
+        for (const f of files) fd.append("files", f);
+        const r = await fetch(`/api/apps/${target}/files`, { method: "POST", body: fd });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.status === "error") throw new Error(j.message || `上传失败（HTTP ${r.status}）`);
+        toast(`已上传 ${((j.data || []).length || files.length)} 个文件`);
+        await self.loadFiles();
+      } catch (e) {
+        toast((e && e.message) || "上传失败", "err");
+      } finally {
+        self.uploading = false;
+        evt.target.value = "";
+      }
+    },
+
+    /* 文件大小人可读格式 */
+    fmtSize(b) {
+      if (b == null) return "";
+      if (b < 1024) return b + " B";
+      if (b < 1024 * 1024) return (b / 1024).toFixed(1) + " KB";
+      return (b / (1024 * 1024)).toFixed(1) + " MB";
+    },
+
+    /* mtime（秒级 unix timestamp）→ YYYY-MM-DD HH:mm */
+    fmtTime(t) {
+      if (!t) return "";
+      const d = new Date(t * 1000);
+      const p = (n) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    },
+
+    /* 当前页是否有关联应用（控制文件面板可用性） */
+    get hasApp() { return !!self.resolveUploadApp(); },
   });
   return self;
 }

@@ -95,6 +95,7 @@ export function createShell({ module, brand, pages, components }) {
       const inBiz = this.bizPages.some((p) => p.key === this.route);
       window.__fdePage = (inBiz ? this.module : "_platform") + ":" + this.route;
       window.scrollTo({ top: 0 });
+      window.dispatchEvent(new Event("fde:route-changed"));
     },
     go(key) { location.hash = "#/" + key; },
 
