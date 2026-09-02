@@ -38,6 +38,9 @@ config/.testexec/
 # 实验产出
 spike_out/
 
+# AgentScope agent_service 运行时工作区
+config/agent_workspaces/
+
 # 宣传材料（含个人联系方式、未公开草稿、发布策略等）
 宣传/
 
