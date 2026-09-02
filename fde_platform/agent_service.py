@@ -17,7 +17,7 @@ from agentscope.app.message_bus import InMemoryMessageBus
 from agentscope.app.storage import AsyncSQLAlchemyStorage
 from agentscope.app.workspace_manager import LocalWorkspaceManager
 from agentscope.permission import PermissionBehavior, PermissionDecision
-from agentscope.tool import FunctionTool
+from agentscope.tool import FunctionTool, ToolGroup
 
 from fde_platform import agentscope_bridge as bridge
 from fde_platform import agent_roles
@@ -37,13 +37,6 @@ _DB_URL = os.environ.get(
     f"sqlite+aiosqlite:///{(_BASE / 'agent_service.db').as_posix()}",
 )
 _WORKDIR = str(_BASE / "agent_workspaces")
-
-# 临时工具收窄：环境变量 FDE_AGENT_TOOL_APPS 控制只注入哪些应用（逗号分隔 qualname，
-# 如 "psc/md_customer"）。空 = 全量。全量（197 工具）会让 LLM 首 token 极慢，故验证时
-# 必须收窄；第 4 步「工具过滤 middleware」会取代此临时开关。
-_TOOL_APP_FILTER = set(
-    x.strip() for x in os.environ.get("FDE_AGENT_TOOL_APPS", "").split(",") if x.strip()
-)
 
 # 危险服务判定（与 agent_agentscope.is_dangerous_tool 同口径）：命中即走 HITL 确认。
 _DANGEROUS_PATTERNS = (
@@ -91,15 +84,33 @@ def _slim_schema(schema: dict) -> dict:
     return schema
 
 
-async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str) -> list:
-    """把 FDE 业务服务桥接为 AgentScope 工具（按 user_id → FDE 用户授权过滤）。
+# app qualname → 角色（供 leader 查询工具按领域分组懒加载）
+_APP_ROLE: dict[str, str] = {}
+for _r, _apps in agent_roles.ROLE_APPS.items():
+    for _a in _apps:
+        _APP_ROLE[_a] = _r
 
-    签名固定为 AgentToolFactory：``(user_id, agent_id, session_id) → list[ToolBase]``。
-    每次组装 agent 时调用（授权变更即时生效）；未知用户返回空工具（fail-closed）。
+# 角色 → 查询组描述（ResetTools 的 input_schema 用，LLM 据此决定激活哪个组）
+_QUERY_GROUP_DESC = {
+    "sales": "销售/需求域查询（预测/历史/客户/月度版本/达成率）",
+    "planning": "计划/排产域查询（项目/需求/主计划/需求池）",
+    "inventory": "物料/库存域查询（物料/断点/替换/策略/推移）",
+    "delivery": "交付/出库域查询（出库计划）",
+    "other": "其他应用查询",
+}
+
+
+async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str):
+    """把 FDE 业务服务桥接为 AgentScope 工具。
+
+    返回 ``(tools, tool_groups)`` 元组（配合 [FDE-PATCH] 的 get_toolkit）：
+    - leader：propose_skill 进 basic；查询类服务按领域装进 ToolGroup（懒加载压首 token）
+    - worker：全量工具进 basic，由 RoleToolFilterMiddleware 按角色过滤
+    每次组装 agent 时调用（授权变更即时生效）；未知用户返回空（fail-closed）。
     """
     user = users.get_user_by_name(user_id)
     if user is None:
-        return []
+        return ([], [])
 
     def _make_call(tool_name: str):
         # 闭包捕获工具名 + user，避免与工具自身参数（如 propose_skill 的 name）冲突
@@ -107,27 +118,42 @@ async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str) -> lis
             return bridge.execute(_platform, user, tool_name, kwargs)
         return _call
 
-    tools = []
-    for t in bridge.tool_schemas(_platform, user):
-        app = t["_meta"]["app"]
+    def _mk_ft(t):
         name = t["function"]["name"]
-        if _TOOL_APP_FILTER:
-            if app == "__platform__":
-                if not name.endswith("propose_skill"):
-                    continue
-            elif app not in _TOOL_APP_FILTER:
-                continue
-        ft = FunctionTool(
-            _make_call(name),
-            name=name,
-            description=t["function"]["description"],
-        )
+        ft = FunctionTool(_make_call(name), name=name, description=t["function"]["description"])
         ft.input_schema = _slim_schema(t["function"]["parameters"])
         # 权限：普通工具 ALLOW（授权已由 execute 层 fail-closed）；危险工具 ASK（HITL）。
-        # FunctionTool 默认 check_permissions 返回 ASK，会令每次调用都停车等确认，故覆盖。
         ft.check_permissions = _mk_ask() if _is_dangerous(name) else _mk_allow()
-        tools.append(ft)
-    return tools
+        return ft
+
+    defs = bridge.tool_schemas(_platform, user)
+
+    # 区分 leader / worker
+    record = await _storage.get_agent(user_id, agent_id)
+    if record is not None and record.source == "team":
+        # worker：全量工具（middleware 按角色过滤）
+        return ([_mk_ft(t) for t in defs], [])
+
+    # leader：propose_skill 进 basic，查询工具按领域分组（懒加载）
+    basic = []
+    groups: dict[str, list] = {}
+    for t in defs:
+        app = t["_meta"]["app"]
+        name = t["function"]["name"]
+        service = name.rsplit("__", 1)[-1]
+        if app == "__platform__":
+            if name.endswith("propose_skill"):
+                basic.append(_mk_ft(t))
+            continue
+        if not agent_tool_filter.is_query_service(service):
+            continue  # 写服务/文件工具：leader 编排不需要
+        role = _APP_ROLE.get(app, "other")
+        groups.setdefault(role, []).append(_mk_ft(t))
+    tool_groups = [
+        ToolGroup(name=f"{r}_query", description=_QUERY_GROUP_DESC.get(r, r), tools=fts)
+        for r, fts in sorted(groups.items())
+    ]
+    return (basic, tool_groups)
 
 
 # storage 提到模块级：middleware 工厂需闭包捕获它查 AgentRecord（识别 worker 角色）。
