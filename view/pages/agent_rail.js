@@ -150,8 +150,6 @@ export function agentRail() {
         self.progress = "";
         this.commitLive();
         await self.loadSessions();
-        // 多智能体：leader 回复后，异步收集各 worker 的执行结果并汇总展示
-        if (sid) this.watchTeamProgress(sid);
       } catch (e) {
         self.progress = "";
         if (self.live && !self.live.content) self.live.content = "⚠ 请求失败，请重试";
@@ -200,57 +198,6 @@ export function agentRail() {
         tool_calls: tools.length ? [...tools] : undefined,
       });
       self.live = null;
-    },
-
-    /* ---- 多智能体 team 进度（方案 1：让 worker 执行可见）---- */
-
-    /* leader 回复后，异步收集各 worker 的执行结果并汇总展示。
-       worker 是异步独立 session，其执行结果存在各自历史 messages 里，故轮询读历史。 */
-    async watchTeamProgress(sid) {
-      let members = null;
-      for (let i = 0; i < 4; i++) {
-        const sessions = await get("/api/agent2/sessions", { quiet: true }).catch(() => []);
-        const cur = (sessions || []).find((s) => s.session_id === sid);
-        if (cur && cur.team && cur.team.members && cur.team.members.length) {
-          members = cur.team.members;
-          break;
-        }
-        await new Promise((r) => setTimeout(r, 1200));
-      }
-      if (!members) return;
-      const results = (await Promise.all(members.map((m) => this.collectWorker(m)))).filter(Boolean);
-      const lines = results.map((r) => {
-        const toolStr = r.tools.length ? r.tools.map(toolDisp).join("、") : "（未调工具）";
-        const txt = r.text ? " —— " + r.text.slice(0, 120) : "";
-        return `【${r.name}】${toolStr}${txt}`;
-      });
-      if (lines.length) {
-        self.msgs.push({ role: "assistant", content: "🤖 团队专家已执行：\n" + lines.join("\n") });
-        self.scrollEnd();
-      }
-    },
-
-    /* 轮询读单个 worker 的历史消息，提取其调用的工具 + 最终文本 */
-    async collectWorker(member) {
-      for (let i = 0; i < 6; i++) {
-        const msgs = await get(
-          `/api/agent2/sessions/${encodeURIComponent(member.session_id)}/messages?agent_id=${encodeURIComponent(member.agent_id)}`,
-          { quiet: true }).catch(() => null);
-        const tools = [];
-        let text = "";
-        for (const m of (msgs || [])) {
-          if (m && m.role === "assistant") {
-            for (const tc of (m.tool_calls || [])) {
-              const name = (tc && (tc.function && tc.function.name)) || (tc && tc.name) || "";
-              if (name) tools.push(name);
-            }
-            if (m.content) text = m.content;
-          }
-        }
-        if (tools.length || text) return { name: member.name, tools, text };
-        await new Promise((r) => setTimeout(r, 1500));
-      }
-      return null;
     },
 
     async newSession() {

@@ -820,7 +820,7 @@ def api_agent2_chat_stream():
             # 持续读直到静默超时，把多轮文本合并成最终 done。
             with httpx.stream("GET", f"{AGENT2_BASE}/sessions/{sid}/stream",
                               params={"agent_id": _AGENT2_AGENT}, headers=headers,
-                              timeout=(None, 10, None, None)) as up:
+                              timeout=(None, 30, None, None)) as up:
                 for line in up.iter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -990,7 +990,7 @@ def api_agent2_confirm():
                 return
             with httpx.stream("GET", f"{AGENT2_BASE}/sessions/{session_id}/stream",
                               params={"agent_id": _AGENT2_AGENT}, headers=headers,
-                              timeout=(None, 10, None, None)) as up:
+                              timeout=(None, 30, None, None)) as up:
                 for line in up.iter_lines():
                     if not line.startswith("data:"):
                         continue
