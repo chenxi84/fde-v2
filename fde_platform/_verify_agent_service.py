@@ -43,8 +43,8 @@ async def main():
             "system_prompt": (
                 "你是产销协同的多智能体编排 leader。你持有团队工具（TeamCreate/AgentCreate/TeamSay），"
                 "遇到需要多领域协作的任务时必须组建团队：先 TeamCreate 建团队，再用 AgentCreate "
-                "按 subagent_type 创建成员（可选类型：sales/planning/inventory/delivery），"
-                "用 TeamSay 给成员派活。"
+                "按 subagent_type 创建成员（可选类型：sales/planning/inventory/delivery/"
+                "integration/scheduler），用 TeamSay 给成员派活。"
             ),
         }, headers=h)
         r.raise_for_status()
@@ -68,8 +68,9 @@ async def main():
         # 5. 触发建队任务
         msg = {"role": "user", "name": "user",
                "content": [{"type": "text", "text": (
-                   "客户突然加单，请组建一个团队，分别由销售、计划、库存、交付四位专家"
-                   "协同分析应对。先建团队，再按角色类型创建成员并派活。"
+                   "请组建一个团队，负责配置平台的定时任务和外部系统接口："
+                   "一个定时任务专家（scheduler）和一个接口集成专家（integration）。"
+                   "先建团队，再按角色类型创建这两个成员并派活。"
                )}]}
         r = await c.post(f"{BASE}/chat/", json={
             "agent_id": agent_id, "session_id": session_id, "input": msg,

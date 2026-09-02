@@ -1,19 +1,18 @@
-"""psc 智能体角色定义（开发时定义，落盘即生效）。
+"""智能体角色定义（开发时定义，落盘即生效）。
 
-角色 = 领域分工的投影：骨架（system prompt 模板 + 绑定的应用集合）代码定义，
+角色 = 领域分工的投影：骨架（system prompt 模板 + 绑定的应用/工具集合）代码定义，
 权限复用 FDE 授权体系（见 design-plus/多智能体方案.md §三）。
 
-一个角色 = SubAgentTemplate（供 leader 建队）+ 绑定的应用集合（供第 4 步工具隔离）。
+一个角色 = SubAgentTemplate（供 leader 建队）+ 绑定集合（供第 4 步工具隔离）。
 
-psc 四角色（产销协同链）：
-- sales      销售/需求侧 —— 预测、历史、拟合、客户、月度版本、达成率
-- planning   计划/排产侧 —— 项目、零件、需求、主计划、需求池
-- inventory  物料/库存侧 —— 物料、断点、替换、库存策略、库存推移
-- delivery   交付/出库侧 —— 出库计划
+两类角色：
+- **业务角色**（ROLE_APPS）：绑定应用，映射产销协同链 —— sales/planning/inventory/delivery。
+- **平台运维角色**（ROLE_PLATFORM_TOOLS）：绑定平台工具，映射平台配置 ——
+  integration（接口集成）/ scheduler（定时任务）。仅 admin 建队时可用（底层工具 admin 专用）。
 """
 from agentscope.app import SubAgentTemplate
 
-# 角色 → 绑定的应用（qualname）。供 system prompt 描述 + 第 4 步工具隔离 middleware。
+# ── 业务角色：角色 → 绑定的应用（qualname）─────────────────────────
 ROLE_APPS: dict[str, list[str]] = {
     "sales": [
         "psc/md_customer", "psc/md_monthly_version", "psc/attainment",
@@ -32,19 +31,38 @@ ROLE_APPS: dict[str, list[str]] = {
     ],
 }
 
+# ── 平台运维角色：角色 → 绑定的平台工具（platform_<service>）────────
+ROLE_PLATFORM_TOOLS: dict[str, list[str]] = {
+    "integration": [
+        "platform_list_integrations", "platform_discover_integrations",
+        "platform_save_integration", "platform_delete_integration",
+        "platform_integration_logs", "platform_test_integration",
+    ],
+    "scheduler": [
+        "platform_list_jobs", "platform_create_job", "platform_update_job",
+        "platform_delete_job", "platform_set_job_enabled", "platform_run_job_now",
+    ],
+}
+
 _ROLE_LABEL: dict[str, str] = {
     "sales": "销售/需求专家",
     "planning": "计划/排产专家",
     "inventory": "物料/库存专家",
     "delivery": "交付/出库专家",
+    "integration": "接口集成专家",
+    "scheduler": "定时任务专家",
 }
+
+# 平台运维角色（仅 admin 可建，见 agent_service 的 subagent_type 收口）
+PLATFORM_ROLES = set(ROLE_PLATFORM_TOOLS)
 
 
 def _app_short(app: str) -> str:
     return app.split("/")[-1]
 
 
-def _build_template(role: str) -> SubAgentTemplate:
+def _build_app_template(role: str) -> SubAgentTemplate:
+    """业务角色：绑定应用集合。"""
     apps = ROLE_APPS[role]
     label = _ROLE_LABEL[role]
     app_list = "、".join(_app_short(a) for a in apps)
@@ -63,5 +81,27 @@ def _build_template(role: str) -> SubAgentTemplate:
     )
 
 
+def _build_platform_template(role: str) -> SubAgentTemplate:
+    """平台运维角色：绑定平台工具集合（integration / scheduler）。"""
+    tools = ROLE_PLATFORM_TOOLS[role]
+    label = _ROLE_LABEL[role]
+    tool_list = "、".join(tools)
+    prompt = (
+        f"你是{{member_name}}，{label}，隶属团队'{{team_name}}'（由{{leader_name}}领导）。\n\n"
+        f"团队目标：{{team_description}}\n"
+        f"你的分工：{{member_description}}\n\n"
+        f"你只负责以下平台工具，不要越界调用业务应用服务或其它平台工具：\n{tool_list}\n\n"
+        f"完成分配给你的任务后，用 TeamSay 向 {{leader_name}} 回报结果。"
+    )
+    return SubAgentTemplate(
+        type=role,
+        description=f"{label}，负责 {tool_list} 等平台工具",
+        system_prompt_template=prompt,
+    )
+
+
 # 供 create_app(custom_subagent_templates=AGENT_ROLES) 注册。
-AGENT_ROLES: list[SubAgentTemplate] = [_build_template(r) for r in ROLE_APPS]
+AGENT_ROLES: list[SubAgentTemplate] = (
+    [_build_app_template(r) for r in ROLE_APPS]
+    + [_build_platform_template(r) for r in ROLE_PLATFORM_TOOLS]
+)
