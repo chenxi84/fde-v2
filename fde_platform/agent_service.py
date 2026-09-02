@@ -21,6 +21,7 @@ from agentscope.tool import FunctionTool
 
 from fde_platform import agentscope_bridge as bridge
 from fde_platform import agent_roles
+from fde_platform import agent_tool_filter
 from fde_platform import users
 from fde_platform.runtime import FdePlatform
 
@@ -117,11 +118,36 @@ async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str) -> lis
     return tools
 
 
+# storage 提到模块级：middleware 工厂需闭包捕获它查 AgentRecord（识别 worker 角色）。
+_storage = AsyncSQLAlchemyStorage(_DB_URL, create_tables=True)
+
+
+async def _fde_middleware_factory(
+    user_id: str, agent_id: str, session_id: str, workspace=None,
+) -> list:
+    """工具过滤 middleware 工厂：按 worker 角色返回 RoleToolFilterMiddleware。
+
+    签名固定为 AgentMiddlewareFactory。只对 team 来源的 worker 生效（leader 不过滤）；
+    角色从 system_prompt 的 <!--FDE_ROLE:xxx--> 标记提取，可靠不依赖 LLM 起名。
+    """
+    record = await _storage.get_agent(user_id, agent_id)
+    if record is None or record.source != "team":
+        return []
+    role = agent_roles.extract_role(record.data.system_prompt)
+    if role is None:
+        return []
+    user = users.get_user_by_name(user_id)
+    tool_defs = bridge.tool_schemas(_platform, user)
+    allowed = agent_roles.allowed_tools_for_role(role, tool_defs)
+    return [agent_tool_filter.RoleToolFilterMiddleware(role, allowed)]
+
+
 app = create_app(
-    storage=AsyncSQLAlchemyStorage(_DB_URL, create_tables=True),
+    storage=_storage,
     message_bus=InMemoryMessageBus(),
     workspace_manager=LocalWorkspaceManager(basedir=_WORKDIR),
     extra_agent_tools=_fde_tool_factory,
+    extra_agent_middlewares=_fde_middleware_factory,
     custom_subagent_templates=agent_roles.AGENT_ROLES,
     title="FDE Agent Service",
 )
