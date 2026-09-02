@@ -788,14 +788,14 @@ def api_agent2_chat_stream():
     pending = {"reply_id": None, "tool_calls": []}
 
     def _translate(evt):
+        """翻译单个事件。REPLY_END 不产出（多轮合并由 gen 层处理）。"""
         t = evt.get("type")
         if t == "TEXT_BLOCK_DELTA":
             d = evt.get("delta", "") or ""
             full_text["v"] += d
             return {"event": "delta", "data": d}
         if t == "TOOL_CALL_START":
-            name = evt.get("tool_call_name") or ""
-            return {"event": "tool", "data": name}
+            return {"event": "tool", "data": evt.get("tool_call_name") or ""}
         if t == "REQUIRE_USER_CONFIRM":
             pending["reply_id"] = evt.get("reply_id")
             pending["tool_calls"] = evt.get("tool_calls") or []
@@ -804,8 +804,6 @@ def api_agent2_chat_stream():
                 {"id": tc.get("id"), "name": tc.get("name"), "input": tc.get("input")}
                 for tc in pending["tool_calls"]
             ]}
-        if t == "REPLY_END":
-            return {"event": "done", "data": full_text["v"]}
         return None
 
     def gen():
@@ -817,9 +815,12 @@ def api_agent2_chat_stream():
             if r.status_code >= 400:
                 yield "data: " + json.dumps({"event": "error", "data": f"HTTP {r.status_code}"}, ensure_ascii=False) + "\n\n"
                 return
-            # 订阅 stream 并翻译
+            # 订阅 stream 并翻译；read timeout 10s = 静默超时（leader 收敛后无新事件）。
+            # 多智能体 leader 收到 worker 回报会开启新一轮 reply，故 REPLY_END 不 break，
+            # 持续读直到静默超时，把多轮文本合并成最终 done。
             with httpx.stream("GET", f"{AGENT2_BASE}/sessions/{sid}/stream",
-                              params={"agent_id": _AGENT2_AGENT}, headers=headers, timeout=120) as up:
+                              params={"agent_id": _AGENT2_AGENT}, headers=headers,
+                              timeout=(None, 10, None, None)) as up:
                 for line in up.iter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -830,10 +831,14 @@ def api_agent2_chat_stream():
                     translated = _translate(evt)
                     if translated:
                         yield "data: " + json.dumps(translated, ensure_ascii=False) + "\n\n"
-                    if evt.get("type") == "REPLY_END":
-                        break  # stream 在 REPLY_END 后不关闭，必须主动断（否则 iter_lines 挂起）
+                    if evt.get("type") == "REQUIRE_USER_CONFIRM":
+                        return  # HITL 停车，等 confirm 续跑
+        except httpx.ReadTimeout:
+            pass  # 静默超时：leader 已收敛
         except Exception:
             yield "data: " + json.dumps({"event": "error", "data": "agent_service 调用失败"}, ensure_ascii=False) + "\n\n"
+        finally:
+            yield "data: " + json.dumps({"event": "done", "data": full_text["v"]}, ensure_ascii=False) + "\n\n"
 
     return Response(gen(), mimetype="text/event-stream")
 
