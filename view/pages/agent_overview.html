@@ -1,54 +1,58 @@
 <!-- 平台智能体总览：角色定义（只读）+ 运行时团队 -->
 <div class="bd">
   <div class="card">
-    <div class="tagline">
-      <span class="overline">智能体角色</span>
-      <span class="muted" x-text="'共 ' + roles.length + ' 个角色（开发时定义，只读）'"></span>
+    <div class="hd">
+      <h3>智能体角色</h3>
+      <span class="hint" x-text="'共 ' + roles.length + ' 个角色 · 开发时定义（只读）'"></span>
     </div>
-    <div class="role-grid">
-      <template x-for="r in roles" :key="r.type">
-        <div class="role-card">
-          <div class="role-hd">
-            <span class="role-name" x-text="r.label"></span>
-            <span class="tag" :class="r.kind === '平台' ? 't-amber' : 't-teal'" x-text="r.kind"></span>
+    <div class="bd">
+      <div class="role-grid">
+        <template x-for="r in roles" :key="r.type">
+          <div class="role-card">
+            <div class="role-hd">
+              <span class="role-name" x-text="r.label"></span>
+              <span class="tag" :class="r.kind === '平台' ? 't-amber' : 't-teal'" x-text="r.kind"></span>
+            </div>
+            <div class="role-type" x-text="r.type"></div>
+            <div class="role-desc" x-text="r.description"></div>
+            <div class="role-bind">
+              <template x-if="r.apps.length">
+                <div x-text="'绑定应用：' + r.apps.map(appShort).join('、')"></div>
+              </template>
+              <template x-if="r.tools.length">
+                <div x-text="'绑定工具：' + r.tools.map(toolShort).join('、')"></div>
+              </template>
+            </div>
           </div>
-          <div class="role-type" x-text="r.type"></div>
-          <div class="role-desc" x-text="r.description"></div>
-          <div class="role-bind">
-            <template x-if="r.apps.length">
-              <div x-text="'绑定应用：' + r.apps.map(appShort).join('、')"></div>
-            </template>
-            <template x-if="r.tools.length">
-              <div x-text="'绑定工具：' + r.tools.map(toolShort).join('、')"></div>
-            </template>
-          </div>
-        </div>
-      </template>
+        </template>
+      </div>
     </div>
   </div>
 
   <div class="card">
-    <div class="tagline">
-      <span class="overline">运行时状态</span>
-      <button class="b-ghost b-sm" @click="refresh()">↻ 刷新</button>
+    <div class="hd">
+      <h3>运行时状态</h3>
+      <button class="b-ghost b-sm" style="margin-left:auto" @click="refresh()">↻ 刷新</button>
     </div>
-    <div class="runtime-stats">
-      <span class="stat"><b x-text="runtime.session_count"></b> 会话</span>
-      <span class="stat"><b x-text="runtime.agent_count"></b> Agent</span>
-      <span class="stat"><b x-text="runtime.teams.length"></b> 活跃团队</span>
-    </div>
-    <template x-if="!runtime.teams.length">
-      <div class="empty">暂无活跃团队 —— 在 Agent 对话中发起「组建团队」后此处可见</div>
-    </template>
-    <template x-for="(t, ti) in runtime.teams" :key="t.leader_session">
-      <div class="team-row">
-        <span class="team-leader" x-text="'团队 ' + (ti + 1)"></span>
-        <span class="team-members">
-          <template x-for="m in t.members" :key="m.session_id">
-            <span class="tag t-teal" x-text="m.name"></span>
-          </template>
-        </span>
+    <div class="bd">
+      <div class="runtime-stats">
+        <span class="stat"><b x-text="runtime.session_count"></b> 会话</span>
+        <span class="stat"><b x-text="runtime.agent_count"></b> Agent</span>
+        <span class="stat"><b x-text="runtime.teams.length"></b> 活跃团队</span>
       </div>
-    </template>
+      <template x-if="!runtime.teams.length">
+        <div class="empty">暂无活跃团队 —— 在 Agent 对话中发起「组建团队」后此处可见</div>
+      </template>
+      <template x-for="(t, ti) in runtime.teams" :key="t.leader_session">
+        <div class="team-row">
+          <span class="team-leader" x-text="'团队 ' + (ti + 1)"></span>
+          <span class="team-members">
+            <template x-for="m in t.members" :key="m.session_id">
+              <span class="tag t-teal" x-text="m.name"></span>
+            </template>
+          </span>
+        </div>
+      </template>
+    </div>
   </div>
 </div>
