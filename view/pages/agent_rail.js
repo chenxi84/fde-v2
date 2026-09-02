@@ -34,6 +34,9 @@ export function agentRail() {
     exportFiles: [],        // export-file 目录文件列表
     filesLoading: false,
 
+    /* ---- 多智能体团队可见（方案 3 第一步：成员 + 最近工具，不展示结论文本）---- */
+    team: null,             // { members: [{name, tools: []}] }
+
     async init() {
       self.tpl = await fetch(new URL("agent_rail.html", import.meta.url)).then((r) => r.text());
       await self.loadSessions();
@@ -152,6 +155,8 @@ export function agentRail() {
         self.progress = "";
         this.commitLive();
         await self.loadSessions();
+        // 多智能体：leader 收敛后，加载 team 成员 + 各 worker 最近工具（状态可见）
+        if (sid) this.loadTeam(sid);
       } catch (e) {
         self.progress = "";
         if (self.live && !self.live.content) self.live.content = "⚠ 请求失败，请重试";
@@ -339,6 +344,43 @@ export function agentRail() {
         self.uploading = false;
         evt.target.value = "";
       }
+    },
+
+    /* ---- 多智能体团队可见（方案 3 第一步）---- */
+
+    /* 加载当前会话的 team 成员 + 各 worker 最近工具调用。
+       只展示「谁 + 调了什么工具」，不展示结论文本（避免与 leader 收敛报告重复）。 */
+    async loadTeam(sid) {
+      if (!sid) { self.team = null; return; }
+      const sessions = await get("/api/agent2/sessions", { quiet: true }).catch(() => []);
+      const cur = (sessions || []).find((s) => s.session_id === sid);
+      if (!cur || !cur.team || !cur.team.members || !cur.team.members.length) {
+        self.team = null;
+        return;
+      }
+      const members = [];
+      for (const m of cur.team.members) {
+        const tools = await this.collectWorkerTools(m);
+        members.push({ name: m.name, tools });
+      }
+      self.team = { members };
+    },
+
+    /* 读单个 worker 的历史，提取其调用过的工具名 */
+    async collectWorkerTools(member) {
+      const msgs = await get(
+        `/api/agent2/sessions/${encodeURIComponent(member.session_id)}/messages?agent_id=${encodeURIComponent(member.agent_id)}`,
+        { quiet: true }).catch(() => null);
+      const tools = [];
+      for (const m of (msgs || [])) {
+        if (m && m.role === "assistant") {
+          for (const tc of (m.tool_calls || [])) {
+            const name = (tc && tc.function && tc.function.name) || (tc && tc.name) || "";
+            if (name) tools.push(toolDisp(name));
+          }
+        }
+      }
+      return tools;
     },
 
     /* 文件大小人可读格式 */
