@@ -1013,6 +1013,63 @@ def api_agent2_confirm():
     return Response(gen(), mimetype="text/event-stream")
 
 
+@app.route("/api/agent-overview")
+def api_agent_overview():
+    """智能体总览：静态角色定义（agent_roles）+ 运行时状态（agent_service）。"""
+    from fde_platform import agent_roles
+
+    # 1. 静态角色定义（开发时定义，只读展示）
+    label = getattr(agent_roles, "_ROLE_LABEL", {})
+    tmpl_by_type = {r.type: r for r in agent_roles.AGENT_ROLES}
+    roles = []
+    for rtype in sorted(agent_roles.ALL_ROLES):
+        kind = "平台" if rtype in agent_roles.PLATFORM_ROLES else "业务"
+        tmpl = tmpl_by_type.get(rtype)
+        roles.append({
+            "type": rtype,
+            "label": label.get(rtype, rtype),
+            "kind": kind,
+            "apps": agent_roles.ROLE_APPS.get(rtype, []),
+            "tools": agent_roles.ROLE_PLATFORM_TOOLS.get(rtype, []),
+            "description": tmpl.description if tmpl else "",
+            "system_prompt": tmpl.system_prompt_template if tmpl else "",
+        })
+
+    # 2. 运行时状态（agent_service）
+    runtime = {"teams": [], "session_count": 0, "agent_count": 0}
+    try:
+        if _ensure_agent2():
+            headers = _agent2_headers()
+            r = httpx.get(f"{AGENT2_BASE}/sessions/", params={"agent_id": _AGENT2_AGENT},
+                          headers=headers, timeout=30)
+            if r.status_code == 200:
+                sessions = r.json().get("sessions") or []
+                runtime["session_count"] = len(sessions)
+                for s in sessions:
+                    sess = s.get("session") or {}
+                    team = s.get("team")
+                    if isinstance(team, dict):
+                        members = []
+                        for m in (team.get("members") or []):
+                            agent = m.get("agent") or {}
+                            members.append({
+                                "name": (agent.get("data") or {}).get("name") or "worker",
+                                "session_id": m.get("session_id"),
+                            })
+                        if members:
+                            runtime["teams"].append({
+                                "leader_session": sess.get("id"),
+                                "members": members,
+                            })
+            r2 = httpx.get(f"{AGENT2_BASE}/agent/", headers=headers, timeout=30)
+            if r2.status_code == 200:
+                runtime["agent_count"] = len(r2.json().get("agents") or [])
+    except Exception:
+        pass
+
+    return jsonify({"status": "ok", "data": {"roles": roles, "runtime": runtime}})
+
+
 # ── Agent ─────────────────────────────────────────────────
 
 

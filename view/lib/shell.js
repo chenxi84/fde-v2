@@ -19,17 +19,19 @@ import { get, dash, fmtTime, tryParse } from "./api.js";
 import { pageAgent } from "../pages/agent.js";
 import { pageConsole } from "../pages/console.js";
 import { agentRail } from "../pages/agent_rail.js";
+import { pageAgentOverview } from "../pages/agent_overview.js";
 
 /* 平台公共页（可按页面授权）；console 单列——仅 admin 可见、不可授权 */
 export const PLATFORM_PAGES = [
   { key: "agent", name: "Agent", ic: "✦", title: "平台 Agent", crumb: "对话式跨应用编排", platform: true },
+  { key: "agent_overview", name: "智能体", ic: "🤖", title: "智能体总览", crumb: "平台设计的智能体角色 · 运行时团队", platform: true },
 ];
 
 const ADMIN_ONLY_PAGES = [
   { key: "console", name: "服务台", ic: "⌗", title: "通用服务台", crumb: "按服务契约自动建表 · 覆盖全部应用", platform: true },
 ];
 
-const PLATFORM_COMPONENTS = { agent: pageAgent, console: pageConsole };
+const PLATFORM_COMPONENTS = { agent: pageAgent, console: pageConsole, agent_overview: pageAgentOverview };
 
 /* x-html 模板片段中的助手函数经 window 全局解析（Alpine 表达式回落 window） */
 window.dash = dash;
