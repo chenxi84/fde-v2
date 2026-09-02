@@ -92,11 +92,11 @@ for _r, _apps in agent_roles.ROLE_APPS.items():
 
 # 角色 → 查询组描述（ResetTools 的 input_schema 用，LLM 据此决定激活哪个组）
 _QUERY_GROUP_DESC = {
-    "sales": "销售/需求域查询（预测/历史/客户/月度版本/达成率）",
-    "planning": "计划/排产域查询（项目/需求/主计划/需求池）",
-    "inventory": "物料/库存域查询（物料/断点/替换/策略/推移）",
-    "delivery": "交付/出库域查询（出库计划）",
-    "other": "其他应用查询",
+    "sales": "销售/需求域工具（预测/历史/客户/月度版本/达成率，含导入与文件）",
+    "planning": "计划/排产域工具（项目/需求/主计划/需求池）",
+    "inventory": "物料/库存域工具（物料/断点/替换/策略/推移）",
+    "delivery": "交付/出库域工具（出库计划）",
+    "other": "其他应用工具",
 }
 
 
@@ -134,23 +134,20 @@ async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str):
         # worker：全量工具（middleware 按角色过滤）
         return ([_mk_ft(t) for t in defs], [])
 
-    # leader：propose_skill 进 basic，查询工具按领域分组（懒加载）
+    # leader：propose_skill 进 basic，业务工具按领域分组（懒加载，含查询/写/文件/导入）
     basic = []
     groups: dict[str, list] = {}
     for t in defs:
         app = t["_meta"]["app"]
         name = t["function"]["name"]
-        service = name.rsplit("__", 1)[-1]
         if app == "__platform__":
             if name.endswith("propose_skill"):
                 basic.append(_mk_ft(t))
             continue
-        if not agent_tool_filter.is_query_service(service):
-            continue  # 写服务/文件工具：leader 编排不需要
         role = _APP_ROLE.get(app, "other")
         groups.setdefault(role, []).append(_mk_ft(t))
     tool_groups = [
-        ToolGroup(name=f"{r}_query", description=_QUERY_GROUP_DESC.get(r, r), tools=fts)
+        ToolGroup(name=r, description=_QUERY_GROUP_DESC.get(r, r), tools=fts)
         for r, fts in sorted(groups.items())
     ]
     return (basic, tool_groups)
