@@ -47,9 +47,9 @@ export function agentRail() {
       });
       /* 页面切换时刷新文件列表（shell.js 路由变化后触发） */
       window.addEventListener("fde:route-changed", () => { if (self.filesOpen) self.loadFiles(); });
-      // 初始加载延迟到 window.__fdePage 稳定：shell 的 syncRoute 要等 /api/my_pages
-      // 异步返回后才把 __fdePage 从初始 dashboard 更新为实际页，过早读会导致 resolveUploadApp 返回 null
-      setTimeout(() => self.loadFiles(), 600);
+      // 轮询加载：resolveUploadApp 依赖 window.__fdePage（/api/my_pages 异步返回后才更新），
+      // 返回 null 就重试，直到稳定（不依赖固定延迟与 route-changed 事件时序）
+      this.loadFilesRetry();
     },
 
     async loadSessions() {
@@ -286,6 +286,15 @@ export function agentRail() {
     toggleFiles() {
       self.filesOpen = !self.filesOpen;
       if (self.filesOpen) self.loadFiles();
+    },
+
+    /* 轮询加载文件：resolveUploadApp 依赖 window.__fdePage（异步更新），返回 null 就重试 */
+    loadFilesRetry(attempt = 0) {
+      if (self.resolveUploadApp()) {
+        self.loadFiles();
+      } else if (attempt < 20) {
+        setTimeout(() => this.loadFilesRetry(attempt + 1), 300);
+      }
     },
 
     /* 同时加载 import-file / export-file 两个目录 */
