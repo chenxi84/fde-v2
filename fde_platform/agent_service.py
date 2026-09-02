@@ -1,8 +1,11 @@
 """AgentScope agent_service 入口（多智能体编排层，独立 FastAPI 进程）。
 
-裸跑验证用：先不接 FDE 业务工具（extra_agent_tools=None），只验证
-create_app + SQLite storage + InMemory bus + LocalWorkspace 能起、
-team 端点可达。后续接入见 design-plus/ 多智能体方案。
+通过 ``extra_agent_tools`` 把 FDE 业务服务桥接为 AgentScope 工具（按 ``X-User-ID``
+映射的 FDE 用户服务授权过滤，fail-closed）。多智能体 team 能力由 AgentScope app
+框架内置（Leader 自治建队：TeamCreate/AgentCreate/TeamSay）。
+
+角色工具隔离（软隔离 + 硬兜底）见 design-plus/多智能体方案.md §五，后续经
+``extra_agent_middlewares`` 实现；本文件当前只打通「FDE 工具可被 agent_service 调用」。
 
 启动：python -m fde_platform.agent_service  → http://127.0.0.1:4100
 """
@@ -13,6 +16,17 @@ from agentscope.app import create_app
 from agentscope.app.message_bus import InMemoryMessageBus
 from agentscope.app.storage import AsyncSQLAlchemyStorage
 from agentscope.app.workspace_manager import LocalWorkspaceManager
+from agentscope.permission import PermissionBehavior, PermissionDecision
+from agentscope.tool import FunctionTool
+
+from fde_platform import agentscope_bridge as bridge
+from fde_platform import users
+from fde_platform.runtime import FdePlatform
+
+# 加载 FDE 应用服务清单。服务调用（bridge.execute → platform.call）每次开短连接、
+# 用完即关，与主进程（main.py）WAL 并发安全。
+_platform = FdePlatform()
+_platform.load_all()
 
 # 数据落 config/（与 FDE 的 auth.db/skills.db 同级，零外部依赖）
 _BASE = Path(__file__).resolve().parents[1] / "config"
@@ -22,10 +36,91 @@ _DB_URL = os.environ.get(
 )
 _WORKDIR = str(_BASE / "agent_workspaces")
 
+# 临时工具收窄：环境变量 FDE_AGENT_TOOL_APPS 控制只注入哪些应用（逗号分隔 qualname，
+# 如 "psc/md_customer"）。空 = 全量。全量（197 工具）会让 LLM 首 token 极慢，故验证时
+# 必须收窄；第 4 步「工具过滤 middleware」会取代此临时开关。
+_TOOL_APP_FILTER = set(
+    x.strip() for x in os.environ.get("FDE_AGENT_TOOL_APPS", "").split(",") if x.strip()
+)
+
+# 危险服务判定（与 agent_agentscope.is_dangerous_tool 同口径）：命中即走 HITL 确认。
+_DANGEROUS_PATTERNS = (
+    "delete", "remove", "publish", "unpublish", "lock", "deprecate", "cancel",
+    "approve", "reject", "archive", "drop", "truncate", "destroy", "deactivate",
+    "close",
+)
+
+
+def _is_dangerous(tool_name: str) -> bool:
+    service = tool_name.rsplit("__", 1)[-1].lower()
+    return any(p in service for p in _DANGEROUS_PATTERNS)
+
+
+def _mk_allow():
+    """普通 FDE 工具：直接放行（FDE 的服务级授权已在 execute 层 fail-closed）。"""
+
+    async def _allow(*_a, **_k):
+        return PermissionDecision(behavior=PermissionBehavior.ALLOW, message="")
+
+    return _allow
+
+
+def _mk_ask():
+    """危险 FDE 工具：需人工确认（HITL）。"""
+
+    async def _ask(*_a, **_k):
+        return PermissionDecision(
+            behavior=PermissionBehavior.ASK,
+            message="危险操作，需人工确认",
+        )
+
+    return _ask
+
+
+async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str) -> list:
+    """把 FDE 业务服务桥接为 AgentScope 工具（按 user_id → FDE 用户授权过滤）。
+
+    签名固定为 AgentToolFactory：``(user_id, agent_id, session_id) → list[ToolBase]``。
+    每次组装 agent 时调用（授权变更即时生效）；未知用户返回空工具（fail-closed）。
+    """
+    user = users.get_user_by_name(user_id)
+    if user is None:
+        return []
+
+    def _make_call(tool_name: str):
+        # 闭包捕获工具名 + user，避免与工具自身参数（如 propose_skill 的 name）冲突
+        def _call(**kwargs):
+            return bridge.execute(_platform, user, tool_name, kwargs)
+        return _call
+
+    tools = []
+    for t in bridge.tool_schemas(_platform, user):
+        app = t["_meta"]["app"]
+        name = t["function"]["name"]
+        if _TOOL_APP_FILTER:
+            if app == "__platform__":
+                if not name.endswith("propose_skill"):
+                    continue
+            elif app not in _TOOL_APP_FILTER:
+                continue
+        ft = FunctionTool(
+            _make_call(name),
+            name=name,
+            description=t["function"]["description"],
+        )
+        ft.input_schema = t["function"]["parameters"]
+        # 权限：普通工具 ALLOW（授权已由 execute 层 fail-closed）；危险工具 ASK（HITL）。
+        # FunctionTool 默认 check_permissions 返回 ASK，会令每次调用都停车等确认，故覆盖。
+        ft.check_permissions = _mk_ask() if _is_dangerous(name) else _mk_allow()
+        tools.append(ft)
+    return tools
+
+
 app = create_app(
     storage=AsyncSQLAlchemyStorage(_DB_URL, create_tables=True),
     message_bus=InMemoryMessageBus(),
     workspace_manager=LocalWorkspaceManager(basedir=_WORKDIR),
+    extra_agent_tools=_fde_tool_factory,
     title="FDE Agent Service",
 )
 

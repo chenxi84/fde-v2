@@ -41,9 +41,8 @@ async def main():
         r = await c.post(f"{BASE}/agent/", json={
             "name": "leader",
             "system_prompt": (
-                "你是产销协同的多智能体编排 leader。你持有团队工具（TeamCreate/AgentCreate/TeamSay），"
-                "遇到需要多个领域专家协作的复杂任务时，必须组建团队：先 TeamCreate 建团队，"
-                "再用 AgentCreate 依次创建销售、计划、库存专家成员，用 TeamSay 给成员派活。"
+                "你是 FDE 平台助手，能调用业务服务工具（工具名形如 psc__md_customer__list）。"
+                "用户要查数据或操作业务时，直接调用对应工具，用结果回答。"
             ),
         }, headers=h)
         r.raise_for_status()
@@ -64,11 +63,11 @@ async def main():
         session_id = r.json()["session_id"]
         print(f"[4] session_id = {session_id}")
 
-        # 5. 触发建队任务
+        # 5. 触发「调 FDE 工具」任务
         msg = {"role": "user", "name": "user",
                "content": [{"type": "text", "text": (
-                   "客户突然加单，请组建一个团队，分别由销售、计划、库存三位专家协同分析应对。"
-                   "先建团队，再创建成员并派活。"
+                   "请调用工具查一下客户主数据列表（psc 组的 md_customer 应用），"
+                   "告诉我一共有多少客户。"
                )}]}
         r = await c.post(f"{BASE}/chat/", json={
             "agent_id": agent_id, "session_id": session_id, "input": msg,
@@ -76,9 +75,9 @@ async def main():
         r.raise_for_status()
         print(f"[5] chat 触发: {r.json()}")
 
-        # 6. 读 SSE stream：打印非文本增量的事件（看 tool call / team 建队），
-        #    文本增量只统计数量，最后打印完整回复。
-        print("[6] 订阅 stream，观察 team 工具调用…")
+        # 6. 读 SSE stream：打印工具调用事件（看 FDE 工具是否被真实调用），
+        #    文本增量只累积，最后打印完整回复。
+        print("[6] 订阅 stream，观察 FDE 工具调用…")
         text_parts = []
         async with c.stream("GET", f"{BASE}/sessions/{session_id}/stream",
                             params={"agent_id": agent_id}, headers=h) as resp:
