@@ -79,6 +79,18 @@ def _mk_ask():
     return _ask
 
 
+def _slim_schema(schema: dict) -> dict:
+    """精简 JSON schema：去掉 description 与字段名相同的冗余（introspect 生成），压 LLM 首 token 延迟。"""
+    if not isinstance(schema, dict):
+        return schema
+    props = schema.get("properties")
+    if isinstance(props, dict):
+        for k, v in props.items():
+            if isinstance(v, dict) and v.get("description") == k:
+                v.pop("description")
+    return schema
+
+
 async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str) -> list:
     """把 FDE 业务服务桥接为 AgentScope 工具（按 user_id → FDE 用户授权过滤）。
 
@@ -110,7 +122,7 @@ async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str) -> lis
             name=name,
             description=t["function"]["description"],
         )
-        ft.input_schema = t["function"]["parameters"]
+        ft.input_schema = _slim_schema(t["function"]["parameters"])
         # 权限：普通工具 ALLOW（授权已由 execute 层 fail-closed）；危险工具 ASK（HITL）。
         # FunctionTool 默认 check_permissions 返回 ASK，会令每次调用都停车等确认，故覆盖。
         ft.check_permissions = _mk_ask() if _is_dangerous(name) else _mk_allow()
