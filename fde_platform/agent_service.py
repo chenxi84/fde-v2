@@ -9,6 +9,7 @@
 
 启动：python -m fde_platform.agent_service  → http://127.0.0.1:4100
 """
+import json
 import os
 from pathlib import Path
 
@@ -16,8 +17,9 @@ from agentscope.app import create_app
 from agentscope.app.message_bus import InMemoryMessageBus
 from agentscope.app.storage import AsyncSQLAlchemyStorage
 from agentscope.app.workspace_manager import LocalWorkspaceManager
+from agentscope.message import Base64Source, DataBlock, TextBlock
 from agentscope.permission import PermissionBehavior, PermissionDecision
-from agentscope.tool import FunctionTool, ToolGroup
+from agentscope.tool import FunctionTool, ToolChunk, ToolGroup
 
 from fde_platform import agentscope_bridge as bridge
 from fde_platform import agent_roles
@@ -84,6 +86,64 @@ def _slim_schema(schema: dict) -> dict:
     return schema
 
 
+_VISION_PROMPT = "请提取图片中的全部文字与表格数据，尽量保留行列结构；若为图表请描述关键信息与数值。"
+
+
+def _as_tool_result(raw: str):
+    """工具 JSON 结果 → 纯文本或多模态 ToolChunk（图片多模态 / vision 兜底）。
+
+    read_file 读图片时返回含 image 字段的 JSON：
+    - 若配置了 vision 兜底模型，先「看图转文字」把文字喂回主模型（纯文本）；
+    - 否则回退为带 DataBlock 的 ToolChunk，把图片直接给当前模型（需视觉模型）。
+    """
+    if not raw:
+        return raw
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return raw
+    if isinstance(data, dict) and isinstance(data.get("image"), dict):
+        img = data["image"]
+        desc = _vision_fallback(img)
+        if desc:
+            return ToolChunk(content=[TextBlock(text=(
+                f"图片文件 {data.get('name', '')} 的识别结果：\n{desc}"))])
+        return ToolChunk(content=[
+            TextBlock(text=f"图片文件 {data.get('name', '')}（{data.get('size', 0)} 字节）："),
+            DataBlock(source=Base64Source(
+                data=img.get("base64", ""),
+                media_type=img.get("media_type", "image/png"),
+            )),
+        ])
+    return raw
+
+
+def _vision_fallback(img: dict) -> str:
+    """用 vision 兜底模型「看图转文字」；未配置或失败返回空串（调用方回退图片直通）。"""
+    from fde_platform import llm
+
+    prov = llm.get_provider("vision")
+    if isinstance(prov, llm.NotConfiguredProvider):
+        return ""
+    media_type = img.get("media_type", "image/png")
+    messages = [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": _VISION_PROMPT},
+            {"type": "image_url", "image_url": {
+                "url": f"data:{media_type};base64,{img.get('base64', '')}"}},
+        ],
+    }]
+    try:
+        result = prov.chat(messages)
+    except Exception:
+        return ""
+    text = (result or {}).get("content", "").strip()
+    if not text or text.startswith("LLM 调用失败") or "未安装" in text:
+        return ""
+    return text
+
+
 # app qualname → 角色（供 leader 查询工具按领域分组懒加载）
 _APP_ROLE: dict[str, str] = {}
 for _r, _apps in agent_roles.ROLE_APPS.items():
@@ -115,7 +175,7 @@ async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str):
     def _make_call(tool_name: str):
         # 闭包捕获工具名 + user，避免与工具自身参数（如 propose_skill 的 name）冲突
         def _call(**kwargs):
-            return bridge.execute(_platform, user, tool_name, kwargs)
+            return _as_tool_result(bridge.execute(_platform, user, tool_name, kwargs))
         return _call
 
     def _mk_ft(t):
