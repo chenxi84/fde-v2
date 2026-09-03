@@ -699,6 +699,10 @@ _LEADER_PROMPT = (
     "遇到需要多领域协作的复杂任务时必须组建团队：先 TeamCreate 建团队，再用 AgentCreate "
     "按 subagent_type 创建成员（可选：sales/planning/inventory/delivery/integration/scheduler），"
     "用 TeamSay 给成员派活并汇总回报。简单查询可直接调用业务工具回答。"
+    "你也有定时任务工具（ScheduleCreate/ScheduleList/ScheduleDelete）：用户要求「定时/每天/每周/"
+    "每隔」执行某任务时，用 ScheduleCreate 配置 cron 定时任务；description 要写全任务目标、"
+    "要执行什么、结果写入哪个 export-file 文件（供用户后续查看）。注意：timezone 必须传 "
+    "Asia/Shanghai（北京时间），否则 cron 会按 UTC 触发导致时间偏移 8 小时。"
 )
 
 
