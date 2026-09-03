@@ -1122,6 +1122,49 @@ def api_agent_schedule_delete(sid):
     return jsonify({"status": "ok", "message": "已删除"})
 
 
+@app.route("/api/flows", methods=["GET"])
+def api_flows():
+    """列出全部工作流（含 group/key/name/description/nodes）；?group= 过滤。"""
+    from fde_platform import flow
+    group = (request.args.get("group") or "").strip()
+    flows = flow.list_flows()
+    if group:
+        flows = [f for f in flows if f.get("group") == group]
+    return jsonify({"status": "ok", "data": flows})
+
+
+@app.route("/api/flows", methods=["POST"])
+def api_flow_save():
+    """保存工作流（写盘 app/<组>/_flow_<key>.yaml）。仅 admin。"""
+    u = users.session_user()
+    if not (u and u.get("is_admin")):
+        return jsonify({"status": "error", "message": "仅管理员可保存流程"}), 403
+    data = request.get_json(silent=True) or {}
+    group = (data.get("group") or "").strip()
+    key = (data.get("key") or "").strip()
+    name = (data.get("name") or "").strip()
+    description = (data.get("description") or "").strip()
+    nodes = data.get("nodes") or []
+    from fde_platform import flow
+    result = flow.save_flow(group, key, name, description, nodes)
+    if "error" in result:
+        return jsonify({"status": "error", "message": result["error"]})
+    return jsonify({"status": "ok", "data": result})
+
+
+@app.route("/api/flows/<group>/<key>", methods=["DELETE"])
+def api_flow_delete(group, key):
+    """删除工作流（删 app/<组>/_flow_<key>.yaml）。仅 admin。"""
+    u = users.session_user()
+    if not (u and u.get("is_admin")):
+        return jsonify({"status": "error", "message": "仅管理员可删除流程"}), 403
+    from fde_platform import flow
+    result = flow.delete_flow(group, key)
+    if "error" in result:
+        return jsonify({"status": "error", "message": result["error"]})
+    return jsonify({"status": "ok", "data": result})
+
+
 @app.route("/api/agent-overview")
 def api_agent_overview():
     """智能体总览：静态角色定义（agent_roles）+ 运行时状态（agent_service）。"""

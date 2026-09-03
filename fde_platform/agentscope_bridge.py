@@ -236,6 +236,23 @@ def _admin_platform_tool_defs() -> list:
         _t("platform_run_job_now", "立即执行一次定时任务（不等 cron）",
            {"type": "object", "properties": {"job_id": {"type": "integer"}},
             "required": ["job_id"]}, "run_job_now", True),
+        # ── 工作流 ──
+        _t("platform_save_flow",
+           "创建或更新一个工作流（flow）：写盘到 app/<组>/_flow_<key>.yaml。"
+           "nodes 是节点列表，每个节点含 id/role/task/output/input/depends_on/when/until/max_loop。",
+           {"type": "object", "properties": {
+               "group": {"type": "string", "description": "应用组（如 psc）"},
+               "key": {"type": "string", "description": "英文文件名标识（如 forecast_to_plan）"},
+               "name": {"type": "string", "description": "显示名（如 产销协同链）"},
+               "description": {"type": "string", "description": "流程说明"},
+               "nodes": {"type": "array", "description": "节点列表", "items": {"type": "object"}},
+           }, "required": ["group", "key", "name", "nodes"]}, "save_flow", True),
+        _t("platform_delete_flow",
+           "删除一个工作流（flow）：删 app/<组>/_flow_<key>.yaml。",
+           {"type": "object", "properties": {
+               "group": {"type": "string", "description": "应用组"},
+               "key": {"type": "string", "description": "文件名标识"},
+           }, "required": ["group", "key"]}, "delete_flow", True),
         # ── 用户与权限 ──
         _t("platform_list_users", "列出全部用户（含角色 / 个人与角色授权 / 有效授权数）",
            {"type": "object", "properties": {}, "required": []}, "list_users", False),
@@ -388,6 +405,17 @@ def _call_platform_tool(platform, user, service: str, args: dict):
         return {"job_id": args.get("job_id"), "message": msg}
     if service == "run_job_now":
         return scheduler.run_job_now(args.get("job_id"))
+    if service == "save_flow":
+        from fde_platform import flow
+
+        return flow.save_flow(
+            args.get("group", ""), args.get("key", ""), args.get("name", ""),
+            args.get("description", ""), args.get("nodes", []),
+        )
+    if service == "delete_flow":
+        from fde_platform import flow
+
+        return flow.delete_flow(args.get("group", ""), args.get("key", ""))
     # 用户与权限（users 模块顶层已 import）
     if service == "list_users":
         return users.list_users()

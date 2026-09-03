@@ -1,0 +1,110 @@
+<!-- 流程编排：可视化编辑工作流（flow）——节点 + 依赖 + 条件分支/循环 -->
+<div class="bd">
+  <div style="display:flex; gap:16px; align-items:flex-start">
+    <!-- 左：流程列表 -->
+    <div style="width:260px; flex:none">
+      <div class="card">
+        <div class="hd"><h3>工作流</h3></div>
+        <div class="bd">
+          <button class="b-pri b-sm" style="width:100%; margin-bottom:8px" @click="newFlow()">＋ 新建流程</button>
+          <template x-if="!flows.length">
+            <div class="empty">暂无流程</div>
+          </template>
+          <template x-for="f in flows" :key="f.group + '/' + f.key">
+            <div class="nav-item" @click="edit(f)" :class="{ on: editing && editing.key === f.key }"
+              style="display:flex; align-items:center; justify-content:space-between">
+              <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap" x-text="f.name"></span>
+              <button class="b-dng b-sm" style="padding:1px 7px" title="删除流程" @click.stop="remove(f)">×</button>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右：编辑区 -->
+    <div style="flex:1; min-width:0">
+      <template x-if="showNew">
+        <div class="card">
+          <div class="hd"><h3>新建流程</h3></div>
+          <div class="bd">
+            <div class="tagline" style="flex-wrap:wrap">
+              <input x-model="form.group" placeholder="组（如 psc）" style="width:110px">
+              <input x-model="form.key" placeholder="key（英文标识，如 forecast_to_plan）" style="flex:1; min-width:200px">
+              <input x-model="form.name" placeholder="显示名（如 产销协同链）" style="flex:1; min-width:160px">
+            </div>
+            <textarea x-model="form.description" rows="2" placeholder="描述" style="width:100%; margin-top:8px"></textarea>
+            <div class="tagline" style="margin-top:10px">
+              <button class="b-pri" @click="saveNew()">创建</button>
+              <button class="b-ghost" @click="cancelEdit()">取消</button>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <template x-if="editing">
+        <div class="card">
+          <div class="hd"><h3 x-text="'编辑：' + editing.name"></h3></div>
+          <div class="bd">
+            <div class="tagline" style="flex-wrap:wrap">
+              <input x-model="editing.name" placeholder="显示名" style="flex:1; min-width:160px">
+              <input x-model="editing.key" placeholder="key" disabled style="width:160px">
+              <input x-model="editing.group" placeholder="组" disabled style="width:90px">
+            </div>
+            <textarea x-model="editing.description" rows="2" placeholder="描述" style="width:100%; margin-top:8px"></textarea>
+
+            <h4 style="margin:16px 0 8px">节点</h4>
+            <template x-if="!editing.nodes.length">
+              <div class="empty">暂无节点 —— 点下方「添加节点」</div>
+            </template>
+            <template x-for="(n, i) in editing.nodes" :key="i">
+              <div style="border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:10px">
+                <div class="tagline">
+                  <input x-model="n.id" placeholder="节点 id（如 forecast）" style="flex:1">
+                  <select x-model="n.role">
+                    <option value="">（无角色）</option>
+                    <template x-for="r in roles" :key="r.type">
+                      <option :value="r.type" x-text="r.label"></option>
+                    </template>
+                  </select>
+                  <button class="b-dng b-sm" @click="removeNode(i)">删除</button>
+                </div>
+                <textarea x-model="n.task" rows="2" placeholder="任务文本（可用 {上游结果键} 占位）" style="width:100%; margin-top:6px"></textarea>
+                <div class="tagline" style="margin-top:6px">
+                  <input x-model="n.output" placeholder="结果键 output" style="flex:1">
+                  <input x-model="n.input" placeholder="输入键（逗号分隔）" style="flex:1">
+                  <input x-model="n.depends_on" placeholder="依赖节点 id（逗号分隔）" style="flex:1">
+                </div>
+                <div class="tagline" style="margin-top:6px; flex-wrap:wrap; align-items:center">
+                  <span class="muted" style="font-size:12px">when</span>
+                  <input x-model="n.when.key" placeholder="key" style="width:100px">
+                  <select x-model="n.when.op" style="width:120px">
+                    <option value="">（op）</option>
+                    <template x-for="o in ops" :key="o"><option :value="o" x-text="o"></option></template>
+                  </select>
+                  <input x-model="n.when.value" placeholder="value" style="width:110px">
+                  <span class="muted" style="font-size:12px; margin-left:8px">until</span>
+                  <input x-model="n.until.key" placeholder="key" style="width:100px">
+                  <select x-model="n.until.op" style="width:120px">
+                    <option value="">（op）</option>
+                    <template x-for="o in ops" :key="o"><option :value="o" x-text="o"></option></template>
+                  </select>
+                  <input x-model="n.until.value" placeholder="value" style="width:110px">
+                  <input x-model="n.max_loop" placeholder="max_loop" style="width:90px">
+                </div>
+              </div>
+            </template>
+            <button class="b-ghost b-sm" @click="addNode()">＋ 添加节点</button>
+            <div class="tagline" style="margin-top:12px">
+              <button class="b-pri" @click="saveEdit()">保存</button>
+              <button class="b-ghost" @click="cancelEdit()">取消</button>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <template x-if="!editing && !showNew">
+        <div class="empty">从左侧选择一个流程编辑，或新建流程</div>
+      </template>
+    </div>
+  </div>
+</div>

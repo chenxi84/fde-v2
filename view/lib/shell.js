@@ -21,19 +21,21 @@ import { agentRail } from "../pages/agent_rail.js";
 import { pageAgentOverview } from "../pages/agent_overview.js";
 import { pageAlerts } from "../pages/alerts.js";
 import { pageAutopilot } from "../pages/autopilot.js";
+import { pageFlowEditor } from "../pages/flow_editor.js";
 
 /* 平台公共页（可按页面授权）；console 单列——仅 admin 可见、不可授权 */
 export const PLATFORM_PAGES = [
   { key: "agent_overview", name: "智能体", ic: "🤖", title: "智能体总览", crumb: "平台设计的智能体角色 · 运行时团队", platform: true },
   { key: "alerts", name: "告警", ic: "⚠", title: "库存告警", crumb: "巡检发现的库存预警", platform: true },
   { key: "autopilot", name: "自主运行", ic: "⏱", title: "自主运行", crumb: "定时任务 · 智能体自动执行", platform: true },
+  { key: "flow_editor", name: "流程编排", ic: "🔀", title: "流程编排", crumb: "可视化编辑工作流 · DAG 编排", platform: true },
 ];
 
 const ADMIN_ONLY_PAGES = [
   { key: "console", name: "服务台", ic: "⌗", title: "通用服务台", crumb: "按服务契约自动建表 · 覆盖全部应用", platform: true },
 ];
 
-const PLATFORM_COMPONENTS = { console: pageConsole, agent_overview: pageAgentOverview, alerts: pageAlerts, autopilot: pageAutopilot };
+const PLATFORM_COMPONENTS = { console: pageConsole, agent_overview: pageAgentOverview, alerts: pageAlerts, autopilot: pageAutopilot, flow_editor: pageFlowEditor };
 
 /* x-html 模板片段中的助手函数经 window 全局解析（Alpine 表达式回落 window） */
 window.dash = dash;

@@ -16,7 +16,8 @@ from agentscope.permission import PermissionBehavior, PermissionDecision
 # 全员可用的平台工具（skill 沉淀，非角色域）。
 GLOBAL_PLATFORM_TOOLS = {"platform_propose_skill", "platform_raise_alert",
                          "platform_list_flows", "platform_run_flow",
-                         "platform_flow_progress"}
+                         "platform_flow_progress", "platform_save_flow",
+                         "platform_delete_flow"}
 
 
 def is_fde_tool(name: str) -> bool:

@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS flow_runs (
 
 
 def _load_flows() -> dict[str, dict]:
-    """扫描 app/<组>/_flow_*.yaml，返回 {flow_name: flow_def}。"""
+    """扫描 app/<组>/_flow_*.yaml，返回 {flow_name: flow_def}（def 含 group/key）。"""
     flows: dict[str, dict] = {}
     if not _APPS_DIR.is_dir():
         return flows
@@ -66,20 +66,68 @@ def _load_flows() -> dict[str, dict]:
                 data = yaml.safe_load(f.read_text(encoding="utf-8"))
             except Exception:
                 continue  # 声明有误：跳过该 flow
-            name = (data or {}).get("name") if isinstance(data, dict) else None
+            if not isinstance(data, dict):
+                continue
+            name = data.get("name")
             if not name:
                 continue
+            # key = 文件名标识（声明里可显式给 key，缺省从文件名推导）
+            key = data.get("key") or f.name[len("_flow_"):-len(".yaml")]
+            data["group"] = group_dir.name
+            data["key"] = key
             flows[name] = data
     return flows
 
 
 def list_flows() -> list[dict]:
-    """列出全部已声明 flow（供 platform_list_flows）。"""
+    """列出全部已声明 flow（含 group/key/name/description/nodes，供前端编排页）。"""
     return [
-        {"name": n, "description": f.get("description", ""),
-         "step_count": len(_normalize_nodes(f))}
+        {"name": n, "key": f.get("key", ""), "group": f.get("group", ""),
+         "description": f.get("description", ""),
+         "nodes": f.get("nodes") or _normalize_nodes(f)}
         for n, f in sorted(_load_flows().items())
     ]
+
+
+def get_flow(group: str, key: str) -> dict | None:
+    """读单个 flow 的完整定义（按文件名标识 key）。"""
+    path = _APPS_DIR / group / f"_flow_{key}.yaml"
+    if not path.is_file():
+        return None
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    data = data or {}
+    data["group"] = group
+    data["key"] = key
+    return data
+
+
+def save_flow(group: str, key: str, name: str, description: str, nodes: list) -> dict:
+    """写盘 app/<group>/_flow_<key>.yaml（name 显示名，key 文件名标识）。"""
+    if not group or not key:
+        return {"error": "group 和 key 不能为空"}
+    path = _APPS_DIR / group / f"_flow_{key}.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {"name": name or key, "key": key, "description": description or "", "nodes": nodes or []}
+    try:
+        path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+                        encoding="utf-8")
+    except Exception as e:
+        return {"error": f"保存失败：{e}"}
+    return {"saved": key, "name": name or key}
+
+
+def delete_flow(group: str, key: str) -> dict:
+    """删除 app/<group>/_flow_<key>.yaml。"""
+    path = _APPS_DIR / group / f"_flow_{key}.yaml"
+    if path.is_file():
+        try:
+            path.unlink()
+        except Exception as e:
+            return {"error": f"删除失败：{e}"}
+    return {"deleted": key}
 
 
 # ── 进度上报（只保留最近一次执行）────────────────────────
