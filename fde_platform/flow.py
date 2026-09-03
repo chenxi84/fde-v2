@@ -1,19 +1,22 @@
-"""FDE 工作流编排（阶段 1a：顺序 + 结果传递，节点 = 角色的工具集；+ 进度上报）。
+"""FDE 工作流编排（DAG：节点 + 依赖边，拓扑排序 + 并行执行 + 结果传递）。
 
-声明式 flow：`app/<组>/_flow_<名>.yaml`，步骤按顺序执行，结果经状态键传递。
+声明式 flow：`app/<组>/_flow_<名>.yaml`。
+
+两种声明，可混用：
+- ``steps``（顺序简写）：按列表顺序执行，前一步结果作为后一步输入。
+- ``nodes``（DAG）：每个节点含 ``id`` / ``depends_on``（依赖的节点 id 列表）；
+  执行时按依赖拓扑分层，同层无依赖的节点**并行**执行，依赖多个上游的节点自然汇聚。
+
 节点执行 = 轻量 ReAct 循环（``llm.chat`` + ``bridge.execute``），工具按角色过滤
-（``agent_roles.allowed_tools_for_role``），因此「节点=角色」在工具集层面即确定。
+（``agent_roles.allowed_tools_for_role``）。每步 ``output`` 结果键写入共享 state，
+``input`` 依赖的上游结果键用于填充 ``{key}`` 占位符。
 
 进度上报：每次执行把「跑到第几步 / 哪个角色 / 结果摘要」写入 config/flow_runs.db
 （只保留最近一次），供 platform_flow_progress / 前端「编排执行」区读取。
-
-约定：
-- 一个 flow 一个 YAML，``name`` 全局唯一；``steps`` 有序。
-- 每步 ``role``（可选）指定角色（决定工具集）、``task`` 任务文本、``output`` 结果键、
-  ``input`` 依赖的上游结果键（用于填充 ``{key}`` 占位符）。
 """
 import json
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -67,7 +70,7 @@ def list_flows() -> list[dict]:
     """列出全部已声明 flow（供 platform_list_flows）。"""
     return [
         {"name": n, "description": f.get("description", ""),
-         "step_count": len(f.get("steps", []))}
+         "step_count": len(_normalize_nodes(f))}
         for n, f in sorted(_load_flows().items())
     ]
 
@@ -101,6 +104,23 @@ def get_progress() -> dict | None:
         return dict(row) if row else None
     finally:
         conn.close()
+
+
+# ── 声明归一化 + 执行 ────────────────────────────────────
+
+def _normalize_nodes(flow: dict) -> list[dict]:
+    """steps（顺序）或 nodes（DAG）统一成 nodes（含 id + depends_on）。"""
+    if "nodes" in flow:
+        return [dict(n) for n in flow["nodes"] if isinstance(n, dict)]
+    nodes = []
+    for i, step in enumerate(flow.get("steps", [])):
+        if not isinstance(step, dict):
+            continue
+        node = dict(step)
+        node.setdefault("id", f"step{i + 1}")
+        node.setdefault("depends_on", [] if i == 0 else [f"step{i}"])
+        nodes.append(node)
+    return nodes
 
 
 def _fill(task: str, state: dict, inputs: list) -> str:
@@ -159,30 +179,50 @@ def _run_node(platform, user, role: str, task: str) -> str:
     return "（节点未产出结论）"
 
 
+def _run_ready(nids: list[str], node_by_id: dict, state: dict, platform, user) -> dict:
+    """并行执行一批就绪节点，返回 {node_id: result}。"""
+    results: dict = {}
+    if not nids:
+        return results
+    with ThreadPoolExecutor(max_workers=len(nids)) as ex:
+        futures = {}
+        for nid in nids:
+            node = node_by_id[nid]
+            task = _fill(str(node.get("task", "")), state, node.get("input"))
+            futures[ex.submit(_run_node, platform, user,
+                              node.get("role", ""), task)] = nid
+        for fut in as_completed(futures):
+            nid = futures[fut]
+            try:
+                results[nid] = fut.result()
+            except Exception as e:  # 单节点失败不影响其他节点
+                results[nid] = f"（节点执行失败：{e}）"
+    return results
+
+
 def run_flow(name: str, platform, user) -> dict:
-    """顺序执行一个 flow，返回 state；执行过程写进度到 flow_runs.db。"""
+    """按 DAG 执行一个 flow（拓扑分层 + 同层并行），返回 state。"""
     flow = _load_flows().get(name)
     if flow is None:
         return {"error": f"flow 不存在：{name}"}
-    steps = [s for s in flow.get("steps", []) if isinstance(s, dict)]
-    total = len(steps)
+    nodes = _normalize_nodes(flow)
+    node_by_id = {n.get("id"): n for n in nodes if n.get("id")}
+    deps = {nid: set(node_by_id[nid].get("depends_on") or []) for nid in node_by_id}
+    total = len(node_by_id)
     state: dict = {}
+    done: set = set()
     _report_progress(name, "running", 0, total, "")
-    for i, step in enumerate(steps, 1):
-        role = step.get("role", "")
-        task = _fill(str(step.get("task", "")), state, step.get("input"))
-        _report_progress(name, "running", i, total, role)
-        try:
-            result = _run_node(platform, user, role, task)
-        except Exception as e:
-            _report_progress(name, "error", i, total, role, str(e))
-            key = step.get("output")
+    while len(done) < total:
+        ready = [nid for nid in deps if nid not in done and deps[nid] <= done]
+        if not ready:
+            break  # 循环依赖或缺失上游：终止，避免死循环
+        for nid, result in _run_ready(ready, node_by_id, state, platform, user).items():
+            node = node_by_id[nid]
+            key = node.get("output")
             if key:
-                state[key] = f"（节点执行失败：{e}）"
-            continue
-        key = step.get("output")
-        if key:
-            state[key] = result
-    _report_progress(name, "done", total, total, "",
+                state[key] = result
+            done.add(nid)
+            _report_progress(name, "running", len(done), total, node.get("role", ""))
+    _report_progress(name, "done", len(done), total, "",
                      json.dumps(state, ensure_ascii=False)[:2000])
     return state

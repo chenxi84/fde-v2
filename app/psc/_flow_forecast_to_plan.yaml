@@ -1,15 +1,26 @@
-# 产销协同链：销售预测 → 主计划 → 出库计划（顺序 + 结果传递示例）
+# 产销协同链（DAG 版）：销售预测 → [并行：库存检查 + 主计划] → 出库计划
 name: 产销协同链
-description: 先由销售域分析预测并给出结论，再由计划域据此生成主计划，最后交付域生成出库计划。
-steps:
-  - role: sales
+description: 先由销售域分析预测，再由库存域与计划域并行处理，最后交付域汇聚生成出库计划。
+nodes:
+  - id: forecast
+    role: sales
     task: "分析当前月度版本的销售预测异常，给出最终预测结论（哪些客户/物料需重点关注的预测结果）。"
     output: forecast
-  - role: planning
-    task: "基于销售预测结论「{forecast}」生成或调整主计划。"
+  - id: inventory
+    role: inventory
+    task: "基于销售预测结论「{forecast}」检查库存水位。"
+    input: [forecast]
+    output: inventory
+    depends_on: [forecast]
+  - id: plan
+    role: planning
+    task: "基于销售预测结论「{forecast}」生成主计划。"
     input: [forecast]
     output: plan
-  - role: delivery
-    task: "基于主计划「{plan}」生成出库计划。"
-    input: [plan]
+    depends_on: [forecast]
+  - id: outbound
+    role: delivery
+    task: "基于库存「{inventory}」和主计划「{plan}」生成出库计划。"
+    input: [inventory, plan]
     output: outbound
+    depends_on: [inventory, plan]
