@@ -1,4 +1,4 @@
-"""FDE 工作流编排（DAG：节点 + 依赖边，拓扑排序 + 并行执行 + 结果传递）。
+"""FDE 工作流编排（DAG：节点 + 依赖边，拓扑分层 + 并行 + 条件分支 + 循环）。
 
 声明式 flow：`app/<组>/_flow_<名>.yaml`。
 
@@ -7,12 +7,19 @@
 - ``nodes``（DAG）：每个节点含 ``id`` / ``depends_on``（依赖的节点 id 列表）；
   执行时按依赖拓扑分层，同层无依赖的节点**并行**执行，依赖多个上游的节点自然汇聚。
 
+节点控制流：
+- ``when``（条件分支）：执行前判断，不满足则跳过该节点（output 不写 state）。
+- ``until`` + ``max_loop``（循环）：执行后判断，不满足则重复执行该节点（最多 max_loop 次）。
+
+条件表达式 ``{key, op, value}``，op 支持 contains / equals / not_empty / empty /
+gt / lt / gte / lte（value 可选，缺省视 op 而定）。判断对象是 state 里的值。
+
 节点执行 = 轻量 ReAct 循环（``llm.chat`` + ``bridge.execute``），工具按角色过滤
 （``agent_roles.allowed_tools_for_role``）。每步 ``output`` 结果键写入共享 state，
 ``input`` 依赖的上游结果键用于填充 ``{key}`` 占位符。
 
-进度上报：每次执行把「跑到第几步 / 哪个角色 / 结果摘要」写入 config/flow_runs.db
-（只保留最近一次），供 platform_flow_progress / 前端「编排执行」区读取。
+进度上报：写入 config/flow_runs.db（只保留最近一次），供 platform_flow_progress /
+前端「编排执行」区读取。
 """
 import json
 import sqlite3
@@ -106,7 +113,7 @@ def get_progress() -> dict | None:
         conn.close()
 
 
-# ── 声明归一化 + 执行 ────────────────────────────────────
+# ── 声明归一化 + 条件判断 + 执行 ─────────────────────────
 
 def _normalize_nodes(flow: dict) -> list[dict]:
     """steps（顺序）或 nodes（DAG）统一成 nodes（含 id + depends_on）。"""
@@ -128,6 +135,31 @@ def _fill(task: str, state: dict, inputs: list) -> str:
     for k in inputs or []:
         task = task.replace("{" + k + "}", str(state.get(k, "")))
     return task
+
+
+def _check_condition(cond, state: dict) -> bool:
+    """判断条件表达式 {key, op, value}（无条件恒真）。"""
+    if not isinstance(cond, dict):
+        return True
+    key = cond.get("key")
+    op = cond.get("op", "not_empty")
+    value = cond.get("value")
+    val = state.get(key, "")
+    if op == "contains":
+        return str(value) in str(val)
+    if op == "equals":
+        return str(val) == str(value)
+    if op == "not_empty":
+        return bool(str(val).strip())
+    if op == "empty":
+        return not bool(str(val).strip())
+    if op in ("gt", "lt", "gte", "lte"):
+        try:
+            a, b = float(val), float(value)
+        except (ValueError, TypeError):
+            return False
+        return {"gt": a > b, "lt": a < b, "gte": a >= b, "lte": a <= b}[op]
+    return True
 
 
 def _node_tools(platform, user, role: str) -> list[dict]:
@@ -179,18 +211,34 @@ def _run_node(platform, user, role: str, task: str) -> str:
     return "（节点未产出结论）"
 
 
+def _execute_node(node: dict, state: dict, platform, user):
+    """执行单节点：when 不满足返回 None（跳过）；否则执行，until 不满足则循环。"""
+    if not _check_condition(node.get("when"), state):
+        return None
+    output_key = node.get("output")
+    max_loop = max(1, int(node.get("max_loop", 1)))
+    result = ""
+    for _ in range(max_loop):
+        task = _fill(str(node.get("task", "")), state, node.get("input"))
+        result = _run_node(platform, user, node.get("role", ""), task)
+        if output_key:
+            state[output_key] = result  # 先写 output，供 until 判断
+        until = node.get("until")
+        if not until or _check_condition(until, state):
+            break
+    return result
+
+
 def _run_ready(nids: list[str], node_by_id: dict, state: dict, platform, user) -> dict:
-    """并行执行一批就绪节点，返回 {node_id: result}。"""
+    """并行执行一批就绪节点，返回 {node_id: result}（result 为 None 表示跳过）。"""
     results: dict = {}
     if not nids:
         return results
     with ThreadPoolExecutor(max_workers=len(nids)) as ex:
-        futures = {}
-        for nid in nids:
-            node = node_by_id[nid]
-            task = _fill(str(node.get("task", "")), state, node.get("input"))
-            futures[ex.submit(_run_node, platform, user,
-                              node.get("role", ""), task)] = nid
+        futures = {
+            ex.submit(_execute_node, node_by_id[nid], state, platform, user): nid
+            for nid in nids
+        }
         for fut in as_completed(futures):
             nid = futures[fut]
             try:
@@ -201,7 +249,7 @@ def _run_ready(nids: list[str], node_by_id: dict, state: dict, platform, user) -
 
 
 def run_flow(name: str, platform, user) -> dict:
-    """按 DAG 执行一个 flow（拓扑分层 + 同层并行），返回 state。"""
+    """按 DAG 执行一个 flow（拓扑分层 + 同层并行 + 条件分支/循环），返回 state。"""
     flow = _load_flows().get(name)
     if flow is None:
         return {"error": f"flow 不存在：{name}"}
@@ -218,8 +266,10 @@ def run_flow(name: str, platform, user) -> dict:
             break  # 循环依赖或缺失上游：终止，避免死循环
         for nid, result in _run_ready(ready, node_by_id, state, platform, user).items():
             node = node_by_id[nid]
+            if result is None:
+                continue  # when 跳过：output 不写 state
             key = node.get("output")
-            if key:
+            if key and result is not None:
                 state[key] = result
             done.add(nid)
             _report_progress(name, "running", len(done), total, node.get("role", ""))
