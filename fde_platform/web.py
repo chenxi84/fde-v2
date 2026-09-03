@@ -1075,18 +1075,65 @@ def api_agent_overview():
 
 @app.route("/api/alerts")
 def api_alerts():
-    """告警列表：巡检发现的库存预警（alert_type 非「无」的推移记录）。
+    """通用告警列表：聚合多种来源，统一结构 {source, level, title, detail, time}。
 
-    巡检 Agent 自主运行（refresh_batch + scan_alert）后，预警数据落库，此端点返回
-    当前所有击穿/超储/缺货等预警，供前台告警页展示（主动上报的替代：页面拉取而非飞书推送）。
+    来源：库存预警（inventory_projection）、定时任务失败（scheduler runs）、
+    集成接口失败（integration call_logs）。任何来源的告警都可装入此结构。
     """
+    alerts = []
+    # 1. 库存预警（alert_type 非「无」）
     try:
         result = platform.call("psc/inventory_projection", "list", ctx=users.current_caller_ctx())
         items = (result or {}).get("items", []) if isinstance(result, dict) else []
-        alerts = [it for it in items if it.get("alert_type") and it.get("alert_type") != "无"]
-        return jsonify({"status": "ok", "data": alerts})
+        for it in items:
+            at = it.get("alert_type")
+            if at and at != "无":
+                alerts.append({
+                    "source": "库存预警",
+                    "level": "red" if at in ("缺货", "击穿最低", "击穿安全") else "amber",
+                    "title": f"{it.get('material_no')} {at}",
+                    "detail": f"{it.get('biz_date')} 余额 {it.get('balance')}",
+                    "time": it.get("biz_date"),
+                })
     except Exception:
-        return jsonify({"status": "ok", "data": []})
+        pass
+    # 2. 定时任务失败（scheduler runs）
+    try:
+        import sqlite3
+        c = sqlite3.connect(str(_PKG_DIR.parent / "config" / "scheduler.db"))
+        c.row_factory = sqlite3.Row
+        rows = c.execute("SELECT * FROM runs WHERE status != 'ok' ORDER BY rowid DESC LIMIT 50").fetchall()
+        c.close()
+        for r in rows:
+            alerts.append({
+                "source": "定时任务",
+                "level": "red",
+                "title": f"任务 #{r['job_id']} 失败",
+                "detail": r["error_message"] or r["status"] or "",
+                "time": r["finished_at"] or r["started_at"],
+            })
+    except Exception:
+        pass
+    # 3. 集成接口失败（integration call_logs）
+    try:
+        import sqlite3
+        c = sqlite3.connect(str(_PKG_DIR.parent / "config" / "integration.db"))
+        c.row_factory = sqlite3.Row
+        rows = c.execute(
+            "SELECT * FROM call_logs WHERE status != 'success' ORDER BY rowid DESC LIMIT 50"
+        ).fetchall()
+        c.close()
+        for r in rows:
+            alerts.append({
+                "source": "集成接口",
+                "level": "amber",
+                "title": f"{r['app_name']}.{r['method_name']}",
+                "detail": r["error_msg"] or r["status"] or "",
+                "time": r["created_at"],
+            })
+    except Exception:
+        pass
+    return jsonify({"status": "ok", "data": alerts})
 
 
 # ── Agent ─────────────────────────────────────────────────
