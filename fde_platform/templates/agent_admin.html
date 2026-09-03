@@ -4,7 +4,7 @@
   <p><a href="/">← 应用清单</a></p>
   <div class="section-title">Agent 后端管理</div>
   <p class="muted">Agent 的「编排 + 规划 + 权限 + 重试」由 <b>AgentScope 2.0</b> 统一提供；
-     FDE 平台继续当「工具 + 身份 + 运行时」。会话持久化走 AgentScope 原生 state（<code>agent_state.db</code>）。</p>
+     FDE 平台继续当「工具 + 身份 + 运行时」。会话持久化走 agent_service 原生 storage（<code>config/agent_service.db</code>）。</p>
 
   <div class="card">
     <h3>当前后端
@@ -14,7 +14,7 @@
     <table class="kv">
       <tr><td>生效后端</td><td><code>{{ active }}</code></td></tr>
       <tr><td>编排循环</td><td>AgentScope ReAct + 模型重试/回落 + 工具权限三态</td></tr>
-      <tr><td>会话持久化</td><td><code>config/agent_state.db</code>（AgentScope 原生 state，跨进程恢复）</td></tr>
+      <tr><td>会话持久化</td><td><code>config/agent_service.db</code>（agent_service 原生 storage，跨进程恢复）</td></tr>
       <tr><td>危险操作</td><td>HITL：delete/publish/lock 等经 <code>ask_rules</code> 执行前停车，需人工确认</td></tr>
     </table>
   </div>
