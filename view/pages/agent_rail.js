@@ -34,6 +34,12 @@ export function agentRail() {
     exportFiles: [],        // export-file 目录文件列表
     filesLoading: false,
 
+    /* 当前应用组（阶段 C：按组路由 leader）；空 = 总编排 */
+    groupQs() {
+      const g = window.__fdeModule || "";
+      return g ? "?group=" + encodeURIComponent(g) : "";
+    },
+
     async init() {
       self.tpl = await fetch(new URL("agent_rail.html", import.meta.url)).then((r) => r.text());
       await self.loadSessions();
@@ -53,13 +59,13 @@ export function agentRail() {
     },
 
     async loadSessions() {
-      self.sessions = (await get("/api/agent2/sessions").catch(() => [])) || [];
+      self.sessions = (await get("/api/agent2/sessions" + self.groupQs()).catch(() => [])) || [];
     },
 
     async loadMsgs() {
       if (self.sending) return;   // 发送中不覆盖，避免首次对话「select 触发 change→loadMsgs」竞态清空消息区
       if (!self.sid) { self.msgs = []; return; }
-      const r = await get(`/api/agent2/sessions/${encodeURIComponent(self.sid)}/messages`,
+      const r = await get(`/api/agent2/sessions/${encodeURIComponent(self.sid)}/messages${self.groupQs()}`,
         { quiet: true }).catch(() => []);
       self.msgs = self.toDisplayMsgs(r || []);
       self.scrollEnd();
@@ -113,7 +119,7 @@ export function agentRail() {
       const tools = [];
       try {
         if (!self.sid) {
-          const s = await post("/api/agent2/sessions", {});
+          const s = await post("/api/agent2/sessions" + self.groupQs(), {});
           self.sid = s.session_id;
           await self.loadSessions();
         }
@@ -139,7 +145,7 @@ export function agentRail() {
           }
           self.scrollEnd();
         };
-        await this.streamRequest("/api/agent2/chat/stream", { message: m, session_id: sid }, onEvent);
+        await this.streamRequest("/api/agent2/chat/stream" + self.groupQs(), { message: m, session_id: sid }, onEvent);
         // HITL：危险操作需人工确认，确认/拒绝后继续（可多轮）
         while (self.confirm) {
           const names = self.confirm.map(c => c.name).join("\n");
@@ -147,7 +153,7 @@ export function agentRail() {
             "\n\n「确定」= 确认执行；「取消」= 拒绝。");
           const decisions = self.confirm.map(c => ({ id: c.id, confirmed: ok }));
           self.confirm = null;
-          await this.streamRequest("/api/agent2/confirm", { session_id: sid, decisions }, onEvent);
+          await this.streamRequest("/api/agent2/confirm" + self.groupQs(), { session_id: sid, decisions }, onEvent);
         }
         self.progress = "";
         this.commitLive();
@@ -203,7 +209,7 @@ export function agentRail() {
     },
 
     async newSession() {
-      const r = await post("/api/agent2/sessions", {});
+      const r = await post("/api/agent2/sessions" + self.groupQs(), {});
       self.sid = r.session_id;
       self.msgs = [];
       self.progress = "";
@@ -215,7 +221,7 @@ export function agentRail() {
     async delSession() {
       if (!self.sid) return;
       if (!confirm("删除当前会话及其全部历史？")) return;
-      await del(`/api/agent2/sessions/${encodeURIComponent(self.sid)}`).catch(() => {});
+      await del(`/api/agent2/sessions/${encodeURIComponent(self.sid)}${self.groupQs()}`).catch(() => {});
       self.sid = "";
       self.msgs = [];
       self.progress = "";

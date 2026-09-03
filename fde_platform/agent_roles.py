@@ -169,14 +169,15 @@ def role_label(role: str) -> str | None:
     return _ROLE_LABEL.get(role)
 
 
-def leader_role_choices() -> str:
+def leader_role_choices(group: str | None = None) -> str:
     """leader system prompt 用：可选 subagent_type 清单（从角色注册表动态生成，单一数据源）。
 
-    业务角色带应用列表，平台运维角色只带标签；加新角色只需改 ROLE_APPS / ROLE_PLATFORM_TOOLS，
-    leader prompt 自动跟上，无需改 web.py。
+    group 非空时只列该组业务角色 + 平台角色；None 列全部业务角色 + 平台角色。
     """
     parts = []
     for role, apps in ROLE_APPS.items():
+        if group and role_group(role) != group:
+            continue
         parts.append(f"{role}（{_ROLE_LABEL[role]}：{'、'.join(_app_short(a) for a in apps)}）")
     for role in ROLE_PLATFORM_TOOLS:
         parts.append(f"{role}（{_ROLE_LABEL[role]}）")

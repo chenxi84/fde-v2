@@ -666,20 +666,23 @@ def api_agent2_proxy(path):
 # 后端封装 agent_service 细节：credential/agent 初始化、chat 触发+SSE 翻译、HITL 缓存。
 
 _AGENT2_CRED = None
-_AGENT2_AGENT = None
+_AGENT2_AGENTS: dict[str, str] = {}  # group -> leader agent_id（"" = 总编排 / 首页跨组）
 _AGENT2_MODEL = None
 _AGENT2_PENDING = {}  # session_id -> {"reply_id": str, "tool_calls": [ToolCallBlock]}
 
-def _leader_prompt() -> str:
-    """leader system prompt：可选 subagent_type 清单从 agent_roles 注册表动态生成（单一数据源）。
 
-    新增角色只改 agent_roles.py，leader prompt 自动带上，无需改本文件。
+def _leader_prompt(group: str = "") -> str:
+    """leader system prompt：按应用组动态装配（角色清单 + 架构文档 + skill 库）。
+
+    group 空 = 总编排（全部角色 + 全部架构）；非空 = 该组角色 + 该组架构。
+    首行埋 <!--FDE_GROUP:<group>--> 标记，供 agent_service 工具工厂按组收窄业务工具。
     """
     from fde_platform import agent_roles, skills
     from fde_platform.agent_common import _read_arch_docs
 
-    roles = agent_roles.leader_role_choices()
+    roles = agent_roles.leader_role_choices(group or None)
     base = (
+        f"<!--FDE_GROUP:{group or '__platform__'}-->\n"
         "你是产销协同的多智能体编排 leader。你持有团队工具（TeamCreate/AgentCreate/TeamSay），"
         "遇到需要多领域协作的复杂任务时必须组建团队：先 TeamCreate 建团队，再用 AgentCreate "
         f"按 subagent_type 创建成员（可选：{roles}），"
@@ -690,10 +693,10 @@ def _leader_prompt() -> str:
         "定时任务的 permission_mode 默认用 dont_ask（后台无人时危险操作自动拒绝，安全兜底）；"
         "仅当用户明确表示「允许该定时任务执行写/危险操作」时，才用 permission_mode=bypass。"
     )
-    # 架构文档：各应用组的聚合根划分 / 应用职责 / 跨应用调用链 / 状态机，跨应用编排的业务依据
-    arch = _read_arch_docs(platform)
+    # 架构文档：本组（或全部组）的聚合根划分 / 应用职责 / 跨应用调用链 / 状态机
+    arch = _read_arch_docs(platform, group or None)
     arch_block = (
-        "\n\n下面是本平台各应用组的架构设计（聚合根划分、应用职责、跨应用调用链、状态机），"
+        "\n\n下面是本平台应用组的架构设计（聚合根划分、应用职责、跨应用调用链、状态机），"
         "跨应用编排时以它为业务依据（哪个应用管什么、谁调谁、状态如何流转）：\n"
         "<architecture>\n" + arch + "\n</architecture>"
     ) if arch else ""
@@ -706,46 +709,61 @@ def _agent2_headers():
     return {"X-User-ID": u["username"] if u else "anon"}
 
 
-def _ensure_agent2():
-    """确保 agent_service 有 credential + leader agent（幂等，缓存全局）。"""
-    global _AGENT2_CRED, _AGENT2_AGENT, _AGENT2_MODEL
-    if _AGENT2_CRED and _AGENT2_AGENT:
-        return True
-    u = users.session_user()
-    if u is None:
-        return False
-    from fde_platform import llm
-    p = llm.load_profile("operator")
-    if not p:
-        return False
-    headers = _agent2_headers()
-    try:
-        api_key = llm.decrypt_key(p["api_key_enc"])
-        r = httpx.post(f"{AGENT2_BASE}/credential/", json={"data": {
-            "type": "deepseek_credential", "api_key": api_key,
-            "base_url": p["base_url"],
-        }}, headers=headers, timeout=30)
-        r.raise_for_status()
-        _AGENT2_CRED = r.json()["credential_id"]
-        r = httpx.post(f"{AGENT2_BASE}/agent/", json={
-            "name": "leader", "system_prompt": _leader_prompt(),
-        }, headers=headers, timeout=30)
-        r.raise_for_status()
-        _AGENT2_AGENT = r.json()["agent_id"]
-        _AGENT2_MODEL = p["model"]
-        return True
-    except Exception:
-        _AGENT2_CRED = None
-        _AGENT2_AGENT = None
-        return False
+def _agent2_group() -> str:
+    """从请求读当前应用组（前端 agent_rail 通过 ?group= 传入）。空 = 总编排。"""
+    return (request.args.get("group") or "").strip()
 
 
-def _agent2_new_session() -> str | None:
+def _ensure_agent2(group: str = "") -> str | None:
+    """确保 credential + 对应组的 leader agent 存在，返回 agent_id（幂等，按组缓存）。
+
+    credential / model 全局共享（只建一次）；leader 按组各建一个（组收窄业务部分）。
+    """
+    global _AGENT2_CRED, _AGENT2_MODEL
+    if not _AGENT2_CRED:
+        u = users.session_user()
+        if u is None:
+            return None
+        from fde_platform import llm
+        p = llm.load_profile("operator")
+        if not p:
+            return None
+        headers = _agent2_headers()
+        try:
+            api_key = llm.decrypt_key(p["api_key_enc"])
+            r = httpx.post(f"{AGENT2_BASE}/credential/", json={"data": {
+                "type": "deepseek_credential", "api_key": api_key,
+                "base_url": p["base_url"],
+            }}, headers=headers, timeout=30)
+            r.raise_for_status()
+            _AGENT2_CRED = r.json()["credential_id"]
+            _AGENT2_MODEL = p["model"]
+        except Exception:
+            _AGENT2_CRED = None
+            return None
+    if group not in _AGENT2_AGENTS:
+        headers = _agent2_headers()
+        try:
+            name = f"leader_{group}" if group else "leader"
+            r = httpx.post(f"{AGENT2_BASE}/agent/", json={
+                "name": name, "system_prompt": _leader_prompt(group),
+            }, headers=headers, timeout=30)
+            r.raise_for_status()
+            _AGENT2_AGENTS[group] = r.json()["agent_id"]
+        except Exception:
+            return None
+    return _AGENT2_AGENTS[group]
+
+
+def _agent2_new_session(group: str = "") -> str | None:
     """新建 agent_service session（带 chat_model_config），返回 session_id。"""
+    agent_id = _ensure_agent2(group)
+    if not agent_id:
+        return None
     headers = _agent2_headers()
     try:
         r = httpx.post(f"{AGENT2_BASE}/sessions/", json={
-            "agent_id": _AGENT2_AGENT,
+            "agent_id": agent_id,
             "name": "对话",
             "chat_model_config": {
                 "type": "deepseek_credential", "credential_id": _AGENT2_CRED,
@@ -767,14 +785,16 @@ def api_agent2_chat_stream():
     session_id = data.get("session_id", "")
     if not message:
         return jsonify({"status": "error", "message": "消息不能为空"})
-    if not _ensure_agent2():
+    group = _agent2_group()
+    agent_id = _ensure_agent2(group)
+    if not agent_id:
         def _err():
             yield "data: " + json.dumps(
                 {"event": "error", "data": "agent_service 未配置或未启动（python -m fde_platform.agent_service）"},
                 ensure_ascii=False) + "\n\n"
         return Response(_err(), mimetype="text/event-stream")
 
-    sid = session_id if session_id else _agent2_new_session()
+    sid = session_id if session_id else _agent2_new_session(group)
     if sid is None:
         def _err2():
             yield "data: " + json.dumps({"event": "error", "data": "会话创建失败"}, ensure_ascii=False) + "\n\n"
@@ -809,7 +829,7 @@ def api_agent2_chat_stream():
         try:
             # 触发 chat（异步返回 started）
             r = httpx.post(f"{AGENT2_BASE}/chat/", json={
-                "agent_id": _AGENT2_AGENT, "session_id": sid, "input": msg,
+                "agent_id": agent_id, "session_id": sid, "input": msg,
             }, headers=headers, timeout=60)
             if r.status_code >= 400:
                 yield "data: " + json.dumps({"event": "error", "data": f"HTTP {r.status_code}"}, ensure_ascii=False) + "\n\n"
@@ -818,7 +838,7 @@ def api_agent2_chat_stream():
             # 多智能体 leader 收到 worker 回报会开启新一轮 reply，故 REPLY_END 不 break，
             # 持续读直到静默超时，把多轮文本合并成最终 done。
             with httpx.stream("GET", f"{AGENT2_BASE}/sessions/{sid}/stream",
-                              params={"agent_id": _AGENT2_AGENT}, headers=headers,
+                              params={"agent_id": agent_id}, headers=headers,
                               timeout=(None, 30, None, None)) as up:
                 for line in up.iter_lines():
                     if not line.startswith("data:"):
@@ -845,10 +865,12 @@ def api_agent2_chat_stream():
 @app.route("/api/agent2/sessions", methods=["GET"])
 def api_agent2_sessions():
     """列会话（翻译成现有 [{session_id, title}] 形状）。"""
-    _ensure_agent2()
+    agent_id = _ensure_agent2(_agent2_group())
+    if not agent_id:
+        return jsonify({"status": "error", "message": "agent_service 不可用"})
     headers = _agent2_headers()
     try:
-        r = httpx.get(f"{AGENT2_BASE}/sessions/", params={"agent_id": _AGENT2_AGENT},
+        r = httpx.get(f"{AGENT2_BASE}/sessions/", params={"agent_id": agent_id},
                       headers=headers, timeout=30)
         r.raise_for_status()
         sessions = r.json().get("sessions") or []
@@ -881,9 +903,10 @@ def api_agent2_sessions():
 @app.route("/api/agent2/sessions", methods=["POST"])
 def api_agent2_session_create():
     """新建会话。"""
-    if not _ensure_agent2():
+    group = _agent2_group()
+    if not _ensure_agent2(group):
         return jsonify({"status": "error", "message": "agent_service 不可用"})
-    sid = _agent2_new_session()
+    sid = _agent2_new_session(group)
     if sid is None:
         return jsonify({"status": "error", "message": "会话创建失败"})
     return jsonify({"status": "ok", "data": {"session_id": sid}})
@@ -892,10 +915,11 @@ def api_agent2_session_create():
 @app.route("/api/agent2/sessions/<sid>", methods=["DELETE"])
 def api_agent2_session_delete(sid):
     """删除会话。"""
+    agent_id = _ensure_agent2(_agent2_group()) or ""
     headers = _agent2_headers()
     try:
         httpx.delete(f"{AGENT2_BASE}/sessions/{sid}",
-                     params={"agent_id": _AGENT2_AGENT}, headers=headers, timeout=30)
+                     params={"agent_id": agent_id}, headers=headers, timeout=30)
     except Exception:
         pass
     return jsonify({"status": "ok", "message": "已删除"})
@@ -905,7 +929,7 @@ def api_agent2_session_delete(sid):
 def api_agent2_session_messages(sid):
     """历史消息（翻译成现有 OpenAI 格式）。agent_id 可由调用方指定（查 worker 历史时传 worker agent）。"""
     headers = _agent2_headers()
-    agent_id = request.args.get("agent_id") or _AGENT2_AGENT
+    agent_id = request.args.get("agent_id") or _ensure_agent2(_agent2_group()) or ""
     try:
         r = httpx.get(f"{AGENT2_BASE}/sessions/{sid}/messages",
                       params={"agent_id": agent_id}, headers=headers, timeout=30)
@@ -951,6 +975,7 @@ def api_agent2_confirm():
             yield "data: " + json.dumps({"event": "error", "data": "无待确认操作"}, ensure_ascii=False) + "\n\n"
         return Response(_err(), mimetype="text/event-stream")
 
+    agent_id = _ensure_agent2(_agent2_group()) or ""
     headers = _agent2_headers()
     full_text = {"v": ""}
 
@@ -982,13 +1007,13 @@ def api_agent2_confirm():
             input_event = {"type": "USER_CONFIRM_RESULT", "reply_id": pending["reply_id"],
                            "confirm_results": confirm_results}
             r = httpx.post(f"{AGENT2_BASE}/chat/", json={
-                "agent_id": _AGENT2_AGENT, "session_id": session_id, "input": input_event,
+                "agent_id": agent_id, "session_id": session_id, "input": input_event,
             }, headers=headers, timeout=60)
             if r.status_code >= 400:
                 yield "data: " + json.dumps({"event": "error", "data": f"HTTP {r.status_code}"}, ensure_ascii=False) + "\n\n"
                 return
             with httpx.stream("GET", f"{AGENT2_BASE}/sessions/{session_id}/stream",
-                              params={"agent_id": _AGENT2_AGENT}, headers=headers,
+                              params={"agent_id": agent_id}, headers=headers,
                               timeout=(None, 30, None, None)) as up:
                 for line in up.iter_lines():
                     if not line.startswith("data:"):
@@ -1015,7 +1040,7 @@ def api_agent2_confirm():
 @app.route("/api/agent-schedules", methods=["GET"])
 def api_agent_schedules():
     """自主运行定时任务列表（agent_service schedule，唤醒 leader 自主执行）。"""
-    if not _ensure_agent2():
+    if not _ensure_agent2(""):
         return jsonify({"status": "error", "message": "agent_service 不可用"})
     headers = _agent2_headers()
     try:
@@ -1040,8 +1065,9 @@ def api_agent_schedules():
 
 @app.route("/api/agent-schedules", methods=["POST"])
 def api_agent_schedule_create():
-    """创建自主运行定时任务（按 cron 唤醒 leader，按 description / 已沉淀 skill 执行）。"""
-    if not _ensure_agent2():
+    """创建自主运行定时任务（按 cron 唤醒对应组 leader，按 description / 已沉淀 skill 执行）。"""
+    agent_id = _ensure_agent2(_agent2_group())
+    if not agent_id:
         return jsonify({"status": "error", "message": "agent_service 不可用"})
     data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()
@@ -1053,7 +1079,7 @@ def api_agent_schedule_create():
         "name": name,
         "description": (data.get("description") or "").strip(),
         "cron_expression": cron,
-        "agent_id": _AGENT2_AGENT,
+        "agent_id": agent_id,
         "chat_model_config": {
             "type": "deepseek_credential", "credential_id": _AGENT2_CRED,
             "model": _AGENT2_MODEL or "deepseek-v4-pro", "parameters": {},
@@ -1126,9 +1152,10 @@ def api_agent_overview():
     # 2. 运行时状态（agent_service）
     runtime = {"teams": [], "session_count": 0, "agent_count": 0}
     try:
-        if _ensure_agent2():
+        ov_agent = _ensure_agent2("")
+        if ov_agent:
             headers = _agent2_headers()
-            r = httpx.get(f"{AGENT2_BASE}/sessions/", params={"agent_id": _AGENT2_AGENT},
+            r = httpx.get(f"{AGENT2_BASE}/sessions/", params={"agent_id": ov_agent},
                           headers=headers, timeout=30)
             if r.status_code == 200:
                 sessions = r.json().get("sessions") or []
@@ -1166,7 +1193,7 @@ def api_agent_overview():
     # 4. 定时任务（agent_service schedule，唤醒 leader 自主执行）
     schedules = []
     try:
-        if _ensure_agent2():
+        if _ensure_agent2(""):
             headers = _agent2_headers()
             r = httpx.get(f"{AGENT2_BASE}/schedule/", headers=headers, timeout=30)
             if r.status_code == 200:

@@ -11,6 +11,7 @@
 """
 import json
 import os
+import re
 from pathlib import Path
 
 from agentscope.app import create_app
@@ -165,6 +166,16 @@ def _group_desc(role: str, apps: set[str]) -> str:
     return role
 
 
+# leader system_prompt 里的组标记（供工具工厂按组收窄业务工具）
+_GROUP_MARK = re.compile(r"<!--FDE_GROUP:(\w+)-->")
+
+
+def _extract_group(system_prompt: str) -> str | None:
+    """从 leader 的 system_prompt 提取所属应用组；无标记（worker/旧数据）返回 None。"""
+    m = _GROUP_MARK.search(system_prompt or "")
+    return m.group(1) if m else None
+
+
 async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str):
     """把 FDE 业务服务桥接为 AgentScope 工具。
 
@@ -198,6 +209,13 @@ async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str):
     if record is not None and record.source == "team":
         # worker：全量工具（middleware 按角色过滤）
         return ([_mk_ft(t) for t in defs], [])
+
+    # leader：按组收窄业务工具（从 system_prompt 的 FDE_GROUP 标记提取组；总编排/无标记不窄）
+    group = _extract_group(record.data.system_prompt) if record is not None else None
+    if group and group != "__platform__":
+        defs = [t for t in defs
+                if t["_meta"]["app"] == "__platform__"
+                or t["_meta"]["app"].startswith(group + "/")]
 
     # leader：propose_skill 进 basic，业务工具按领域分组（懒加载，含查询/写/文件/导入）
     basic = []

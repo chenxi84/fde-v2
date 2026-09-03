@@ -8,14 +8,18 @@
 _ARCH_FILENAMES = ("架构设计.md", "architecture.md")
 
 
-def _read_arch_docs(platform) -> str:
-    """逐应用组读取架构设计文档（app/<组>/架构设计.md 或 architecture.md），拼成跨应用编排依据。"""
+def _read_arch_docs(platform, group: str | None = None) -> str:
+    """读取架构设计文档（app/<组>/架构设计.md 或 architecture.md），拼成跨应用编排依据。
+
+    group 非空时只读该组；None 读全部组。
+    """
+    groups = [group] if group else platform.groups()
     parts = []
     apps_dir = platform.apps_dir
-    for group in platform.groups():
+    for g in groups:
         text = ""
         for fname in _ARCH_FILENAMES:
-            p = apps_dir / group / fname
+            p = apps_dir / g / fname
             try:
                 if p.is_file():
                     text = p.read_text(encoding="utf-8").strip()
@@ -24,5 +28,5 @@ def _read_arch_docs(platform) -> str:
             except OSError:
                 continue
         if text:
-            parts.append(f"# 应用组：{group}\n\n{text}")
+            parts.append(f"# 应用组：{g}\n\n{text}")
     return "\n\n---\n\n".join(parts)
