@@ -33,7 +33,7 @@
             </tr>
           </thead>
           <tbody>
-            <template x-for="a in filtered" :key="a.title + a.time">
+            <template x-for="(a, i) in filtered" :key="i">
               <tr class="data">
                 <td><span class="tag t-slate" x-text="a.source"></span></td>
                 <td><span class="tag" :class="'t-' + a.level" x-text="a.level === 'red' ? '严重' : '警告'"></span></td>
