@@ -136,7 +136,7 @@ bash scripts/deploy.sh <服务器IP> [SSH用户名]
 | 入口 | 地址 / 方式 | 用途 |
 |---|---|---|
 | Web 控制台 | `http://127.0.0.1:4000` | 应用清单、手工调用服务、管理用户/角色、定时任务 |
-| AI Agent | 控制台内 `/agent` 页 | 对话式操作应用（需配置 LLM） |
+| AI Agent | 右侧常驻 Agent 栏（各页面右下侧）+ 「智能体总览」平台页 | 对话式操作应用（需配置 LLM） |
 | MCP 服务 | `python -m fde_platform.mcp_server` | 供外部 AI 工具通过 MCP 协议调用应用 |
 | REST API | `http://127.0.0.1:4000/api/<应用>/<服务>` | 程序化调用 |
 

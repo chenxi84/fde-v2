@@ -49,12 +49,15 @@ fde-v2/
 ├── fde_platform/              # 平台实现（发现/加载/注入/路由/鉴权/Agent/MCP/调度…）
 │   ├── web.py                 #   Flask 应用与控制台路由
 │   ├── runtime.py / scanner.py#   运行期加载与跨调用静态扫描器
-│   ├── agent_agentscope.py    #   Agent 编排唯一后端（AgentScope 2.0，import 失败回落降级）
-│   ├── agent_common.py        #   Agent 共享基座（提示词 / 进度 / 会话 helper）
-│   ├── agent_state.py         #   会话持久化（AgentScope 原生 state，取代 chatstore）
+│   ├── agent_service.py       #   Agent 编排唯一后端（AgentScope 2.0，双进程 leader 自治建队）
+│   ├── agent_roles.py         #   业务角色声明扫描装配（app/<组>/_roles.py）
+│   ├── agent_tool_filter.py   #   角色工具隔离 middleware（软隔离 + 硬兜底）
+│   ├── agent_common.py        #   Agent 共享基座（提示词 / 进度 / 架构文档读取）
 │   ├── agentscope_bridge.py   #   工具桥接（平台工具定义 + 危险操作 HITL）
 │   ├── skills.py              #   自进化 skill 库（draft→approve→published）
 │   ├── agent_admin.py         #   Agent 管理页 /agent-admin
+│   ├── flow.py                #   流程编排（声明式 DAG 工作流，app/<组>/_flow_*.yaml）
+│   ├── alerts.py              #   Agent 告警（platform_raise_alert）
 │   ├── llm.py / llm_admin.py  #   LLM 接入与管理（可插拔）
 │   ├── mcp_server.py          #   MCP 服务（stdio）
 │   ├── platform_mcp_tools.py  #   平台管理能力开放为 MCP tools
@@ -93,7 +96,9 @@ fde-v2/
 │   ├── 前端设计.md             #   第⑥步：逐应用前端详设（+ 组级看板设计）
 │   ├── 前端编码.md             #   第⑦步：按 VIEW_CONVENTION 生成 view.{js,html}
 │   ├── 前端测试.md             #   第⑧步：前端测试用例生成（逐应用 + 组级补充）
-│   └── 前端测试执行.md          #   第⑨步：用例 → 逐应用 verify_view 脚本 + 组级脚本并跑通
+│   ├── 前端测试执行.md          #   第⑨步：用例 → 逐应用 verify_view 脚本 + 组级脚本并跑通
+│   ├── 智能体角色声明.md        #   可选增强（第⑩步）：组级 _roles.py 角色声明格式正本
+│   └── 流程编排方案.md          #   可选增强（第⑪步）：组级 _flow_*.yaml 声明格式正本
 ├── config/                    # 配置与运行期数据库
 │   └── .env.example           #   配置模板（复制为 .env）
 └── scripts/                   # 部署与运维脚本（deploy.sh / gen-cert.sh / smoke_test.py）
@@ -143,7 +148,8 @@ Claude 会读规范、逐步推进，你只需在「第①步 应用划分」「
 | **跨应用路由** | 实现 `self.fde.call` 的按名解析与运行期绑定，身份 `ctx` 自动透传且不可伪造。 |
 | **身份与鉴权** | 平台认证调用人、注入权威 `ctx`；授权维度是「应用下的开放服务」，Web / MCP / Agent / 调度四处一致强制。 |
 | **静态扫描器** | `python -m fde_platform.scanner` 用 AST 在**不运行**前提下校验所有 `self.fde.call` 的目标与参数契约（退出码可入 CI）；结果见控制台 `/api/scan`。 |
-| **AI Agent（AgentScope）** | 唯一后端 `agent_agentscope.py`（AgentScope 2.0 编排，import 失败自动回落降级）；自进化 skill 库（`skills.py` draft→approve→published）；危险操作经 `_meta.dangerous` 走 HITL 人工确认；会话持久化用 AgentScope 原生 state（`agent_state.py`，取代 chatstore）。 |
+| **AI Agent（AgentScope 多智能体）** | 唯一后端 `agent_service.py`（AgentScope 2.0，双进程 leader 自治建队，import 失败自动回落降级）；业务角色下沉到各组 `app/<组>/_roles.py` 声明、平台扫描装配，按角色过滤工具（软隔离 + 硬兜底）；自进化 skill 库（`skills.py` draft→approve→published）；危险操作经 `_meta.dangerous` 走 HITL 人工确认。 |
+| **流程编排（Flow）** | 声明式 DAG 工作流：组级 `app/<组>/_flow_<key>.yaml` 声明节点（`id/role/task/output/input/depends_on/when/until/max_loop`），平台扫描装配并拓扑分层 + 并行 + 条件分支 + 循环执行；节点 = 轻量 ReAct（LLM + 角色过滤工具）；前端「流程编排」页（画布 / 表单 / YAML 三标签）可视化编辑。 |
 | **资源目录** | 每个应用自动建 `resource/import-file`（上传）/ `export-file`（产出），配套内置文件工具供 Agent / MCP 做数据导入。 |
 | **定时任务** | APScheduler 按 cron 调度公共服务，管理页 `/scheduler`，日志落 `config/scheduler.db`。 |
 | **视图装配** | 扫描各应用 `view.{js,html}` 的自描述 `PAGE_META`（key/name/ic/order/bold/col_default_hidden），零接线装配进所属组菜单；组级聚合页放 `app/<组>/`（松散文件），经 `view_registry.py` 统一扫描与 `/app/<组>/<页>.{js,html}` serve。 |
@@ -210,6 +216,8 @@ class Todo:                                  # 类 = 聚合根，PascalCase（�
 | ⑦ | 前端编码（VIEW_CONVENTION） | `fcode` | `app/<组>/<应用>/view.{js,html}` + `app/<组>/dashboard.{js,html}` | 落盘即进菜单 |
 | ⑧ | 前端测试用例（只生成不运行） | `ftest` | 逐应用 `前端测试用例.md` + 组级补充 `app/<组>/前端测试用例.md` | — |
 | ⑨ | 前端测试执行（playwright 串行真跑） | `fverify` | `app/<组>/tests/verify_view_<组>_*.py` + `app/<组>/tests/前端测试报告.md` | ★ 0 报错 |
+| ⑩ | 智能体角色声明（可选增强） | `roles` | `app/<组>/_roles.py` | 角色划分 |
+| ⑪ | 流程编排声明（可选增强） | `flow` | `app/<组>/_flow_<key>.yaml` | 主流程拆节点 |
 
 **两个硬关卡**：
 
@@ -277,6 +285,8 @@ python design-plus/前端验收样板/verify_view_e2e.py            # e2e 前端
 | 聚合根识别方法（第①步，本体驱动 + DDD） | `design-plus/架构设计.md` |
 | 应用详设模板（第②步） | `design-plus/应用设计.md` |
 | 前端视图约定正本（第⑥–⑨步） | `design-plus/VIEW_CONVENTION.md`（+ 参考 `design-plus/view-convention/`） |
+| 智能体角色声明（可选增强 · 第⑩步） | `design-plus/智能体角色声明.md` |
+| 流程编排（可选增强 · 第⑪步） | `design-plus/流程编排方案.md` |
 | 迭代（修改现有应用，含读取要求） | `design-plus/迭代执行.md`（先读组文档 → 改代码+改文档 → 跑测试） |
 | 外部系统对接 | `/integration` 集成接口管理（扫描/配置/测试/跟踪） |
 | 平台 MCP 管理 | `python -m fde_platform.mcp_server --user admin` |
