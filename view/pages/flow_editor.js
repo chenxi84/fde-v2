@@ -18,6 +18,8 @@ export function pageFlowEditor() {
     showNew: false,
     form: { group: "", key: "", name: "", description: "" },
     ops: OPS,
+    tab: "form",      // form = 表单编辑；yaml = YAML 源码
+    yamlText: "",
 
     async init() {
       self.tpl = await fetch(new URL("flow_editor.html", import.meta.url)).then((r) => r.text());
@@ -99,6 +101,40 @@ export function pageFlowEditor() {
     async remove(f) {
       if (!confirm(`删除流程「${f.name}」？`)) return;
       await del(`/api/flows/${encodeURIComponent(f.group)}/${encodeURIComponent(f.key)}`);
+      await self.load();
+    },
+
+    /* ---- YAML 源码视图 ---- */
+    showYaml() { self.yamlText = self.toYaml(self.editing); self.tab = "yaml"; },
+    showForm() { self.tab = "form"; },
+
+    toYaml(e) {
+      const L = [];
+      L.push(`name: ${e.name}`);
+      L.push(`key: ${e.key}`);
+      L.push(`description: ${e.description || ""}`);
+      L.push("nodes:");
+      for (const n of e.nodes) {
+        L.push(`  - id: ${n.id}`);
+        if (n.role) L.push(`    role: ${n.role}`);
+        if (n.task) L.push(`    task: ${n.task}`);
+        if (n.output) L.push(`    output: ${n.output}`);
+        const input = _split(n.input);
+        if (input.length) { L.push("    input:"); input.forEach((k) => L.push(`      - ${k}`)); }
+        const deps = _split(n.depends_on);
+        if (deps.length) { L.push("    depends_on:"); deps.forEach((d) => L.push(`      - ${d}`)); }
+        if (n.when && n.when.key) L.push(`    when: {key: ${n.when.key}, op: ${n.when.op || "not_empty"}, value: ${n.when.value || ""}}`);
+        if (n.until && n.until.key) L.push(`    until: {key: ${n.until.key}, op: ${n.until.op || "not_empty"}, value: ${n.until.value || ""}}`);
+        if (n.max_loop) L.push(`    max_loop: ${n.max_loop}`);
+      }
+      return L.join("\n");
+    },
+
+    async saveYaml() {
+      if (!self.editing) return;
+      await post("/api/flows", { group: self.editing.group, yaml_text: self.yamlText });
+      self.editing = null;
+      self.tab = "form";
       await self.load();
     },
   });

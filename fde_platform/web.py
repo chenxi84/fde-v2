@@ -1135,18 +1135,32 @@ def api_flows():
 
 @app.route("/api/flows", methods=["POST"])
 def api_flow_save():
-    """保存工作流（写盘 app/<组>/_flow_<key>.yaml）。仅 admin。"""
+    """保存工作流（写盘 app/<组>/_flow_<key>.yaml）。仅 admin。支持结构化或 YAML 文本。"""
     u = users.session_user()
     if not (u and u.get("is_admin")):
         return jsonify({"status": "error", "message": "仅管理员可保存流程"}), 403
     data = request.get_json(silent=True) or {}
-    group = (data.get("group") or "").strip()
-    key = (data.get("key") or "").strip()
-    name = (data.get("name") or "").strip()
-    description = (data.get("description") or "").strip()
-    nodes = data.get("nodes") or []
     from fde_platform import flow
-    result = flow.save_flow(group, key, name, description, nodes)
+    yaml_text = (data.get("yaml_text") or "").strip()
+    if yaml_text:
+        import yaml
+        try:
+            parsed = yaml.safe_load(yaml_text)
+        except Exception as e:
+            return jsonify({"status": "error", "message": f"YAML 解析失败：{e}"})
+        if not isinstance(parsed, dict):
+            return jsonify({"status": "error", "message": "YAML 内容应为对象"})
+        result = flow.save_flow(
+            (data.get("group") or "").strip(), (parsed.get("key") or "").strip(),
+            (parsed.get("name") or "").strip(), (parsed.get("description") or "").strip(),
+            parsed.get("nodes") or [],
+        )
+    else:
+        result = flow.save_flow(
+            (data.get("group") or "").strip(), (data.get("key") or "").strip(),
+            (data.get("name") or "").strip(), (data.get("description") or "").strip(),
+            data.get("nodes") or [],
+        )
     if "error" in result:
         return jsonify({"status": "error", "message": result["error"]})
     return jsonify({"status": "ok", "data": result})

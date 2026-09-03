@@ -52,52 +52,72 @@
             </div>
             <textarea x-model="editing.description" rows="2" placeholder="描述" style="width:100%; margin-top:8px"></textarea>
 
-            <h4 style="margin:16px 0 8px">节点</h4>
-            <template x-if="!editing.nodes.length">
-              <div class="empty">暂无节点 —— 点下方「添加节点」</div>
-            </template>
-            <template x-for="(n, i) in editing.nodes" :key="i">
-              <div style="border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:10px">
-                <div class="tagline">
-                  <input x-model="n.id" placeholder="节点 id（如 forecast）" style="flex:1">
-                  <select x-model="n.role">
-                    <option value="">（无角色）</option>
-                    <template x-for="r in roles" :key="r.type">
-                      <option :value="r.type" x-text="r.label"></option>
-                    </template>
-                  </select>
-                  <button class="b-dng b-sm" @click="removeNode(i)">删除</button>
-                </div>
-                <textarea x-model="n.task" rows="2" placeholder="任务文本（可用 {上游结果键} 占位）" style="width:100%; margin-top:6px"></textarea>
-                <div class="tagline" style="margin-top:6px">
-                  <input x-model="n.output" placeholder="结果键 output" style="flex:1">
-                  <input x-model="n.input" placeholder="输入键（逗号分隔）" style="flex:1">
-                  <input x-model="n.depends_on" placeholder="依赖节点 id（逗号分隔）" style="flex:1">
-                </div>
-                <div class="tagline" style="margin-top:6px; flex-wrap:wrap; align-items:center">
-                  <span class="muted" style="font-size:12px">when</span>
-                  <input x-model="n.when.key" placeholder="key" style="width:100px">
-                  <select x-model="n.when.op" style="width:120px">
-                    <option value="">（op）</option>
-                    <template x-for="o in ops" :key="o"><option :value="o" x-text="o"></option></template>
-                  </select>
-                  <input x-model="n.when.value" placeholder="value" style="width:110px">
-                  <span class="muted" style="font-size:12px; margin-left:8px">until</span>
-                  <input x-model="n.until.key" placeholder="key" style="width:100px">
-                  <select x-model="n.until.op" style="width:120px">
-                    <option value="">（op）</option>
-                    <template x-for="o in ops" :key="o"><option :value="o" x-text="o"></option></template>
-                  </select>
-                  <input x-model="n.until.value" placeholder="value" style="width:110px">
-                  <input x-model="n.max_loop" placeholder="max_loop" style="width:90px">
+            <div class="tagline" style="margin-top:10px">
+              <button class="b-ghost b-sm" @click="showForm()">表单编辑</button>
+              <button class="b-ghost b-sm" @click="showYaml()">YAML 源码</button>
+            </div>
+
+            <template x-if="tab === 'form'">
+              <div>
+                <h4 style="margin:16px 0 8px">节点</h4>
+                <template x-if="!editing.nodes.length">
+                  <div class="empty">暂无节点 —— 点下方「添加节点」</div>
+                </template>
+                <template x-for="(n, i) in editing.nodes" :key="i">
+                  <div style="border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:10px">
+                    <div class="tagline">
+                      <input x-model="n.id" placeholder="节点 id（如 forecast）" style="flex:1">
+                      <select x-model="n.role">
+                        <option value="">（无角色）</option>
+                        <template x-for="r in roles" :key="r.type">
+                          <option :value="r.type" x-text="r.label"></option>
+                        </template>
+                      </select>
+                      <button class="b-dng b-sm" @click="removeNode(i)">删除</button>
+                    </div>
+                    <textarea x-model="n.task" rows="2" placeholder="任务文本（可用 {上游结果键} 占位）" style="width:100%; margin-top:6px"></textarea>
+                    <div class="tagline" style="margin-top:6px">
+                      <input x-model="n.output" placeholder="结果键 output" style="flex:1">
+                      <input x-model="n.input" placeholder="输入键（逗号分隔）" style="flex:1">
+                      <input x-model="n.depends_on" placeholder="依赖节点 id（逗号分隔）" style="flex:1">
+                    </div>
+                    <div class="tagline" style="margin-top:6px; flex-wrap:wrap; align-items:center">
+                      <span class="muted" style="font-size:12px">when</span>
+                      <input x-model="n.when.key" placeholder="key" style="width:100px">
+                      <select x-model="n.when.op" style="width:120px">
+                        <option value="">（op）</option>
+                        <template x-for="o in ops" :key="o"><option :value="o" x-text="o"></option></template>
+                      </select>
+                      <input x-model="n.when.value" placeholder="value" style="width:110px">
+                      <span class="muted" style="font-size:12px; margin-left:8px">until</span>
+                      <input x-model="n.until.key" placeholder="key" style="width:100px">
+                      <select x-model="n.until.op" style="width:120px">
+                        <option value="">（op）</option>
+                        <template x-for="o in ops" :key="o"><option :value="o" x-text="o"></option></template>
+                      </select>
+                      <input x-model="n.until.value" placeholder="value" style="width:110px">
+                      <input x-model="n.max_loop" placeholder="max_loop" style="width:90px">
+                    </div>
+                  </div>
+                </template>
+                <button class="b-ghost b-sm" @click="addNode()">＋ 添加节点</button>
+                <div class="tagline" style="margin-top:12px">
+                  <button class="b-pri" @click="saveEdit()">保存</button>
+                  <button class="b-ghost" @click="cancelEdit()">取消</button>
                 </div>
               </div>
             </template>
-            <button class="b-ghost b-sm" @click="addNode()">＋ 添加节点</button>
-            <div class="tagline" style="margin-top:12px">
-              <button class="b-pri" @click="saveEdit()">保存</button>
-              <button class="b-ghost" @click="cancelEdit()">取消</button>
-            </div>
+
+            <template x-if="tab === 'yaml'">
+              <div>
+                <textarea x-model="yamlText" rows="18" placeholder="YAML 源码"
+                  style="width:100%; margin-top:12px; font-family:var(--mono); font-size:12px"></textarea>
+                <div class="tagline" style="margin-top:12px">
+                  <button class="b-pri" @click="saveYaml()">保存 YAML</button>
+                  <button class="b-ghost" @click="cancelEdit()">取消</button>
+                </div>
+              </div>
+            </template>
           </div>
         </div>
       </template>
