@@ -1,9 +1,11 @@
-"""FDE 工作流编排（阶段 1a：顺序 + 结果传递，节点 = 角色的工具集）。
+"""FDE 工作流编排（阶段 1a：顺序 + 结果传递，节点 = 角色的工具集；+ 进度上报）。
 
 声明式 flow：`app/<组>/_flow_<名>.yaml`，步骤按顺序执行，结果经状态键传递。
 节点执行 = 轻量 ReAct 循环（``llm.chat`` + ``bridge.execute``），工具按角色过滤
-（``agent_roles.allowed_tools_for_role``），因此「节点=角色」在工具集层面即确定，
-不依赖 AgentScope 的 team 内部机制。
+（``agent_roles.allowed_tools_for_role``），因此「节点=角色」在工具集层面即确定。
+
+进度上报：每次执行把「跑到第几步 / 哪个角色 / 结果摘要」写入 config/flow_runs.db
+（只保留最近一次），供 platform_flow_progress / 前端「编排执行」区读取。
 
 约定：
 - 一个 flow 一个 YAML，``name`` 全局唯一；``steps`` 有序。
@@ -11,9 +13,11 @@
   ``input`` 依赖的上游结果键（用于填充 ``{key}`` 占位符）。
 """
 import json
+import sqlite3
+from datetime import datetime
+from pathlib import Path
 
 import yaml
-from pathlib import Path
 
 from fde_platform import agent_roles
 from fde_platform import agentscope_bridge as bridge
@@ -21,8 +25,22 @@ from fde_platform import llm
 
 _ROOT = Path(__file__).resolve().parents[1]
 _APPS_DIR = _ROOT / "app"
+_PROGRESS_DB = _ROOT / "config" / "flow_runs.db"
 
 _MAX_ROUNDS = 10  # 单节点 ReAct 最大轮次（防失控）
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS flow_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    flow_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    step_index INTEGER NOT NULL DEFAULT 0,
+    step_total INTEGER NOT NULL DEFAULT 0,
+    current_role TEXT DEFAULT '',
+    result TEXT DEFAULT '',
+    updated_at TEXT NOT NULL
+);
+"""
 
 
 def _load_flows() -> dict[str, dict]:
@@ -52,6 +70,37 @@ def list_flows() -> list[dict]:
          "step_count": len(f.get("steps", []))}
         for n, f in sorted(_load_flows().items())
     ]
+
+
+# ── 进度上报（只保留最近一次执行）────────────────────────
+
+def _report_progress(flow_name: str, status: str, step_index: int,
+                     step_total: int, current_role: str, result: str = "") -> None:
+    conn = sqlite3.connect(str(_PROGRESS_DB))
+    try:
+        conn.execute(_SCHEMA)
+        conn.execute("DELETE FROM flow_runs")  # 只保留最近一次执行
+        conn.execute(
+            "INSERT INTO flow_runs (flow_name, status, step_index, step_total, "
+            "current_role, result, updated_at) VALUES (?,?,?,?,?,?,?)",
+            (flow_name, status, step_index, step_total, current_role, result,
+             datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_progress() -> dict | None:
+    """读最近一次 flow 执行的进度（无则 None）。"""
+    conn = sqlite3.connect(str(_PROGRESS_DB))
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute(_SCHEMA)
+        row = conn.execute("SELECT * FROM flow_runs ORDER BY id DESC LIMIT 1").fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 
 def _fill(task: str, state: dict, inputs: list) -> str:
@@ -111,17 +160,29 @@ def _run_node(platform, user, role: str, task: str) -> str:
 
 
 def run_flow(name: str, platform, user) -> dict:
-    """顺序执行一个 flow，返回 state（各步骤 output 键的结果）。"""
+    """顺序执行一个 flow，返回 state；执行过程写进度到 flow_runs.db。"""
     flow = _load_flows().get(name)
     if flow is None:
         return {"error": f"flow 不存在：{name}"}
+    steps = [s for s in flow.get("steps", []) if isinstance(s, dict)]
+    total = len(steps)
     state: dict = {}
-    for step in flow.get("steps", []):
-        if not isinstance(step, dict):
-            continue
+    _report_progress(name, "running", 0, total, "")
+    for i, step in enumerate(steps, 1):
+        role = step.get("role", "")
         task = _fill(str(step.get("task", "")), state, step.get("input"))
-        result = _run_node(platform, user, step.get("role", ""), task)
+        _report_progress(name, "running", i, total, role)
+        try:
+            result = _run_node(platform, user, role, task)
+        except Exception as e:
+            _report_progress(name, "error", i, total, role, str(e))
+            key = step.get("output")
+            if key:
+                state[key] = f"（节点执行失败：{e}）"
+            continue
         key = step.get("output")
         if key:
             state[key] = result
+    _report_progress(name, "done", total, total, "",
+                     json.dumps(state, ensure_ascii=False)[:2000])
     return state

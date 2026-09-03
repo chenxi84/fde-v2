@@ -10,6 +10,7 @@ export function pageAgentOverview() {
     skills: [],       // [{name, trigger, description, steps:[{tool, note}]}]
     schedules: [],    // [{schedule_id, name, cron, enabled, permission_mode}]
     leader: null,     // 编排器 leader 摘要 {label, description, capabilities}
+    flowRun: null,    // 最近一次编排执行进度 {flow_name, status, step_index, step_total, current_role}
     openRole: "",     // 展开查看功能概述（system_prompt）的角色 type
 
     async init() {
@@ -27,6 +28,7 @@ export function pageAgentOverview() {
         self.skills = d.skills || [];
         self.schedules = d.schedules || [];
         self.leader = d.leader || null;
+        self.flowRun = d.flow_run || null;
       }
     },
 

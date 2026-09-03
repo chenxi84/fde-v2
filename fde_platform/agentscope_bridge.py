@@ -151,6 +151,15 @@ def _platform_tool_defs(user=None) -> list:
             },
             "_meta": {"app": "__platform__", "service": "run_flow", "dangerous": False},
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "platform_flow_progress",
+                "description": "查询最近一次工作流（flow）执行的进度（跑到第几步 / 哪个角色 / 结果摘要）。",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+            "_meta": {"app": "__platform__", "service": "flow_progress", "dangerous": False},
+        },
     ]
     if user is None or user.get("is_admin"):
         defs.extend(_admin_platform_tool_defs())
@@ -319,6 +328,10 @@ def _call_platform_tool(platform, user, service: str, args: dict):
         from fde_platform import flow
 
         return flow.run_flow(args.get("name", ""), platform, user)
+    if service == "flow_progress":
+        from fde_platform import flow
+
+        return flow.get_progress() or {}
     # 集成 / 定时任务配置：仅管理员（user=None 视为无鉴权全通，与平台 _is_admin_user 一致）
     if user is not None and not user.get("is_admin"):
         raise FdeError("无权调用平台配置工具（仅管理员）")

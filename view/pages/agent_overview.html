@@ -124,4 +124,33 @@
       </template>
     </div>
   </div>
+
+  <div class="card">
+    <div class="hd">
+      <h3>编排执行</h3>
+      <span class="hint">最近一次工作流（flow）执行进度</span>
+    </div>
+    <div class="bd">
+      <template x-if="!flowRun">
+        <div class="empty">暂无编排执行记录 —— 在 Agent 对话里说「跑产销协同链」触发</div>
+      </template>
+      <template x-if="flowRun">
+        <div style="padding:8px 0">
+          <div>
+            <b x-text="flowRun.flow_name"></b>
+            <span class="tag" :class="flowRun.status === 'done' ? 't-teal' : flowRun.status === 'error' ? 't-red' : 't-amber'"
+              x-text="flowRun.status === 'done' ? '已完成' : flowRun.status === 'error' ? '失败' : '执行中'"></span>
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:4px">
+            <template x-if="flowRun.status === 'running'">
+              <span x-text="'正在执行第 ' + flowRun.step_index + ' / ' + flowRun.step_total + ' 步' + (flowRun.current_role ? '（' + flowRun.current_role + '）' : '')"></span>
+            </template>
+            <template x-if="flowRun.status !== 'running'">
+              <span x-text="'共 ' + flowRun.step_total + ' 步 · 更新于 ' + flowRun.updated_at"></span>
+            </template>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
 </div>

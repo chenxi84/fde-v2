@@ -1227,9 +1227,16 @@ def api_agent_overview():
         ],
     }
 
+    # 5. 最近一次编排执行（flow）进度
+    try:
+        from fde_platform import flow
+        flow_run = flow.get_progress()
+    except Exception:
+        flow_run = None
+
     return jsonify({"status": "ok", "data": {
         "leader": leader, "roles": roles, "runtime": runtime,
-        "skills": skill_list, "schedules": schedules,
+        "skills": skill_list, "schedules": schedules, "flow_run": flow_run,
     }})
 
 
