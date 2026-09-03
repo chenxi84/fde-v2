@@ -1,0 +1,48 @@
+<!-- 平台告警页：巡检发现的库存预警 -->
+<div class="bd">
+  <div class="card">
+    <div class="hd">
+      <h3>库存告警</h3>
+      <span class="hint" x-text="'共 ' + alerts.length + ' 条预警'"></span>
+      <button class="b-ghost b-sm" style="margin-left:auto" @click="load()">↻ 刷新</button>
+    </div>
+    <div class="bd">
+      <!-- 类型过滤 chips -->
+      <div class="chips" style="margin-bottom:12px">
+        <button class="chip" :class="{ on: !typeFilter }" @click="typeFilter = ''">全部</button>
+        <template x-for="t in types" :key="t">
+          <button class="chip" :class="{ on: typeFilter === t }" @click="typeFilter = t" x-text="t"></button>
+        </template>
+      </div>
+
+      <template x-if="loading">
+        <div class="empty">加载中…</div>
+      </template>
+      <template x-if="!loading && !filtered.length">
+        <div class="empty">暂无告警 —— 巡检 Agent 自主运行后，击穿/超储预警会出现在这里</div>
+      </template>
+      <template x-if="!loading && filtered.length">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>物料号</th>
+              <th>日期</th>
+              <th>预警类型</th>
+              <th class="right">当前水位</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="a in filtered" :key="a.material_no + a.biz_date">
+              <tr class="data">
+                <td x-text="a.material_no"></td>
+                <td x-text="a.biz_date"></td>
+                <td><span class="tag" :class="'t-' + hue(a.alert_type)" x-text="a.alert_type"></span></td>
+                <td class="right" x-text="a.balance"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </template>
+    </div>
+  </div>
+</div>

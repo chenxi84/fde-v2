@@ -1073,6 +1073,22 @@ def api_agent_overview():
     return jsonify({"status": "ok", "data": {"roles": roles, "runtime": runtime}})
 
 
+@app.route("/api/alerts")
+def api_alerts():
+    """告警列表：巡检发现的库存预警（alert_type 非「无」的推移记录）。
+
+    巡检 Agent 自主运行（refresh_batch + scan_alert）后，预警数据落库，此端点返回
+    当前所有击穿/超储/缺货等预警，供前台告警页展示（主动上报的替代：页面拉取而非飞书推送）。
+    """
+    try:
+        result = platform.call("psc/inventory_projection", "list", ctx=users.current_caller_ctx())
+        items = (result or {}).get("items", []) if isinstance(result, dict) else []
+        alerts = [it for it in items if it.get("alert_type") and it.get("alert_type") != "无"]
+        return jsonify({"status": "ok", "data": alerts})
+    except Exception:
+        return jsonify({"status": "ok", "data": []})
+
+
 # ── Agent ─────────────────────────────────────────────────
 
 
