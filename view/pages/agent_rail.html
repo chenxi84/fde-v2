@@ -1,8 +1,11 @@
 <!-- Agent 右栏（平台级跨应用）—— 窄栏形态：头 + 会话切换 + 消息流 + 输入 -->
-<div class="agent-rail-inner">
+<div class="agent-rail-inner" :class="{ expanded: expanded }">
   <div class="agent-rail-hd">
     <span class="overline" style="margin:0">✦ 平台级 Agent</span>
     <div class="right tagline" style="gap:6px">
+      <button class="b-ghost b-sm" @click="toggleExpand()" :title="expanded ? '缩回' : '全屏展开'">
+        <span x-text="expanded ? '⤡' : '⤢'"></span>
+      </button>
       <button class="b-ghost b-sm" @click="newSession()" title="新建会话">＋ 新</button>
       <button class="b-ghost b-sm" @click="delSession()" title="删除当前会话">🗑</button>
     </div>

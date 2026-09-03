@@ -114,6 +114,12 @@ aside.agent-rail {
 }
 /* 首页（.pf 是 block 布局，非应用页 flex）：右侧固定栏浮在视口右侧，置于顶栏(100)之上 */
 .pf .agent-rail { position: fixed; top: 0; right: 0; height: 100vh; z-index: 101; }
+/* 扩展态：全屏覆盖主区域（左到菜单栏 212px 右侧，右到屏幕右缘，盖住顶栏） */
+aside.agent-rail:has(.agent-rail-inner.expanded) {
+  position: fixed; top: 0; right: 0; bottom: 0; left: 212px; width: auto; z-index: 120;
+}
+/* 首页无侧栏：扩展为全屏 */
+.pf aside.agent-rail:has(.agent-rail-inner.expanded) { left: 0; }
 aside.agent-rail > div { flex: 1; min-width: 0; min-height: 0; display: flex; }
 .agent-rail-inner { flex: 1; min-height: 0; display: flex; flex-direction: column;
   gap: 10px; padding: 12px; }

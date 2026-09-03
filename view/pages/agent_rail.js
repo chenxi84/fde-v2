@@ -28,6 +28,9 @@ export function agentRail() {
     confirm: null,    // 待人工确认的危险操作 [{id,name,input}]
     uploading: false, // 附件上传中
 
+    /* ---- 布局：右栏全屏扩展 ---- */
+    expanded: (localStorage.getItem("fde.agent.expanded") || "0") === "1",
+
     /* ---- 文件面板 ---- */
     filesOpen: true,        // 面板默认自动展开
     importFiles: [],        // import-file 目录文件列表
@@ -107,6 +110,12 @@ export function agentRail() {
     },
 
     visible(m) { return m.role === "user" || m.role === "assistant"; },
+
+    /* 右栏全屏展开 / 缩回（仅布局，不影响会话状态） */
+    toggleExpand() {
+      self.expanded = !self.expanded;
+      localStorage.setItem("fde.agent.expanded", self.expanded ? "1" : "0");
+    },
 
     async send() {
       const m = self.input.trim();
