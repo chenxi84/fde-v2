@@ -124,6 +124,33 @@ def _platform_tool_defs(user=None) -> list:
             },
             "_meta": {"app": "__platform__", "service": "raise_alert", "dangerous": False},
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "platform_list_flows",
+                "description": "列出全部已声明的工作流（flow，见 app/<组>/_flow_*.yaml）。",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+            "_meta": {"app": "__platform__", "service": "list_flows", "dangerous": False},
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "platform_run_flow",
+                "description": (
+                    "执行一个已声明的工作流（flow）：按顺序运行多个角色节点，前一个节点的结果"
+                    "作为后一个节点的输入（结果经状态键传递）。先 platform_list_flows 查看可用 flow。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "flow 名（如「产销协同链」）"},
+                    },
+                    "required": ["name"],
+                },
+            },
+            "_meta": {"app": "__platform__", "service": "run_flow", "dangerous": False},
+        },
     ]
     if user is None or user.get("is_admin"):
         defs.extend(_admin_platform_tool_defs())
@@ -284,6 +311,14 @@ def _call_platform_tool(platform, user, service: str, args: dict):
             args.get("source", "Agent 上报"), args.get("level", "amber"),
             args.get("title", ""), args.get("detail", ""),
         )
+    if service == "list_flows":
+        from fde_platform import flow
+
+        return {"flows": flow.list_flows()}
+    if service == "run_flow":
+        from fde_platform import flow
+
+        return flow.run_flow(args.get("name", ""), platform, user)
     # 集成 / 定时任务配置：仅管理员（user=None 视为无鉴权全通，与平台 _is_admin_user 一致）
     if user is not None and not user.get("is_admin"):
         raise FdeError("无权调用平台配置工具（仅管理员）")

@@ -1,0 +1,15 @@
+# 产销协同链：销售预测 → 主计划 → 出库计划（顺序 + 结果传递示例）
+name: 产销协同链
+description: 先由销售域分析预测并给出结论，再由计划域据此生成主计划，最后交付域生成出库计划。
+steps:
+  - role: sales
+    task: "分析当前月度版本的销售预测异常，给出最终预测结论（哪些客户/物料需重点关注的预测结果）。"
+    output: forecast
+  - role: planning
+    task: "基于销售预测结论「{forecast}」生成或调整主计划。"
+    input: [forecast]
+    output: plan
+  - role: delivery
+    task: "基于主计划「{plan}」生成出库计划。"
+    input: [plan]
+    output: outbound
