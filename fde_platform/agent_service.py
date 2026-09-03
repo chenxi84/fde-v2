@@ -40,7 +40,7 @@ _DB_URL = os.environ.get(
 )
 _WORKDIR = str(_BASE / "agent_workspaces")
 
-# 危险服务判定（与 agent_agentscope.is_dangerous_tool 同口径）：命中即走 HITL 确认。
+# 危险服务判定：命中即走 HITL 确认。
 _DANGEROUS_PATTERNS = (
     "delete", "remove", "publish", "unpublish", "lock", "deprecate", "cancel",
     "approve", "reject", "archive", "drop", "truncate", "destroy", "deactivate",
@@ -150,14 +150,19 @@ for _r, _apps in agent_roles.ROLE_APPS.items():
     for _a in _apps:
         _APP_ROLE[_a] = _r
 
-# 角色 → 查询组描述（ResetTools 的 input_schema 用，LLM 据此决定激活哪个组）
-_QUERY_GROUP_DESC = {
-    "sales": "销售/需求域工具（预测/历史/客户/月度版本/达成率，含导入与文件）",
-    "planning": "计划/排产域工具（项目/需求/主计划/需求池）",
-    "inventory": "物料/库存域工具（物料/断点/替换/策略/推移）",
-    "delivery": "交付/出库域工具（出库计划）",
-    "other": "其他应用工具",
-}
+def _group_desc(role: str, apps: set[str]) -> str:
+    """ToolGroup 描述：从角色注册表动态生成（单一数据源，不再手写分组文案）。
+
+    - 业务角色：`标签（应用短名列表）`，如「销售/需求专家（md_customer、sales_forecast…）」
+    - other（未分类应用，如 e2e）：显式列出 qualname，避免「其他应用工具」太模糊
+    """
+    if role == "other" and apps:
+        return "示例/演示应用工具（" + "、".join(sorted(apps)) + "）"
+    label = agent_roles.role_label(role)
+    if label and apps:
+        short = "、".join(sorted(a.split("/")[-1] for a in apps))
+        return f"{label}（{short}）"
+    return role
 
 
 async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str):
@@ -197,6 +202,7 @@ async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str):
     # leader：propose_skill 进 basic，业务工具按领域分组（懒加载，含查询/写/文件/导入）
     basic = []
     groups: dict[str, list] = {}
+    group_apps: dict[str, set] = {}
     for t in defs:
         app = t["_meta"]["app"]
         name = t["function"]["name"]
@@ -206,8 +212,9 @@ async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str):
             continue
         role = _APP_ROLE.get(app, "other")
         groups.setdefault(role, []).append(_mk_ft(t))
+        group_apps.setdefault(role, set()).add(app)
     tool_groups = [
-        ToolGroup(name=r, description=_QUERY_GROUP_DESC.get(r, r), tools=fts)
+        ToolGroup(name=r, description=_group_desc(r, group_apps.get(r, set())), tools=fts)
         for r, fts in sorted(groups.items())
     ]
     return (basic, tool_groups)
@@ -237,8 +244,16 @@ async def _fde_middleware_factory(
         tool_defs = bridge.tool_schemas(_platform, user)
         allowed = agent_roles.allowed_tools_for_role(role, tool_defs)
         return [agent_tool_filter.RoleToolFilterMiddleware(role, allowed)]
-    # leader：去掉内置文件工具 + 平台配置工具（编排不需要，收窄缓解全量工具慢）
-    return [agent_tool_filter.LeaderToolFilterMiddleware()]
+    # leader：去掉平台配置工具；scheduled session 再禁 ScheduleCreate（防失控循环）。
+    # 读写边界交给 AgentScope 原生 permission_mode（定时任务默认 DONT_ASK，ASK 转 DENY）。
+    extra_deny = set()
+    try:
+        sess = await _storage.get_session(user_id, agent_id, session_id)
+        if sess is not None and str(sess.source) == "schedule":
+            extra_deny = {"ScheduleCreate"}
+    except Exception:
+        pass  # 查 session 失败不阻断组装（默认不额外禁）
+    return [agent_tool_filter.LeaderToolFilterMiddleware(extra_deny=extra_deny)]
 
 
 app = create_app(

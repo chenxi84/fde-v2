@@ -16,24 +16,24 @@
  *     请求头，后端对获授页面隐式放行其派生服务）。
  */
 import { get, dash, fmtTime, tryParse } from "./api.js";
-import { pageAgent } from "../pages/agent.js";
 import { pageConsole } from "../pages/console.js";
 import { agentRail } from "../pages/agent_rail.js";
 import { pageAgentOverview } from "../pages/agent_overview.js";
 import { pageAlerts } from "../pages/alerts.js";
+import { pageAutopilot } from "../pages/autopilot.js";
 
 /* 平台公共页（可按页面授权）；console 单列——仅 admin 可见、不可授权 */
 export const PLATFORM_PAGES = [
-  { key: "agent", name: "Agent", ic: "✦", title: "平台 Agent", crumb: "对话式跨应用编排", platform: true },
   { key: "agent_overview", name: "智能体", ic: "🤖", title: "智能体总览", crumb: "平台设计的智能体角色 · 运行时团队", platform: true },
   { key: "alerts", name: "告警", ic: "⚠", title: "库存告警", crumb: "巡检发现的库存预警", platform: true },
+  { key: "autopilot", name: "自主运行", ic: "⏱", title: "自主运行", crumb: "定时任务 · 智能体自动执行", platform: true },
 ];
 
 const ADMIN_ONLY_PAGES = [
   { key: "console", name: "服务台", ic: "⌗", title: "通用服务台", crumb: "按服务契约自动建表 · 覆盖全部应用", platform: true },
 ];
 
-const PLATFORM_COMPONENTS = { agent: pageAgent, console: pageConsole, agent_overview: pageAgentOverview, alerts: pageAlerts };
+const PLATFORM_COMPONENTS = { console: pageConsole, agent_overview: pageAgentOverview, alerts: pageAlerts, autopilot: pageAutopilot };
 
 /* x-html 模板片段中的助手函数经 window 全局解析（Alpine 表达式回落 window） */
 window.dash = dash;
@@ -146,6 +146,7 @@ export async function bootShell(module) {
   }
 
   const pages = (man && man.pages) || [];
+  window.__fdeModule = module;   // 当前应用组名（平台页如「智能体总览」据此过滤「本组 + 平台级」角色）
   /* 标记「有后端应用」的页面（url 以 /view.js 结尾 = 应用页；组级页如 process.js / dashboard.js
      无后端应用）。agent_rail 上传附件据此判断当前页能否落盘到某应用 resource/import-file/。 */
   window.__fdeAppPages = new Set(

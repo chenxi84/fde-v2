@@ -10,12 +10,10 @@
 - `GET  /api/apps/<名>/services`         某应用的服务清单（含入参契约）
 - `POST /api/apps/<名>/call/<服务>`      手工调用服务（body = 参数对象）
 - `GET  /api/mcp/tools`                  全部公共服务的 MCP tool 定义
-- Agent：`POST /api/apps/<名>/agent/chat` / `.../agent/reset`（应用级）
-- 平台级 Agent（跨应用）：`POST /api/agent/chat` / `/api/agent/reset`
-- 对话历史（两套前缀同构，`<base>` = `/api/agent` 或 `/api/apps/<名>/agent`）：
-  `GET <base>/sessions` 列表 · `POST <base>/sessions` 新建 ·
-  `GET <base>/sessions/<sid>/messages` 历史 · `DELETE <base>/sessions/<sid>` 删除
-  （持久化于 config/chat_history.db，切页面/重启不丢；按登录用户隔离）
+- Agent：`POST /api/apps/<名>/agent/chat` / `.../agent/reset`（应用级单 Agent）
+- 平台级 Agent（跨应用，多智能体 leader）：`/api/agent2/*`（反代 agent_service）
+- 对话历史：平台级走 `/api/agent2/sessions*`；应用级走 `/api/apps/<名>/agent/sessions*`
+  （`GET sessions` 列表 · `POST sessions` 新建 · `GET sessions/<sid>/messages` 历史 · `DELETE sessions/<sid>` 删除）
 
 按安全约束，本地 DEMO 只绑回环地址 127.0.0.1（由 main.py 指定 host）。
 """
@@ -71,30 +69,9 @@ else:
     _SECRET_PATH.parent.mkdir(parents=True, exist_ok=True)
     _SECRET_PATH.write_text(app.secret_key, encoding="utf-8")
 
-# Agent 会话缓存 {键: AgentSession}（延迟创建；"__platform__" 为平台级跨应用 Agent）
-_agent_sessions: dict = {}
-
 # 未分组应用在 URL 里的占位键（直接放在 app/ 下、不属于任何组目录的应用）
 UNGROUPED_KEY = "-"
 UNGROUPED_LABEL = "未分组"
-
-
-def _get_agent(app_name):
-    key = app_name or "__platform__"
-    if key not in _agent_sessions:
-        _agent_sessions[key] = _build_agent(app_name)
-    return _agent_sessions[key]
-
-
-def _build_agent(app_name):
-    """Agent 后端（Phase 3 起唯一：AgentScope 编排）。
-
-    AgentScope import 失败时，``AgentScopeSession.chat`` 自带降级提示（不抛错、不阻断），
-    故这里直接返回；不再保留旧 ReAct 后端。
-    """
-    from fde_platform.agent_agentscope import AgentScopeSession
-
-    return AgentScopeSession(platform, app_name)
 
 
 def _coerce(params: dict, schema: list[dict]) -> dict:
@@ -685,8 +662,7 @@ def api_agent2_proxy(path):
                         "message": "agent_service 未启动（python -m fde_platform.agent_service）"}), 503
 
 
-# ── agent_service 适配层（多智能体，模拟现有 /api/agent/* 形状）────────
-# 前端 agent_rail 只需把 URL 前缀从 /api/agent 改成 /api/agent2，协议不变。
+# ── agent_service 适配层（多智能体 leader，协议与前端 agent_rail / agent 页对接）────────
 # 后端封装 agent_service 细节：credential/agent 初始化、chat 触发+SSE 翻译、HITL 缓存。
 
 _AGENT2_CRED = None
@@ -694,15 +670,35 @@ _AGENT2_AGENT = None
 _AGENT2_MODEL = None
 _AGENT2_PENDING = {}  # session_id -> {"reply_id": str, "tool_calls": [ToolCallBlock]}
 
-_LEADER_PROMPT = (
-    "你是产销协同的多智能体编排 leader。你持有团队工具（TeamCreate/AgentCreate/TeamSay），"
-    "遇到需要多领域协作的复杂任务时必须组建团队：先 TeamCreate 建团队，再用 AgentCreate "
-    "按 subagent_type 创建成员（可选：sales/planning/inventory/delivery/integration/scheduler），"
-    "用 TeamSay 给成员派活并汇总回报。简单查询可直接调用业务工具回答。"
-    "你也有定时任务工具（ScheduleCreate/ScheduleList/ScheduleDelete）：用户要求「定时/每天/每周/"
-    "每隔」执行某任务时，用 ScheduleCreate 配置 cron 定时任务；description 要写全任务目标、"
-    "要执行什么、结果写入哪个 export-file 文件（供用户后续查看）。"
-)
+def _leader_prompt() -> str:
+    """leader system prompt：可选 subagent_type 清单从 agent_roles 注册表动态生成（单一数据源）。
+
+    新增角色只改 agent_roles.py，leader prompt 自动带上，无需改本文件。
+    """
+    from fde_platform import agent_roles, skills
+    from fde_platform.agent_common import _read_arch_docs
+
+    roles = agent_roles.leader_role_choices()
+    base = (
+        "你是产销协同的多智能体编排 leader。你持有团队工具（TeamCreate/AgentCreate/TeamSay），"
+        "遇到需要多领域协作的复杂任务时必须组建团队：先 TeamCreate 建团队，再用 AgentCreate "
+        f"按 subagent_type 创建成员（可选：{roles}），"
+        "用 TeamSay 给成员派活并汇总回报。简单查询可直接调用业务工具回答。"
+        "你也有定时任务工具（ScheduleCreate/ScheduleList/ScheduleDelete）：用户要求「定时/每天/每周/"
+        "每隔」执行某任务时，用 ScheduleCreate 配置 cron 定时任务；description 要写全任务目标、"
+        "要执行什么、结果写入哪个 export-file 文件（供用户后续查看）。"
+        "定时任务的 permission_mode 默认用 dont_ask（后台无人时危险操作自动拒绝，安全兜底）；"
+        "仅当用户明确表示「允许该定时任务执行写/危险操作」时，才用 permission_mode=bypass。"
+    )
+    # 架构文档：各应用组的聚合根划分 / 应用职责 / 跨应用调用链 / 状态机，跨应用编排的业务依据
+    arch = _read_arch_docs(platform)
+    arch_block = (
+        "\n\n下面是本平台各应用组的架构设计（聚合根划分、应用职责、跨应用调用链、状态机），"
+        "跨应用编排时以它为业务依据（哪个应用管什么、谁调谁、状态如何流转）：\n"
+        "<architecture>\n" + arch + "\n</architecture>"
+    ) if arch else ""
+    # 追加已发布 skill 库（经人工审批的巡检流程等），leader 匹配触发条件时按固定步骤执行
+    return base + arch_block + skills.agent_prompt()
 
 
 def _agent2_headers():
@@ -732,7 +728,7 @@ def _ensure_agent2():
         r.raise_for_status()
         _AGENT2_CRED = r.json()["credential_id"]
         r = httpx.post(f"{AGENT2_BASE}/agent/", json={
-            "name": "leader", "system_prompt": _LEADER_PROMPT,
+            "name": "leader", "system_prompt": _leader_prompt(),
         }, headers=headers, timeout=30)
         r.raise_for_status()
         _AGENT2_AGENT = r.json()["agent_id"]
@@ -1016,22 +1012,111 @@ def api_agent2_confirm():
     return Response(gen(), mimetype="text/event-stream")
 
 
+@app.route("/api/agent-schedules", methods=["GET"])
+def api_agent_schedules():
+    """自主运行定时任务列表（agent_service schedule，唤醒 leader 自主执行）。"""
+    if not _ensure_agent2():
+        return jsonify({"status": "error", "message": "agent_service 不可用"})
+    headers = _agent2_headers()
+    try:
+        r = httpx.get(f"{AGENT2_BASE}/schedule/", headers=headers, timeout=30)
+        r.raise_for_status()
+        schedules = r.json().get("schedules") or []
+        out = []
+        for rec in schedules:
+            data = rec.get("data") or {}
+            out.append({
+                "schedule_id": rec.get("id"),
+                "name": data.get("name") or "",
+                "cron": data.get("cron_expression") or "",
+                "description": data.get("description") or "",
+                "permission_mode": data.get("permission_mode") or "dont_ask",
+                "enabled": bool(data.get("enabled", True)),
+            })
+        return jsonify({"status": "ok", "data": out})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+
+@app.route("/api/agent-schedules", methods=["POST"])
+def api_agent_schedule_create():
+    """创建自主运行定时任务（按 cron 唤醒 leader，按 description / 已沉淀 skill 执行）。"""
+    if not _ensure_agent2():
+        return jsonify({"status": "error", "message": "agent_service 不可用"})
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    cron = (data.get("cron") or "").strip()
+    if not name or not cron:
+        return jsonify({"status": "error", "message": "任务名和 cron 不能为空"})
+    headers = _agent2_headers()
+    payload = {
+        "name": name,
+        "description": (data.get("description") or "").strip(),
+        "cron_expression": cron,
+        "agent_id": _AGENT2_AGENT,
+        "chat_model_config": {
+            "type": "deepseek_credential", "credential_id": _AGENT2_CRED,
+            "model": _AGENT2_MODEL or "deepseek-v4-pro", "parameters": {},
+        },
+        "enabled": bool(data.get("enabled", True)),
+        "permission_mode": data.get("permission_mode") or "dont_ask",
+    }
+    try:
+        r = httpx.post(f"{AGENT2_BASE}/schedule/", json=payload, headers=headers, timeout=30)
+        r.raise_for_status()
+        return jsonify({"status": "ok", "data": r.json()})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+
+@app.route("/api/agent-schedules/<sid>/toggle", methods=["POST"])
+def api_agent_schedule_toggle(sid):
+    """启用/禁用定时任务。"""
+    data = request.get_json(silent=True) or {}
+    headers = _agent2_headers()
+    try:
+        r = httpx.patch(f"{AGENT2_BASE}/schedule/{sid}",
+                        json={"enabled": bool(data.get("enabled", True))},
+                        headers=headers, timeout=30)
+        r.raise_for_status()
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+
+@app.route("/api/agent-schedules/<sid>", methods=["DELETE"])
+def api_agent_schedule_delete(sid):
+    """删除定时任务。"""
+    headers = _agent2_headers()
+    try:
+        r = httpx.delete(f"{AGENT2_BASE}/schedule/{sid}", headers=headers, timeout=30)
+        r.raise_for_status()
+    except Exception:
+        pass
+    return jsonify({"status": "ok", "message": "已删除"})
+
+
 @app.route("/api/agent-overview")
 def api_agent_overview():
     """智能体总览：静态角色定义（agent_roles）+ 运行时状态（agent_service）。"""
     from fde_platform import agent_roles
 
-    # 1. 静态角色定义（开发时定义，只读展示）
+    # 1. 静态角色定义（开发时定义，只读展示）。按当前应用组过滤：平台级角色 + 该组业务角色。
+    group = (request.args.get("group") or "").strip()
     label = getattr(agent_roles, "_ROLE_LABEL", {})
     tmpl_by_type = {r.type: r for r in agent_roles.AGENT_ROLES}
     roles = []
     for rtype in sorted(agent_roles.ALL_ROLES):
         kind = "平台" if rtype in agent_roles.PLATFORM_ROLES else "业务"
+        rgroup = agent_roles.role_group(rtype)  # 业务角色 → 组；平台角色 → None
+        if group and rgroup is not None and rgroup != group:
+            continue  # 其他组的业务角色：当前组页面不展示
         tmpl = tmpl_by_type.get(rtype)
         roles.append({
             "type": rtype,
             "label": label.get(rtype, rtype),
             "kind": kind,
+            "group": rgroup,  # 归属组（平台角色为 None）
             "apps": agent_roles.ROLE_APPS.get(rtype, []),
             "tools": agent_roles.ROLE_PLATFORM_TOOLS.get(rtype, []),
             "description": tmpl.description if tmpl else "",
@@ -1070,7 +1155,55 @@ def api_agent_overview():
     except Exception:
         pass
 
-    return jsonify({"status": "ok", "data": {"roles": roles, "runtime": runtime}})
+    # 3. 已沉淀 skill 库（经人工审批发布的可复用流程）
+    from fde_platform import skills
+    skill_list = [
+        {"name": s["name"], "trigger": s["trigger"], "description": s["description"],
+         "steps": [{"tool": st["tool"], "note": st["note"]} for st in s["steps"]]}
+        for s in skills.published_skills()
+    ]
+
+    # 4. 定时任务（agent_service schedule，唤醒 leader 自主执行）
+    schedules = []
+    try:
+        if _ensure_agent2():
+            headers = _agent2_headers()
+            r = httpx.get(f"{AGENT2_BASE}/schedule/", headers=headers, timeout=30)
+            if r.status_code == 200:
+                for rec in (r.json().get("schedules") or []):
+                    data = rec.get("data") or {}
+                    schedules.append({
+                        "schedule_id": rec.get("id"),
+                        "name": data.get("name") or "",
+                        "cron": data.get("cron_expression") or "",
+                        "enabled": bool(data.get("enabled", True)),
+                        "permission_mode": data.get("permission_mode") or "dont_ask",
+                    })
+    except Exception:
+        pass
+
+    # 0. 编排器 leader（平台唯一顶层 agent，跨组，非 worker 角色）
+    leader = {
+        "name": "leader",
+        "label": "多智能体编排器",
+        "description": (
+            "平台唯一的顶层编排 agent，是用户直接对话的入口。"
+            "简单查询直接调用业务工具；复杂任务先建团队、按角色创建成员派活、再汇总回报；"
+            "也负责配置定时任务（自主运行）与沉淀 skill。"
+        ),
+        "capabilities": [
+            f"组建团队：{len(agent_roles.ALL_ROLES)} 个角色（业务 + 平台）",
+            "定时任务：ScheduleCreate 唤醒自主运行",
+            "业务工具按领域懒加载",
+            "已沉淀 skill 库（触发条件匹配时遵循步骤）",
+            "架构文档：跨应用编排的业务依据",
+        ],
+    }
+
+    return jsonify({"status": "ok", "data": {
+        "leader": leader, "roles": roles, "runtime": runtime,
+        "skills": skill_list, "schedules": schedules,
+    }})
 
 
 @app.route("/api/alerts")
@@ -1133,250 +1266,14 @@ def api_alerts():
             })
     except Exception:
         pass
+    # 4. Agent 主动上报（platform_raise_alert 工具写入）
+    try:
+        from fde_platform import alerts as alerts_mod
+        for a in alerts_mod.list_agent_alerts():
+            alerts.append(a)
+    except Exception:
+        pass
     return jsonify({"status": "ok", "data": alerts})
-
-
-# ── Agent ─────────────────────────────────────────────────
-
-
-@app.route("/api/apps/<path:app_name>/agent/chat", methods=["POST"])
-def api_agent_chat(app_name):
-    if app_name not in platform.app_names():
-        return jsonify({"status": "error", "message": f"应用不存在：{app_name}"}), 404
-    data = request.get_json(silent=True) or {}
-    message = (data.get("message") or "").strip()
-    session_id = data.get("session_id", "default")
-    if not message:
-        return jsonify({"status": "error", "message": "消息不能为空"})
-    result = _get_agent(app_name).chat(message, session_id)
-    return jsonify({"status": "ok", "data": result})
-
-
-@app.route("/api/apps/<path:app_name>/agent/reset", methods=["POST"])
-def api_agent_reset(app_name):
-    data = request.get_json(silent=True) or {}
-    _get_agent(app_name).reset(data.get("session_id", "default"))
-    return jsonify({"status": "ok", "message": "会话已重置"})
-
-
-# ── 平台级 Agent（跨应用，首页入口）──────────────────────
-
-
-@app.route("/api/agent/chat", methods=["POST"])
-def api_platform_agent_chat():
-    data = request.get_json(silent=True) or {}
-    message = (data.get("message") or "").strip()
-    session_id = data.get("session_id", "default")
-    if not message:
-        return jsonify({"status": "error", "message": "消息不能为空"})
-    result = _get_agent(None).chat(message, session_id)
-    return jsonify({"status": "ok", "data": result})
-
-
-def _agent_stream_response(agent, message: str, session_id: str):
-    """SSE 流式响应：AgentScope 后端走原生事件流；旧后端回落为单帧 done。"""
-    if hasattr(agent, "stream_chat"):
-        return Response(agent.stream_chat(message, session_id), mimetype="text/event-stream")
-    result = agent.chat(message, session_id)
-
-    def _single():
-        yield "data: " + json.dumps(
-            {"event": "done", "data": result.get("reply", ""),
-             "tools": [t.get("tool") for t in result.get("tool_calls", [])]},
-            ensure_ascii=False,
-        ) + "\n\n"
-
-    return Response(_single(), mimetype="text/event-stream")
-
-
-@app.route("/api/agent/chat/stream", methods=["POST"])
-def api_platform_agent_chat_stream():
-    data = request.get_json(silent=True) or {}
-    message = (data.get("message") or "").strip()
-    session_id = data.get("session_id", "default")
-    if not message:
-        return jsonify({"status": "error", "message": "消息不能为空"})
-    return _agent_stream_response(_get_agent(None), message, session_id)
-
-
-@app.route("/api/apps/<path:app_name>/agent/chat/stream", methods=["POST"])
-def api_agent_chat_stream(app_name):
-    if app_name not in platform.app_names():
-        return jsonify({"status": "error", "message": f"应用不存在：{app_name}"}), 404
-    data = request.get_json(silent=True) or {}
-    message = (data.get("message") or "").strip()
-    session_id = data.get("session_id", "default")
-    if not message:
-        return jsonify({"status": "error", "message": "消息不能为空"})
-    return _agent_stream_response(_get_agent(app_name), message, session_id)
-
-
-def _agent_confirm_response(agent, session_id: str, decisions: list):
-    """SSE 流式确认响应（HITL：用户确认/拒绝危险操作后继续）。"""
-    if hasattr(agent, "confirm"):
-        return Response(agent.confirm(session_id, decisions), mimetype="text/event-stream")
-    return jsonify({"status": "error", "message": "当前后端不支持交互确认"}), 400
-
-
-@app.route("/api/agent/confirm", methods=["POST"])
-def api_platform_agent_confirm():
-    data = request.get_json(silent=True) or {}
-    session_id = data.get("session_id", "default")
-    decisions = data.get("decisions") or []
-    return _agent_confirm_response(_get_agent(None), session_id, decisions)
-
-
-@app.route("/api/apps/<path:app_name>/agent/confirm", methods=["POST"])
-def api_agent_confirm(app_name):
-    if app_name not in platform.app_names():
-        return jsonify({"status": "error", "message": f"应用不存在：{app_name}"}), 404
-    data = request.get_json(silent=True) or {}
-    session_id = data.get("session_id", "default")
-    decisions = data.get("decisions") or []
-    return _agent_confirm_response(_get_agent(app_name), session_id, decisions)
-
-
-@app.route("/api/agent/reset", methods=["POST"])
-def api_platform_agent_reset():
-    data = request.get_json(silent=True) or {}
-    _get_agent(None).reset(data.get("session_id", "default"))
-    return jsonify({"status": "ok", "message": "会话已重置"})
-
-
-# ── Agent 执行进度（「执行中」状态轮询，只读阶段信号）────
-
-@app.route("/api/apps/<path:app_name>/agent/progress", methods=["GET"])
-def api_agent_progress(app_name):
-    """读该会话在途对话的阶段进度（当前轮次 / 正在调用的工具）；data=null 表示无在途对话。"""
-    from fde_platform.agent_common import get_progress
-    sid = request.args.get("session_id", "default")
-    return jsonify({"status": "ok", "data": get_progress(app_name, sid)})
-
-
-@app.route("/api/agent/progress", methods=["GET"])
-def api_platform_agent_progress():
-    from fde_platform.agent_common import get_progress
-    sid = request.args.get("session_id", "default")
-    return jsonify({"status": "ok", "data": get_progress(None, sid)})
-
-
-# ── 对话历史（会话管理）────────────────────────────────
-# 会话按登录用户隔离：session_id 统一加 “用户名:” 前缀存储；owner 列做归属校验。
-# 未启用鉴权时（users.session_user() 恒 None）归为 anon（单用户 DEMO 场景）。
-
-from fde_platform import agent_state  # noqa: E402
-
-agent_state.init_schema()
-
-
-def _chat_user():
-    u = users.session_user()
-    return (u["username"] if u else "anon"), bool(u and u.get("is_admin"))
-
-
-def _full_sid(username: str, sid: str) -> str:
-    return f"{username}:{sid}"
-
-
-def _strip_sid(username: str, full_sid: str) -> str:
-    prefix = f"{username}:"
-    return full_sid[len(prefix):] if full_sid.startswith(prefix) else full_sid
-
-
-def _sessions_list(scope: str):
-    username, _ = _chat_user()
-    rows = agent_state.list_sessions(owner=username, scope=scope)
-    return jsonify({"status": "ok", "data": [
-        {"session_id": _strip_sid(username, r["session_id"]),
-         "title": r["title"] or "新对话",
-         "created_at": r["created_at"], "updated_at": r["updated_at"]}
-        for r in rows
-    ]})
-
-
-def _session_create(scope: str):
-    import uuid
-    username, _ = _chat_user()
-    raw = uuid.uuid4().hex[:12]
-    agent_state.create_session(_full_sid(username, raw), username, scope)
-    return jsonify({"status": "ok",
-                    "data": {"session_id": raw, "title": "新对话"}})
-
-
-def _session_owned(scope: str, sid: str):
-    """取当前用户拥有的会话（校验归属与 scope）；不满足返回 None。"""
-    username, is_admin = _chat_user()
-    sess = agent_state.get_session(_full_sid(username, sid))
-    if sess is None or sess["scope"] != scope:
-        return None
-    if sess["owner"] != username and not is_admin:
-        return None
-    return sess
-
-
-def _session_messages(scope: str, sid: str):
-    username, _ = _chat_user()
-    if _session_owned(scope, sid) is None:
-        return jsonify({"status": "error", "message": "会话不存在"}), 404
-    from fde_platform.agent_agentscope import load_session_messages
-    return jsonify({"status": "ok",
-                    "data": load_session_messages(_full_sid(username, sid))})
-
-
-def _session_delete(scope: str, sid: str):
-    username, _ = _chat_user()
-    if _session_owned(scope, sid) is None:
-        return jsonify({"status": "error", "message": "会话不存在"}), 404
-    agent_state.delete_session(_full_sid(username, sid))
-    return jsonify({"status": "ok", "message": "会话已删除"})
-
-
-@app.route("/api/agent/sessions", methods=["GET"])
-def api_platform_sessions():
-    return _sessions_list("__platform__")
-
-
-@app.route("/api/agent/sessions", methods=["POST"])
-def api_platform_session_create():
-    return _session_create("__platform__")
-
-
-@app.route("/api/agent/sessions/<sid>/messages", methods=["GET"])
-def api_platform_session_messages(sid):
-    return _session_messages("__platform__", sid)
-
-
-@app.route("/api/agent/sessions/<sid>", methods=["DELETE"])
-def api_platform_session_delete(sid):
-    return _session_delete("__platform__", sid)
-
-
-@app.route("/api/apps/<path:app_name>/agent/sessions", methods=["GET"])
-def api_agent_sessions(app_name):
-    if app_name not in platform.app_names():
-        return jsonify({"status": "error", "message": f"应用不存在：{app_name}"}), 404
-    return _sessions_list(app_name)
-
-
-@app.route("/api/apps/<path:app_name>/agent/sessions", methods=["POST"])
-def api_agent_session_create(app_name):
-    if app_name not in platform.app_names():
-        return jsonify({"status": "error", "message": f"应用不存在：{app_name}"}), 404
-    return _session_create(app_name)
-
-
-@app.route("/api/apps/<path:app_name>/agent/sessions/<sid>/messages", methods=["GET"])
-def api_agent_session_messages(app_name, sid):
-    if app_name not in platform.app_names():
-        return jsonify({"status": "error", "message": f"应用不存在：{app_name}"}), 404
-    return _session_messages(app_name, sid)
-
-
-@app.route("/api/apps/<path:app_name>/agent/sessions/<sid>", methods=["DELETE"])
-def api_agent_session_delete(app_name, sid):
-    if app_name not in platform.app_names():
-        return jsonify({"status": "error", "message": f"应用不存在：{app_name}"}), 404
-    return _session_delete(app_name, sid)
 
 
 # ── 错误页 ────────────────────────────────────────────────

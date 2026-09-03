@@ -14,7 +14,7 @@ from agentscope.middleware import MiddlewareBase
 from agentscope.permission import PermissionBehavior, PermissionDecision
 
 # 全员可用的平台工具（skill 沉淀，非角色域）。
-GLOBAL_PLATFORM_TOOLS = {"platform_propose_skill"}
+GLOBAL_PLATFORM_TOOLS = {"platform_propose_skill", "platform_raise_alert"}
 
 
 def is_fde_tool(name: str) -> bool:
@@ -60,11 +60,18 @@ class RoleToolFilterMiddleware(MiddlewareBase):
 
 
 class LeaderToolFilterMiddleware(MiddlewareBase):
-    """leader 工具收窄：只去掉平台配置工具（integration/scheduler/users/roles，除 propose_skill）。
+    """leader 工具收窄：去掉平台配置工具 + 可选额外禁工具。
 
     leader 的业务工具（查询/写/文件/导入）已在 factory 层按领域分组懒加载，这里只过滤
-    平台配置工具（leader 编排不需要 admin 配置能力）。AgentScope 内置工具（TeamSay/Bash 等）不受影响。
+    平台配置工具（leader 编排不需要 admin 配置能力）。AgentScope 内置工具（TeamSay/Bash 等）
+    不受影响，除 extra_deny 明确点名者（防失控：定时任务唤醒的 session 不能再建定时任务）。
+
+    读写边界交给 AgentScope 原生 permission_mode（定时任务默认 DONT_ASK：危险操作 ASK 自动
+    转 DENY），不在本层重复实现。
     """
+
+    def __init__(self, extra_deny: set[str] | None = None):
+        self.extra_deny = extra_deny or set()
 
     async def on_model_call(self, agent, input_kwargs, next_handler):
         tools = input_kwargs.get("tools") or []
@@ -73,6 +80,8 @@ class LeaderToolFilterMiddleware(MiddlewareBase):
             name = _tool_name(t)
             if name.startswith("platform_") and name not in GLOBAL_PLATFORM_TOOLS:
                 continue  # 平台配置工具（integration/scheduler/users/roles）
+            if name in self.extra_deny:
+                continue  # 额外禁工具（如 scheduled session 的 ScheduleCreate）
             kept.append(t)
         input_kwargs["tools"] = kept
         return await next_handler(**input_kwargs)

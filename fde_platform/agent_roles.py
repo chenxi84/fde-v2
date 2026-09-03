@@ -6,32 +6,14 @@
 一个角色 = SubAgentTemplate（供 leader 建队）+ 绑定集合（供第 4 步工具隔离）。
 
 两类角色：
-- **业务角色**（ROLE_APPS）：绑定应用，映射产销协同链 —— sales/planning/inventory/delivery。
+- **业务角色**（ROLE_APPS）：绑定应用。下沉到各组 `app/<组>/_roles.py` 声明，平台扫描装配。
 - **平台运维角色**（ROLE_PLATFORM_TOOLS）：绑定平台工具，映射平台配置 ——
   integration（接口集成）/ scheduler（定时任务）。仅 admin 建队时可用（底层工具 admin 专用）。
 """
 import re
+from pathlib import Path
 
 from agentscope.app import SubAgentTemplate
-
-# ── 业务角色：角色 → 绑定的应用（qualname）─────────────────────────
-ROLE_APPS: dict[str, list[str]] = {
-    "sales": [
-        "psc/md_customer", "psc/md_monthly_version", "psc/attainment",
-        "psc/sales_forecast", "psc/sales_history", "psc/strategy_fitting",
-    ],
-    "planning": [
-        "psc/md_project", "psc/md_project_part", "psc/demand",
-        "psc/master_plan", "psc/demand_pool",
-    ],
-    "inventory": [
-        "psc/md_material", "psc/md_breakpoint", "psc/md_part_replace",
-        "psc/inventory_strategy", "psc/inventory_projection",
-    ],
-    "delivery": [
-        "psc/outbound_plan",
-    ],
-}
 
 # ── 平台运维角色：角色 → 绑定的平台工具（platform_<service>）────────
 ROLE_PLATFORM_TOOLS: dict[str, list[str]] = {
@@ -46,14 +28,52 @@ ROLE_PLATFORM_TOOLS: dict[str, list[str]] = {
     ],
 }
 
-_ROLE_LABEL: dict[str, str] = {
-    "sales": "销售/需求专家",
-    "planning": "计划/排产专家",
-    "inventory": "物料/库存专家",
-    "delivery": "交付/出库专家",
+_PLATFORM_LABEL: dict[str, str] = {
     "integration": "接口集成专家",
     "scheduler": "定时任务专家",
 }
+
+
+# ── 业务角色：下沉到各组 app/<组>/_roles.py 声明，平台扫描装配 ─────
+# 约定：每个应用组在自身目录放 _roles.py，导出 ROLES = [{type, label, apps}]。
+# 加新组 = 建目录 + 丢一份 _roles.py，无需改本文件。
+_ROLES_DIR = Path(__file__).resolve().parents[1] / "app"
+
+
+def _load_group_roles() -> tuple[dict[str, list[str]], dict[str, str]]:
+    """扫描 app/<组>/_roles.py，装配 {role: [apps]} 与 {role: label}。
+
+    任一文件出错仅跳过该组，不阻断平台启动；角色 type 全局唯一，冲突时按目录名排序后者覆盖前者。
+    """
+    role_apps: dict[str, list[str]] = {}
+    role_label: dict[str, str] = {}
+    if not _ROLES_DIR.is_dir():
+        return role_apps, role_label
+    for group_dir in sorted(_ROLES_DIR.iterdir()):
+        if not group_dir.is_dir() or group_dir.name.startswith((".", "__")):
+            continue
+        roles_file = group_dir / "_roles.py"
+        if not roles_file.is_file():
+            continue
+        ns: dict = {}
+        try:
+            exec(compile(roles_file.read_text(encoding="utf-8"), str(roles_file), "exec"), ns)
+        except Exception:
+            continue  # 组角色声明有误：跳过该组
+        for r in ns.get("ROLES") or []:
+            if not isinstance(r, dict):
+                continue
+            rtype = (r.get("type") or "").strip()
+            apps = [a for a in (r.get("apps") or []) if a]
+            if not rtype or not apps:
+                continue
+            role_apps[rtype] = apps
+            role_label[rtype] = (r.get("label") or rtype).strip()
+    return role_apps, role_label
+
+
+ROLE_APPS, _BIZ_LABEL = _load_group_roles()
+_ROLE_LABEL: dict[str, str] = {**_BIZ_LABEL, **_PLATFORM_LABEL}
 
 # 平台运维角色（仅 admin 可建，见 agent_service 的 subagent_type 收口）
 PLATFORM_ROLES = set(ROLE_PLATFORM_TOOLS)
@@ -142,3 +162,30 @@ def allowed_tools_for_role(role: str, tool_defs: list[dict]) -> set[str]:
             if t["function"]["name"] in ptools:
                 allowed.add(t["function"]["name"])
     return allowed
+
+
+def role_label(role: str) -> str | None:
+    """角色中文标签（sales → 销售/需求专家）；未登记返回 None。"""
+    return _ROLE_LABEL.get(role)
+
+
+def leader_role_choices() -> str:
+    """leader system prompt 用：可选 subagent_type 清单（从角色注册表动态生成，单一数据源）。
+
+    业务角色带应用列表，平台运维角色只带标签；加新角色只需改 ROLE_APPS / ROLE_PLATFORM_TOOLS，
+    leader prompt 自动跟上，无需改 web.py。
+    """
+    parts = []
+    for role, apps in ROLE_APPS.items():
+        parts.append(f"{role}（{_ROLE_LABEL[role]}：{'、'.join(_app_short(a) for a in apps)}）")
+    for role in ROLE_PLATFORM_TOOLS:
+        parts.append(f"{role}（{_ROLE_LABEL[role]}）")
+    return "、".join(parts)
+
+
+def role_group(role: str) -> str | None:
+    """角色归属应用组：业务角色从其绑定应用推断组；平台角色返回 None（跨组）。"""
+    apps = ROLE_APPS.get(role)
+    if apps:
+        return apps[0].split("/")[0]
+    return None

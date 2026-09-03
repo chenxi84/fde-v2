@@ -34,16 +34,27 @@
       {% endfor %}
     </div>
 
-    <!-- ── 平台级 Agent（右侧固定栏，复用 agent_rail 组件，常驻展开）── -->
-    <aside class="agent-rail">
-      <div x-data="agentRail()" x-html="tpl"></div>
-    </aside>
+    <!-- ── 平台级 Agent（右侧固定栏，复用 agent_rail 组件，默认展开、可收起，状态持久化）── -->
+    <div x-data="homeAgent()">
+      <button class="agent-toggle home-agent-toggle" :class="{ on: open }" @click="toggle()"
+        title="打开/收起 Agent 右栏">✦ Agent</button>
+      <aside class="agent-rail" x-show="open" x-cloak>
+        <div x-data="agentRail()" x-html="tpl"></div>
+      </aside>
+    </div>
 
     <script type="module">
       import Alpine from "/view/lib/alpine.esm.js";
       import { agentRail } from "/view/pages/agent_rail.js";
       window.Alpine = Alpine;
       Alpine.data("agentRail", agentRail);
+      Alpine.data("homeAgent", () => ({
+        open: (localStorage.getItem("fde.agent.rail") || "1") === "1",
+        toggle() {
+          this.open = !this.open;
+          localStorage.setItem("fde.agent.rail", this.open ? "1" : "0");
+        },
+      }));
       Alpine.start();
     </script>
 

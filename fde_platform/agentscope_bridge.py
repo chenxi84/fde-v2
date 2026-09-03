@@ -100,6 +100,30 @@ def _platform_tool_defs(user=None) -> list:
             },
             "_meta": {"app": "__platform__", "service": "propose_skill", "dangerous": False},
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "platform_raise_alert",
+                "description": (
+                    "巡检/分析发现问题时，主动上报一条告警到平台通用告警池（前台「告警」页可见）。"
+                    "level 取值 red(严重)/amber(警告)；title 一句话说清问题；detail 补充说明；"
+                    "source 可自定义来源（默认「Agent 上报」）。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "level": {"type": "string", "enum": ["red", "amber"],
+                                 "description": "告警级别：red=严重，amber=警告"},
+                        "title": {"type": "string", "description": "告警标题（一句话）"},
+                        "detail": {"type": "string", "description": "告警详情（补充说明，可选）"},
+                        "source": {"type": "string",
+                                  "description": "告警来源标识（可选，默认「Agent 上报」）"},
+                    },
+                    "required": ["level", "title"],
+                },
+            },
+            "_meta": {"app": "__platform__", "service": "raise_alert", "dangerous": False},
+        },
     ]
     if user is None or user.get("is_admin"):
         defs.extend(_admin_platform_tool_defs())
@@ -252,6 +276,13 @@ def _call_platform_tool(platform, user, service: str, args: dict):
         return skills.propose(
             args.get("name", ""), args.get("description", ""), args.get("trigger", ""),
             args.get("steps", []), created_by="agent",
+        )
+    if service == "raise_alert":
+        from fde_platform import alerts as alerts_mod
+
+        return alerts_mod.raise_alert(
+            args.get("source", "Agent 上报"), args.get("level", "amber"),
+            args.get("title", ""), args.get("detail", ""),
         )
     # 集成 / 定时任务配置：仅管理员（user=None 视为无鉴权全通，与平台 _is_admin_user 一致）
     if user is not None and not user.get("is_admin"):

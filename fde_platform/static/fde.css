@@ -101,6 +101,10 @@ header.top .crumb { font-size: 12px; color: var(--muted); }
 .agent-toggle:hover { border-color: var(--prime); color: var(--prime); }
 .agent-toggle.on { background: var(--prime); color: #fff; border-color: var(--prime); }
 .agent-toggle.on:hover { color: #fff; }
+/* 首页 toggle：fixed 右上角，展开时右移到 rail 左侧（rail 宽 380px + 16px 间距） */
+.home-agent-toggle { position: fixed; top: 66px; right: 16px; z-index: 102;
+  box-shadow: var(--shadow); transition: right .2s var(--ease); }
+.home-agent-toggle.on { right: 396px; }
 
 aside.agent-rail {
   width: 380px; flex: none; background: #f8f9fb; border-left: 1px solid #dde3eb;

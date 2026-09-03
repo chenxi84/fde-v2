@@ -42,15 +42,6 @@
     <div class="card muted">该应用没有对外服务。</div>
   {% endfor %}
 
-  <!-- ── Agent 入口（含会话历史）── -->
-  <div class="section-title">Agent · 对话式操作本应用</div>
-  {% with chat_base="/api/apps/" + app_name + "/agent", chat_scope=app_name,
-          chat_greeting="你好，我是「" + app_name + "」应用的操作助手。告诉我要做什么，我来调用服务。",
-          chat_placeholder="例如：新建一个用户张三，男，30 岁，再给 ta 随机维护一个部门" %}
-    {% include "chat_widget.html" %}
-  {% endwith %}
-  <div class="muted" style="margin-top:6px">Agent 通过本应用的 MCP 工具（LLM function calling）完成多步操作。</div>
-
   <!-- ── 数据文件（导入/导出）── -->
   <div class="section-title">数据文件 · 导入与导出</div>
   <div class="card reveal">

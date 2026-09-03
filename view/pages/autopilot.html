@@ -1,0 +1,50 @@
+<!-- 自主运行：定时任务配置（定时唤醒 leader 自主执行） -->
+<div class="bd">
+  <div class="card">
+    <div class="hd">
+      <h3>自主运行定时任务</h3>
+      <span class="hint" x-text="'共 ' + schedules.length + ' 个 · 定时唤醒 leader 按任务描述 / 已沉淀 skill 自主执行'"></span>
+    </div>
+    <div class="bd">
+      <template x-if="!schedules.length">
+        <div class="empty">暂无定时任务 —— 在下方创建，或直接在 Agent 对话里说「定时/每天执行…」</div>
+      </template>
+      <template x-for="s in schedules" :key="s.schedule_id">
+        <div style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-bottom:1px solid var(--line)">
+          <div style="flex:1; min-width:0">
+            <div>
+              <b x-text="s.name"></b>
+              <span class="tag t-slate" style="margin-left:8px" x-text="s.cron"></span>
+              <span class="tag" :class="s.enabled ? 't-teal' : 't-slate'" x-text="s.enabled ? '运行中' : '停用'"></span>
+              <span class="tag t-amber" x-text="modeLabel(s.permission_mode)"></span>
+            </div>
+            <div class="muted" style="margin-top:4px; font-size:12px" x-text="s.description"></div>
+          </div>
+          <div style="flex:none; display:flex; gap:6px">
+            <button class="b-ghost b-sm" @click="toggle(s)" x-text="s.enabled ? '停用' : '启用'"></button>
+            <button class="b-ghost b-sm" @click="remove(s)">删除</button>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="hd"><h3>新建定时任务</h3></div>
+    <div class="bd">
+      <div class="tagline" style="flex-wrap:wrap">
+        <input x-model="form.name" placeholder="任务名（如 库存水位巡检）" style="flex:1; min-width:160px">
+        <input x-model="form.cron" placeholder="cron 表达式（分 时 日 月 周，如 */5 * * * *）" style="flex:1; min-width:200px">
+      </div>
+      <textarea x-model="form.description" rows="3" style="width:100%; margin-top:10px"
+        placeholder="任务目标与执行步骤（写全：要执行什么、结果写入哪个 export-file 文件）"></textarea>
+      <div class="tagline" style="margin-top:10px">
+        <select x-model="form.permission_mode">
+          <option value="dont_ask">安全模式（危险操作自动拒绝，推荐）</option>
+          <option value="bypass">完全信任（允许写 / 危险操作）</option>
+        </select>
+        <button class="b-pri" @click="create()">创建定时任务</button>
+      </div>
+    </div>
+  </div>
+</div>

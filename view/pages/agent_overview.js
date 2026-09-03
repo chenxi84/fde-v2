@@ -1,12 +1,16 @@
-/* 平台智能体总览：展示平台设计的智能体角色（只读）+ 运行时团队状态。
-   数据来自 /api/agent-overview（角色定义读 agent_roles，运行时读 agent_service）。 */
+/* 平台智能体总览：展示角色（含功能概述）+ 已沉淀 skill + 定时任务 + 运行时团队。
+   数据来自 /api/agent-overview。 */
 import { get } from "../lib/api.js";
 
 export function pageAgentOverview() {
   const self = Alpine.reactive({
     tpl: "",
-    roles: [],        // [{type, label, kind, apps|tools, description, system_prompt}]
+    roles: [],        // [{type, label, kind, group, apps|tools, description, system_prompt}]
     runtime: { teams: [], session_count: 0, agent_count: 0 },
+    skills: [],       // [{name, trigger, description, steps:[{tool, note}]}]
+    schedules: [],    // [{schedule_id, name, cron, enabled, permission_mode}]
+    leader: null,     // 编排器 leader 摘要 {label, description, capabilities}
+    openRole: "",     // 展开查看功能概述（system_prompt）的角色 type
 
     async init() {
       self.tpl = await fetch(new URL("agent_overview.html", import.meta.url)).then((r) => r.text());
@@ -14,20 +18,23 @@ export function pageAgentOverview() {
     },
 
     async load() {
-      const d = await get("/api/agent-overview", { quiet: true }).catch(() => null);
+      const group = window.__fdeModule || "";
+      const qs = group ? "?group=" + encodeURIComponent(group) : "";
+      const d = await get("/api/agent-overview" + qs, { quiet: true }).catch(() => null);
       if (d) {
         self.roles = d.roles || [];
         self.runtime = d.runtime || { teams: [], session_count: 0, agent_count: 0 };
+        self.skills = d.skills || [];
+        self.schedules = d.schedules || [];
+        self.leader = d.leader || null;
       }
     },
 
-    /* 应用短名：psc/md_customer → md_customer */
     appShort(app) { return String(app).split("/").pop(); },
-
-    /* 工具短名：platform_list_integrations → list_integrations */
     toolShort(tool) { return String(tool).replace(/^platform_/, ""); },
-
-    /* 刷新运行时状态 */
+    stepShort(tool) { const p = String(tool).split("__"); return p.length >= 3 ? p.slice(-2).join(".") : tool; },
+    toggleRole(type) { self.openRole = self.openRole === type ? "" : type; },
+    modeLabel(m) { return m === "bypass" ? "完全信任" : "安全模式"; },
     async refresh() { await self.load(); },
   });
   return self;
