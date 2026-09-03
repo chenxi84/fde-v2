@@ -37,10 +37,13 @@ AI 代理会按九步法自动推进（架构设计 → 应用详设 → 编码 
 > **本机开发一律用这种方式**（直接 pip + Python 启动，无需 Docker）。容器化部署仅用于 Linux 服务器，见「三」。
 
 ```bash
-python main.py
+python main.py                              # 平台主进程 → http://127.0.0.1:4000
+python -m fde_platform.agent_service        # Agent 编排进程 → http://127.0.0.1:4100（AI 对话需要）
 ```
 
 浏览器访问 **http://127.0.0.1:4000**，默认账号 **admin / admin**（首次登录后建议改密）。大模型配置见下一节「配置大模型」。
+
+> AI 对话（右侧 Agent 栏 / 智能体）依赖第二个进程 `agent_service`；不启动它，Agent 功能会提示「agent_service 未启动」。
 
 > **Windows 平台注意**：若用 venv 虚拟环境，其可执行文件在 `venv\Scripts\`（`venv\Scripts\pip.exe`、`venv\Scripts\python.exe`），**不是** Linux 的 `venv/bin/`。完整步骤：
 > ```bash
@@ -84,6 +87,8 @@ cp config/.env.example config/.env
 > **仅在 Linux 服务器部署时使用**。本机开发请用「二、运行」，不要用 Docker（Windows 本机跑 Docker 无必要、且需额外装 Docker Desktop）。
 
 适合部署到 Linux 服务器，无需手动安装 Python 和依赖。
+
+> **容器拓扑**：`docker compose` 自动拉起 4 容器——`nginx`(443) → `fde-v2`(:4000) → `postgres` + `agent-service`(:4100)。`agent-service` 是 AI 对话（Agent）的独立编排进程，`fde-v2` 经 `AGENT_SERVICE_URL` 反代它。下方「内网 HTTP」是单容器简化方式，**不含 Agent 编排进程**（无 AI 对话）；需 AI 对话请用「带 HTTPS」的 compose 方式。
 
 ### 内网 HTTP（简单）
 

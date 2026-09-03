@@ -288,4 +288,6 @@ app = create_app(
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("fde_platform.agent_service:app", host="127.0.0.1", port=4100)
+    # host 可配置：本机默认 127.0.0.1；容器部署设 AGENT_HOST=0.0.0.0 供 fde-v2 反代
+    uvicorn.run("fde_platform.agent_service:app",
+                host=os.environ.get("AGENT_HOST", "127.0.0.1"), port=4100)

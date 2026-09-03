@@ -114,8 +114,9 @@ fde-v2/
 # 1. 配置（可选，仅运行期对话 Agent 需要 LLM；未配置不影响应用清单/手工调用/MCP）
 cp config/.env.example config/.env      # 按需填 LLM_BASE_URL / LLM_API_KEY / LLM_MODEL
 
-# 2. 启动平台
-python main.py
+# 2. 启动平台（双进程）
+python main.py                              # 平台主进程 → :4000
+python -m fde_platform.agent_service        # Agent 编排进程 → :4100（AI 对话需要）
 # 浏览器访问 http://127.0.0.1:4000
 ```
 
