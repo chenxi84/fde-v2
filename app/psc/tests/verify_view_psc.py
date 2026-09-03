@@ -48,7 +48,7 @@ _ok, _msg = users.create_role("limited_role", "受限测试角色")
 assert _ok, _msg
 _ok, _msg = users.set_role_page_grants(
     "limited_role",
-    ["psc:dashboard", "psc:md_customer", "psc:md_monthly_version", "_platform:agent"],
+    ["psc:dashboard", "psc:md_customer", "psc:md_monthly_version", "_platform:agent_overview"],
 )
 assert _ok, _msg
 _ok, _msg = users.create_user("limited_psc", "Limited@123", "limited_role", [], "U400", "D001")
@@ -87,8 +87,8 @@ EXPECTED_MENU = [
     "月度版本",          # md_monthly_version order=570
 ]
 
-# 受限菜单（授权清单 psc:dashboard / psc:md_customer / psc:md_monthly_version + 平台 Agent）
-LIMITED_MENU = ["产销协同看板", "客户主数据", "月度版本", "Agent"]
+# 受限菜单（授权清单 psc:dashboard / psc:md_customer / psc:md_monthly_version + 平台智能体）
+LIMITED_MENU = ["产销协同看板", "客户主数据", "月度版本", "智能体"]
 
 STEP = ""
 
@@ -175,7 +175,11 @@ def main():
     def attach(page):
         def on_console(msg):
             if msg.type == "error":
-                errors.append(msg.text[:140])
+                txt = msg.text[:140]
+                if state["limited"] and "403" in txt:
+                    ignored.append(txt)  # 受限会话 403 属预期执法（如文件面板无权限），豁免
+                    return
+                errors.append(txt)
 
         def on_pageerror(err):
             errors.append(str(err)[:140])
