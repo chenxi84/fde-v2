@@ -108,13 +108,19 @@ fde-v2/
 
 ## 快速开始
 
-**环境**：Python 3.10+，依赖可导入 `fde_platform`（Flask 等）。前端验收另需 `pip install playwright && python -m playwright install chromium`。
+**环境**：Python 3.10+。前端验收另需 `pip install playwright && python -m playwright install chromium`。
 
 ```bash
-# 1. 配置（可选，仅运行期对话 Agent 需要 LLM；未配置不影响应用清单/手工调用/MCP）
+# 1. 安装依赖（必须用 requirements.txt 一次性装全，勿自行逐个装/改版本；agentscope 锁 ==2.0.6）
+pip install -r requirements.txt
+
+# 2. 打 FDE-PATCH（Docker 构建自动执行；本机开发必须手动跑，否则 Agent 对话报错）
+python scripts/patch_agentscope.py
+
+# 3. 配置（可选，仅运行期对话 Agent 需要 LLM；未配置不影响应用清单/手工调用/MCP）
 cp config/.env.example config/.env      # 按需填 LLM_BASE_URL / LLM_API_KEY / LLM_MODEL
 
-# 2. 启动平台（双进程）
+# 4. 启动平台（双进程）
 python main.py                              # 平台主进程 → :4000
 python -m fde_platform.agent_service        # Agent 编排进程 → :4100（AI 对话需要）
 # 浏览器访问 http://127.0.0.1:4000

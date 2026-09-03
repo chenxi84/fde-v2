@@ -32,9 +32,34 @@ AI 代理会按九步法自动推进（架构设计 → 应用详设 → 编码 
 
 ---
 
+## 部署方式速查（先看这里）
+
+| 场景 | 部署方式 |
+|---|---|
+| **Windows / Mac 本机开发** | pip + Python 直接跑（双进程）→ 见「二、运行」 |
+| **Linux 服务器部署** | **默认容器化**（Docker Compose，含 nginx / postgres / agent-service）→ 见「三、Docker 部署」 |
+
+> 一句话：**本机（含 Windows / Mac）用 pip 直接跑；Linux 服务器默认用容器化。**
+
 ## 二、运行（本机开发 · Windows / Mac / Linux）
 
 > **本机开发一律用这种方式**（直接 pip + Python 启动，无需 Docker）。容器化部署仅用于 Linux 服务器，见「三」。
+
+**1. 安装依赖（必须遵守 requirements.txt）**：
+
+> 务必 `pip install -r requirements.txt` 一次性装全——**不要自行判断/逐个 pip install**（会漏装 agentscope 的 `service`/`storage-sql` extras 与 `aiosqlite`），也**不要装成别的版本**（`agentscope` 锁 `==2.0.6`，环境里已装 2.0.7 必须重装对齐，否则 Agent 对话报 `finished_reason: error`）。
+
+```bash
+pip install -r requirements.txt
+```
+
+**2. 打 FDE-PATCH**（Docker 构建自动执行；本机开发必须手动跑，否则 Agent 对话报 `'list' object has no attribute 'name'`）：
+
+```bash
+python scripts/patch_agentscope.py
+```
+
+**3. 启动（双进程）**：
 
 ```bash
 python main.py                              # 平台主进程 → http://127.0.0.1:4000
@@ -82,7 +107,7 @@ cp config/.env.example config/.env
 
 ---
 
-## 三、Docker 部署（仅 Linux 服务器）
+## 三、Docker 部署（Linux 服务器 · 默认容器化）
 
 > **仅在 Linux 服务器部署时使用**。本机开发请用「二、运行」，不要用 Docker（Windows 本机跑 Docker 无必要、且需额外装 Docker Desktop）。
 
