@@ -28,11 +28,13 @@
       <div class="name" x-html="brand.name"></div>
       <div class="sub" x-text="brand.sub"></div>
     </div>
-    <template x-for="p in menu" :key="p.key">
-      <div class="nav-item" :class="{ on: route === p.key, main: p.bold }" @click="go(p.key)">
-        <span class="ic" x-text="p.ic"></span><span x-text="p.name"></span>
-      </div>
-    </template>
+    <div class="rail-menu">
+      <template x-for="p in menu" :key="p.key">
+        <div class="nav-item" :class="{ on: route === p.key, main: p.bold }" @click="go(p.key)">
+          <span class="ic" x-text="p.ic"></span><span x-text="p.name"></span>
+        </div>
+      </template>
+    </div>
     <div class="foot">
       <div><span class="livedot"></span><b x-text="brand.foot"></b></div>
     </div>

@@ -32,12 +32,12 @@
 html, body { margin: 0; height: 100%; }
 body {
   font: 14px/1.65 var(--sans); color: var(--fg); background: var(--canvas);
-  display: flex; min-height: 100vh;
+  display: flex; height: 100vh; overflow: hidden;
 }
 
 /* ── 环境底纹：蓝图网格 + 双色微光 ─────────────────────── */
 .stage {
-  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden;
   background:
     radial-gradient(900px 380px at 8% -6%, rgba(217, 119, 6, .07), transparent 60%),
     radial-gradient(1000px 460px at 96% 0%, rgba(23, 94, 84, .08), transparent 55%),
@@ -59,6 +59,8 @@ aside.rail {
 .brand .name { font-size: 19px; font-weight: 800; letter-spacing: .04em; color: #fff; }
 .brand .name em { font-style: normal; color: #f5b04c; }
 .brand .sub { font-size: 11px; color: #7e90a8; letter-spacing: .14em; margin-top: 2px; }
+/* 菜单区可滚动：brand/foot 固定，菜单超长时内部滚动，不溢出蓝色背景 */
+.rail-menu { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
 .nav-item {
   display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 8px;
   color: #9fb0c5; font-size: 13.5px; cursor: pointer; user-select: none;
@@ -184,7 +186,7 @@ aside.agent-rail > div { flex: 1; min-width: 0; min-height: 0; display: flex; }
 .team-members { display: flex; flex-wrap: wrap; gap: 8px; }
 
 /* 列表页占满屏幕：不设 max-width 上限（平台控制台页另有 .pf main 覆盖，不受影响） */
-main { padding: 18px 24px 36px; width: 100%; margin: 0 auto; }
+main { padding: 18px 24px 36px; width: 100%; margin: 0 auto; flex: 1; min-height: 0; overflow-y: auto; }
 
 /* ── 路由切换动效 ──────────────────────────────────────── */
 .page-in { animation: pagein .28s cubic-bezier(.22, .9, .36, 1); }
@@ -387,6 +389,7 @@ hr.sep { border: none; border-top: 1px dashed var(--line); margin: 12px 0; }
 /* ── 画布底纹（蓝图网格 + 双色微光，与 SPA .stage 同源氛围）── */
 .pf {
   display: block;   /* 覆盖 SPA 的 body{display:flex}（侧栏横向布局）——平台页是顶栏 + 纵向堆叠 */
+  height: auto; overflow: visible;   /* 覆盖 SPA 的 body{height:100vh;overflow:hidden}——平台页随内容自然滚动 */
   margin: 0; color: var(--fg); font: 14px/1.65 var(--sans); min-height: 100vh;
   background:
     radial-gradient(900px 420px at 88% -10%, rgba(23,94,84,.07), transparent 62%),
