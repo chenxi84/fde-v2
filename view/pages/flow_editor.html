@@ -53,9 +53,98 @@
             <textarea x-model="editing.description" rows="2" placeholder="描述" style="width:100%; margin-top:8px"></textarea>
 
             <div class="tagline" style="margin-top:10px">
-              <button class="b-ghost b-sm" @click="showForm()">表单编辑</button>
-              <button class="b-ghost b-sm" @click="showYaml()">YAML 源码</button>
+              <button class="b-ghost b-sm" :class="{on: tab === 'canvas'}" @click="showCanvas()">画布</button>
+              <button class="b-ghost b-sm" :class="{on: tab === 'form'}" @click="showForm()">表单</button>
+              <button class="b-ghost b-sm" :class="{on: tab === 'yaml'}" @click="showYaml()">YAML 源码</button>
             </div>
+
+            <template x-if="tab === 'canvas'">
+              <div>
+                <!-- 画布工具栏 -->
+                <div class="tagline" style="margin:12px 0 8px; flex-wrap:wrap; gap:6px">
+                  <span class="muted" style="font-size:12px">角色：</span>
+                  <template x-for="r in roles" :key="r.type">
+                    <button class="b-ghost b-sm" @click="addNodeAt(r.type)" x-text="r.label"></button>
+                  </template>
+                  <button class="b-ghost b-sm" @click="addNode()">＋ 无角色节点</button>
+                  <span style="flex:1"></span>
+                  <button class="b-ghost b-sm" @click="autoLayout()">自动布局</button>
+                  <button class="b-dng b-sm" x-show="selEdge" @click="removeSelEdge()">删除连线</button>
+                </div>
+
+                <!-- 画布 -->
+                <div class="flow-canvas" x-ref="canvas">
+                  <div class="fc-content" x-ref="content">
+                    <svg class="fc-edges" x-html="svgEdges()" @click="onEdgeClick($event)"></svg>
+
+                    <template x-if="!editing.nodes.length">
+                      <div class="fc-hint">从上方选角色添加节点；拖节点定位；从节点右端圆点拖线到另一节点建立依赖</div>
+                    </template>
+
+                    <template x-for="(n, i) in editing.nodes" :key="i">
+                      <div class="fc-node" :class="{ sel: sel === i }"
+                        :style="{ left: (n.x ?? 40) + 'px', top: (n.y ?? 40) + 'px' }"
+                        @pointerdown="dragStart($event, i)" @click="sel = i">
+                        <span class="fc-port in"></span>
+                        <div class="fc-node-body">
+                          <div class="fc-role" x-text="roleLabel(n.role) || '未设角色'"></div>
+                          <div class="fc-id" x-text="n.id || '（未命名）'"></div>
+                        </div>
+                        <span class="fc-port out" @pointerdown.stop="edgeStart($event, i)"></span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+
+                <!-- 节点配置侧栏 -->
+                <template x-if="sel != null">
+                  <div class="fc-sidebar">
+                    <div class="tagline">
+                      <h4 style="margin:0">节点配置</h4>
+                      <span style="flex:1"></span>
+                      <button class="b-ghost b-sm" @click="sel = null">✕</button>
+                    </div>
+                    <div class="tagline" style="margin-top:10px">
+                      <input x-model="editing.nodes[sel].id" placeholder="节点 id" style="flex:1">
+                      <select x-model="editing.nodes[sel].role">
+                        <option value="">（无角色）</option>
+                        <template x-for="r in roles" :key="r.type">
+                          <option :value="r.type" x-text="r.label"></option>
+                        </template>
+                      </select>
+                    </div>
+                    <textarea x-model="editing.nodes[sel].task" rows="3" placeholder="任务文本（可用 {上游结果键} 占位）" style="width:100%; margin-top:6px"></textarea>
+                    <div class="tagline" style="margin-top:6px">
+                      <input x-model="editing.nodes[sel].output" placeholder="结果键 output" style="flex:1">
+                      <input x-model="editing.nodes[sel].input" placeholder="输入键（逗号分隔）" style="flex:1">
+                    </div>
+                    <div class="tagline" style="margin-top:6px">
+                      <input x-model="editing.nodes[sel].depends_on" placeholder="依赖节点 id（逗号分隔）" style="flex:1">
+                      <input x-model="editing.nodes[sel].max_loop" placeholder="max_loop" style="width:90px">
+                    </div>
+                    <div class="tagline" style="margin-top:6px; flex-wrap:wrap; align-items:center">
+                      <span class="muted" style="font-size:12px">when</span>
+                      <input x-model="editing.nodes[sel].when.key" placeholder="key" style="width:90px">
+                      <select x-model="editing.nodes[sel].when.op" style="width:110px">
+                        <option value="">（op）</option>
+                        <template x-for="o in ops" :key="o"><option :value="o" x-text="o"></option></template>
+                      </select>
+                      <input x-model="editing.nodes[sel].when.value" placeholder="value" style="width:100px">
+                      <span class="muted" style="font-size:12px; margin-left:6px">until</span>
+                      <input x-model="editing.nodes[sel].until.key" placeholder="key" style="width:90px">
+                      <select x-model="editing.nodes[sel].until.op" style="width:110px">
+                        <option value="">（op）</option>
+                        <template x-for="o in ops" :key="o"><option :value="o" x-text="o"></option></template>
+                      </select>
+                      <input x-model="editing.nodes[sel].until.value" placeholder="value" style="width:100px">
+                    </div>
+                    <div class="tagline" style="margin-top:12px">
+                      <button class="b-dng b-sm" @click="removeNode(sel)">删除节点</button>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </template>
 
             <template x-if="tab === 'form'">
               <div>
