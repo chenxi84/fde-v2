@@ -204,6 +204,7 @@ class SalesForecast:
             raise FdeError("物料未配置基线方法")
         base_params_raw = material.get("base_params")
         base_params = self._parse_json(base_params_raw)
+        model_blob = material.get("model_blob")
 
         bp_material_no = None
         switch_time = None
@@ -220,7 +221,8 @@ class SalesForecast:
 
         history = self._load_sales_history(material_no=material_no, bp_chain=chain)
         horizon = {"N+1": 1, "N+2": 2, "N+3": 3}.get(rolling_month, 1)
-        base_qty = self._calc_base_qty(base_method, base_params, history, horizon=horizon)
+        base_qty = self._calc_base_qty(base_method, base_params, history, horizon=horizon,
+                                       model_blob=model_blob)
 
         event_adj = line.get("event_adj") or 0
         base_event_qty = (base_qty + event_adj) if base_qty is not None else None
@@ -729,7 +731,7 @@ class SalesForecast:
             y, m = y + 1, 1
         return f"{y:04d}-{m:02d}"
 
-    def _calc_base_qty(self, base_method, params, history, horizon=1):
+    def _calc_base_qty(self, base_method, params, history, horizon=1, model_blob=None):
         """基线数量。horizon=滚动月度步长（N+1=1…）。
         移动平均/阶跃/借用参考为水平法（各月度相同）；指数平滑按 trend/seasonal 向前投影 horizon 步。"""
         history = history or []
@@ -752,7 +754,55 @@ class SalesForecast:
             if not ref_history:
                 return None
             return round(sum(ref_history) / len(ref_history) * scale, 4)
+        if base_method in ("AutoTheta", "AutoARIMA", "AutoETS", "SeasonalNaive",
+                           "CrostonOptimized", "TSB"):
+            return self._stats_forecast(base_method, params, history, horizon, model_blob)
         raise FdeError("未知基线方法")
+
+    def _stats_forecast(self, method, params, history, horizon=1, model_blob=None):
+        """用 statsforecast 统计模型做基线预测（常规/间歇赛道，自动选参）。
+
+        优先用拟合期固化的 model_blob（pickle 反序列化）predict，避免重新 fit 重新选参；
+        无 model_blob（旧数据）时回退重新 fit。"""
+        import base64
+        import pickle
+        import pandas as pd
+        from statsforecast import StatsForecast
+        from statsforecast.models import (AutoTheta, AutoARIMA, AutoETS,
+                                          SeasonalNaive, CrostonOptimized, TSB)
+        history = history or []
+        if not history:
+            return None
+
+        # 1) 优先用固化模型（pickle 反序列化）predict
+        if model_blob:
+            try:
+                model = pickle.loads(base64.b64decode(model_blob))
+                if model is not None and hasattr(model, "predict"):
+                    return round(float(model.predict(horizon)["mean"][0]), 4)
+            except Exception:
+                pass
+
+        # 2) 回退：重新 fit（Auto 模型内部自动选参）
+        season_length = self._int_param(params, "season_length", 12)
+        model_cls = {
+            "AutoTheta": AutoTheta, "AutoARIMA": AutoARIMA, "AutoETS": AutoETS,
+            "SeasonalNaive": SeasonalNaive, "CrostonOptimized": CrostonOptimized,
+            "TSB": TSB,
+        }[method]
+        if method in ("AutoTheta", "AutoARIMA", "AutoETS", "SeasonalNaive"):
+            model = model_cls(season_length=season_length)
+        else:
+            model = model_cls()
+        ds = pd.date_range(end=pd.Timestamp.today().normalize(), periods=len(history), freq="MS")
+        df = pd.DataFrame({"unique_id": "M", "ds": ds, "y": history})
+        sf = StatsForecast(models=[model], freq="MS", n_jobs=1)
+        try:
+            sf.fit(df)
+            fc = sf.predict(h=horizon)
+            return round(float(fc.iloc[-1][str(model)]), 4)
+        except Exception:
+            return None
 
     def _es_forecast(self, params, history, horizon):
         """指数平滑 horizon 步预测：trend→Holt 线性外推；seasonal→Holt-Winters 加法；否则水平平推。"""

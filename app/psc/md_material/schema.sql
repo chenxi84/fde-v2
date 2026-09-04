@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS md_material (
                 base_method      TEXT,
                 base_params      TEXT,
                 fit_version      TEXT,
-                fit_effective_at TIMESTAMP
+                fit_effective_at TIMESTAMP,
+                model_blob       TEXT
             );
 
 CREATE TABLE IF NOT EXISTS md_material_param_version (
@@ -24,6 +25,7 @@ CREATE TABLE IF NOT EXISTS md_material_param_version (
                 batch_window  REAL,
                 service_level REAL,
                 effective_at  TIMESTAMP,
+                model_blob    TEXT,
                 PRIMARY KEY (material_no, fit_version)
             );
 

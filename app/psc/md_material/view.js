@@ -27,6 +27,12 @@ const BASE_METHOD_PARAMS = {
   "指数平滑": '{"alpha": 0.3, "trend": false}',
   "阶跃检测": '{"threshold": 0.3, "confirm_periods": 2, "lookback": 6}',
   "借用参考": '{"ref_material": "M12345", "scale": 1.0, "mode": "trend"}',
+  "AutoTheta": '{"season_length": 12}',
+  "AutoARIMA": '{"season_length": 12}',
+  "AutoETS": '{"season_length": 12}',
+  "SeasonalNaive": '{"season_length": 12}',
+  "CrostonOptimized": '{}',
+  "TSB": '{}',
 };
 
 const IMPORT_HEADER =

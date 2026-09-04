@@ -17,7 +17,9 @@ class MdMaterial:
     _STATUS = ("正常", "EOP", "停用")
     _VALUE_CLASS = ("高", "低")
     _CHANGE_RISK = ("高", "低")
-    _BASE_METHODS = ("移动平均", "指数平滑", "阶跃检测", "借用参考")
+    _BASE_METHODS = ("移动平均", "指数平滑", "阶跃检测", "借用参考",
+                     "AutoTheta", "AutoARIMA", "AutoETS", "SeasonalNaive",
+                     "CrostonOptimized", "TSB")
 
     def create(self, material_no: str, material_name: str, status: str = "正常",
                unit_value: float = None, value_class: str = None, change_cost: float = None,
@@ -215,7 +217,8 @@ class MdMaterial:
         return {"total": len(rows), "success": success, "fail": fail, "errors": errors}
 
     def set_fit_params(self, material_no: str, base_method: str, base_params: str,
-                       batch_window: float, service_level: float, fit_version: str):
+                       batch_window: float, service_level: float, fit_version: str,
+                       model_blob: str = None):
         """拟合参数回填（被 strategy_fitting 调用），更新方法/参数并记录版本快照。"""
         material_no = self._clean(material_no)
         if not material_no:
@@ -243,9 +246,9 @@ class MdMaterial:
 
         self.db.execute(
             "UPDATE md_material SET base_method = ?, base_params = ?, batch_window = ?, "
-            "service_level = ?, fit_version = ?, fit_effective_at = ? "
+            "service_level = ?, fit_version = ?, fit_effective_at = ?, model_blob = ? "
             "WHERE material_no = ?",
-            (base_method, params_norm, bw, sl, fit_version, now, material_no),
+            (base_method, params_norm, bw, sl, fit_version, now, model_blob, material_no),
         )
 
         # 记录参数版本快照（material_no + fit_version 唯一，重复版本覆盖更新），供回滚追溯
@@ -256,16 +259,16 @@ class MdMaterial:
         if existing:
             self.db.execute(
                 "UPDATE md_material_param_version SET base_method = ?, base_params = ?, "
-                "batch_window = ?, service_level = ?, effective_at = ? "
+                "batch_window = ?, service_level = ?, effective_at = ?, model_blob = ? "
                 "WHERE material_no = ? AND fit_version = ?",
-                (base_method, params_norm, bw, sl, now, material_no, fit_version),
+                (base_method, params_norm, bw, sl, now, model_blob, material_no, fit_version),
             )
         else:
             self.db.execute(
                 "INSERT INTO md_material_param_version (material_no, fit_version, base_method, "
-                "base_params, batch_window, service_level, effective_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (material_no, fit_version, base_method, params_norm, bw, sl, now),
+                "base_params, batch_window, service_level, effective_at, model_blob) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (material_no, fit_version, base_method, params_norm, bw, sl, now, model_blob),
             )
 
         return self._to_dict(self._row(material_no))
@@ -374,6 +377,12 @@ class MdMaterial:
                 "指数平滑": {"alpha": 0.3, "trend": False},
                 "阶跃检测": {"threshold": 0.3, "confirm_periods": 2, "lookback": 6},
                 "借用参考": {},
+                "AutoTheta": {"season_length": 12},
+                "AutoARIMA": {"season_length": 12},
+                "AutoETS": {"season_length": 12},
+                "SeasonalNaive": {"season_length": 12},
+                "CrostonOptimized": {},
+                "TSB": {},
             }[base_method]
         else:
             try:
@@ -436,6 +445,12 @@ class MdMaterial:
                     raise FdeError("借用参考 scale 须大于 0")
             if "mode" in params and params["mode"] not in ("trend", "season", "lifecycle"):
                 raise FdeError("借用参考 mode 仅支持 trend/season/lifecycle")
+
+        elif base_method in ("AutoTheta", "AutoARIMA", "AutoETS", "SeasonalNaive"):
+            if "season_length" in params:
+                sl = params["season_length"]
+                if isinstance(sl, bool) or not isinstance(sl, int) or sl <= 0:
+                    raise FdeError("season_length 须为正整数")
 
         return json.dumps(params, ensure_ascii=False)
 
@@ -543,13 +558,14 @@ class MdMaterial:
         return self.db.execute(
             "SELECT material_no, material_name, status, unit_value, value_class, change_cost, "
             "prod_days, logistics_days, change_risk, service_level, batch_window, base_method, "
-            "base_params, fit_version, fit_effective_at FROM md_material WHERE material_no = ?",
+            "base_params, fit_version, fit_effective_at, model_blob FROM md_material WHERE material_no = ?",
             (material_no,),
         ).fetchone()
 
     def _to_dict(self, row):
         if row is None:
             return None
+        keys = row.keys()
         return {
             "material_no": row["material_no"],
             "material_name": row["material_name"],
@@ -566,5 +582,6 @@ class MdMaterial:
             "base_params": row["base_params"],
             "fit_version": row["fit_version"],
             "fit_effective_at": row["fit_effective_at"],
+            "model_blob": row["model_blob"] if "model_blob" in keys else None,
         }
 

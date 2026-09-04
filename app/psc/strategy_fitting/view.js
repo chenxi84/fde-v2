@@ -39,6 +39,7 @@ export default function pageStrategyFitting() {
 
     /* ---- 详情模态 ---- */
     modalX: { open: false, loading: false, d: null },
+    selIdx: 0,                       // 选中候选索引（逐月曲线）
 
     /* ---- 发起拟合表单（run） ---- */
     form: { open: false, busy: false, material_no: "", fit_version: "" },
@@ -111,12 +112,50 @@ export default function pageStrategyFitting() {
     /* ---- 详情模态：点 material_no → get 全量字段（复合主键 fit_version + material_no） ---- */
     async viewX(d) {
       self.modalX = { open: true, loading: true, d: null };
+      self.selIdx = 0;
       try {
         self.modalX.d = await svc("strategy_fitting", "get",
           { fit_version: d.fit_version, material_no: d.material_no });
+        Alpine.nextTick(() => self.renderFitChart());
       } catch { self.modalX.open = false; } finally { self.modalX.loading = false; }
     },
-    closeX() { self.modalX.open = false; },
+    closeX() {
+      self.modalX.open = false;
+      if (self._fitChart) { self._fitChart.dispose(); self._fitChart = null; }
+    },
+
+    /* ---- 拟合过程（detail_json：候选排名表 + 逐月拟合曲线）---- */
+    fitDetail() {
+      const d = self.modalX.d;
+      if (!d || !d.detail_json) return null;
+      try { return typeof d.detail_json === "string" ? JSON.parse(d.detail_json) : d.detail_json; }
+      catch { return null; }
+    },
+    fitCandidates() { const fd = self.fitDetail(); return (fd && fd.candidates) || []; },
+    pickCand(i) { self.selIdx = i; Alpine.nextTick(() => self.renderFitChart()); },
+    renderFitChart() {
+      const el = document.getElementById("fitChart");
+      if (!el || !window.echarts) return;
+      if (self._fitChart) { self._fitChart.dispose(); self._fitChart = null; }
+      const c = self.fitCandidates()[self.selIdx];
+      if (!c || !(c.steps || []).length) return;
+      const chart = echarts.init(el);
+      self._fitChart = chart;
+      chart.setOption({
+        grid: { top: 40, left: 60, right: 24, bottom: 48 },
+        tooltip: { trigger: "axis" },
+        legend: { top: 8 },
+        xAxis: { type: "category", data: c.steps.map((s) => s.period), boundaryGap: false,
+          axisLabel: { rotate: 45, fontSize: 10 } },
+        yAxis: { type: "value", name: "需求", scale: true },
+        series: [
+          { name: "实际", type: "line", smooth: true, showSymbol: true,
+            data: c.steps.map((s) => Number(s.actual)), lineStyle: { color: "#175e54", width: 2 } },
+          { name: "预测", type: "line", smooth: true, showSymbol: true,
+            data: c.steps.map((s) => Number(s.pred)), lineStyle: { color: "#d97706", width: 2, type: "dashed" } },
+        ],
+      });
+    },
 
     /* ---- 状态机动作：行内操作列与模态页脚共用判定（待复核→approve/reject；已生效→rollback；已否决终态无按钮）
             字面量逐项书写，勿变量拼名；非法流转由后端 FdeError 经 api.js 统一 toast ---- */

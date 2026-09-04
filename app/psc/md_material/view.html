@@ -111,7 +111,7 @@
             <div><div class="k">基线方法</div><div class="v" x-text="dash(modalX.d.base_method)"></div></div>
             <div style="grid-column: span 2"><div class="k">基线参数</div>
               <div class="v">
-                <template x-if="tryParse(modalX.d.base_params)">
+                <template x-if="tryParse(modalX.d.base_params) && Object.keys(tryParse(modalX.d.base_params)).length">
                   <div class="kv" style="margin-top:6px;background:#fff">
                     <template x-for="(val, key) in tryParse(modalX.d.base_params)" :key="key">
                       <div><div class="k mono" x-text="key"></div>
@@ -119,7 +119,9 @@
                     </template>
                   </div>
                 </template>
-                <span class="mono" x-show="!tryParse(modalX.d.base_params)" x-text="dash(modalX.d.base_params)"></span>
+                <span class="mono"
+                  x-show="!tryParse(modalX.d.base_params) || !Object.keys(tryParse(modalX.d.base_params) || {}).length"
+                  x-text="!tryParse(modalX.d.base_params) ? dash(modalX.d.base_params) : '自动选参（无手写参数）'"></span>
               </div></div>
           </div>
 
@@ -247,6 +249,12 @@
             <option value="指数平滑">指数平滑</option>
             <option value="阶跃检测">阶跃检测</option>
             <option value="借用参考">借用参考</option>
+            <option value="AutoTheta">AutoTheta</option>
+            <option value="AutoARIMA">AutoARIMA</option>
+            <option value="AutoETS">AutoETS</option>
+            <option value="SeasonalNaive">SeasonalNaive</option>
+            <option value="CrostonOptimized">CrostonOptimized</option>
+            <option value="TSB">TSB</option>
           </select>
         </div>
       </div>

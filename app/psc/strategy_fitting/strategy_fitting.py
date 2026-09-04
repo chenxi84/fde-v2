@@ -31,17 +31,22 @@ class StrategyFitting:
         # 历史干净需求（ERP 外部适配器；BR-19 剔除一次性脉冲）
         history = self._load_sales_history(clean_material)
 
-        # 预测拟合（BR-02 与库存拟合解耦）
-        pred_method, pred_params, smape = self._predict_fit(history)
+        # 预测拟合（statsforecast 统计模型池回测，MASE 选 winner + 出预测值）
+        r = self._predict_fit(history)
 
         # 库存拟合（实际干净需求回放，BR-02/BR-11 约束优化）
         (service_factor, safety_level, batch_window,
          fulfill_rate, inv_days, changeover_cnt) = self._inventory_fit(history)
 
+        import json
+        detail_json = json.dumps(r["detail"], ensure_ascii=False)
+
         # BR-13 拟合结果先落表 status=待复核，人工复核通过才回填
         values = (
-            pred_method, pred_params, smape, service_factor, safety_level,
-            batch_window, fulfill_rate, inv_days, changeover_cnt,
+            r["pred_method"], r["pred_params"], r["mase"], r["smape"],
+            r["pred_qty"], r["pred_lo"], r["pred_hi"], detail_json,
+            service_factor, safety_level, batch_window,
+            fulfill_rate, inv_days, changeover_cnt,
         )
 
         existing = self.db.execute(
@@ -53,11 +58,12 @@ class StrategyFitting:
             self.db.execute(
                 """
                     INSERT INTO strategy_fitting (
-                        material_no, fit_version, pred_method, pred_params, smape,
-                        service_factor, safety_level, batch_window, fulfill_rate,
-                        inv_days, changeover_cnt, abnormal_flag, status
+                        material_no, fit_version, pred_method, pred_params, mase, smape,
+                        pred_qty, pred_lo, pred_hi, detail_json,
+                        service_factor, safety_level, batch_window,
+                        fulfill_rate, inv_days, changeover_cnt, abnormal_flag, status
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '待复核')
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '待复核')
                 """,
                 (clean_material, clean_version) + values,
             )
@@ -66,7 +72,8 @@ class StrategyFitting:
             self.db.execute(
                 """
                     UPDATE strategy_fitting SET
-                        pred_method = ?, pred_params = ?, smape = ?,
+                        pred_method = ?, pred_params = ?, mase = ?, smape = ?,
+                        pred_qty = ?, pred_lo = ?, pred_hi = ?, detail_json = ?,
                         service_factor = ?, safety_level = ?, batch_window = ?,
                         fulfill_rate = ?, inv_days = ?, changeover_cnt = ?,
                         abnormal_flag = 0, status = '待复核'
@@ -214,6 +221,16 @@ class StrategyFitting:
             raise FdeError("参数跳变过大，需人工确认")
 
         # BR-13/BR-15 复核通过才回填物料主数据（带版本记录，支持回滚）
+        import json as _json
+        model_blob = None
+        try:
+            _d = row["detail_json"]
+            if _d:
+                _d = _json.loads(_d) if isinstance(_d, str) else _d
+                model_blob = _d.get("model_blob")
+        except Exception:
+            model_blob = None
+
         self.fde.call(
             "md_material", "set_fit_params",
             material_no=clean_material,
@@ -222,6 +239,7 @@ class StrategyFitting:
             batch_window=row["batch_window"],
             service_level=row["fulfill_rate"],
             fit_version=clean_version,
+            model_blob=model_blob,
         )
 
         self.db.execute(
@@ -304,29 +322,134 @@ class StrategyFitting:
         except FdeError:
             return []
 
+    # ---- 预测拟合（statsforecast 统计模型池 + cross_validation 回测 + MASE 选 winner + predict）----
+
+    _K_MIN = 12          # 最小训练窗口
+    _RECENT_WINDOW = 6   # 近期窗口（趋势对比，用户自己判断）
+
     def _predict_fit(self, history):
-        """预测拟合（简化）：取默认方法/参数（指数平滑），sMAPE 用历史均值差计算。
+        """预测拟合：statsforecast 统计模型池 + cross_validation 回测 + MASE 选 winner + predict。
 
-        完整实现为遍历方法×参数网格滚动回测（Walk-Forward）选 sMAPE 最小者
-        （BR-03/BR-04/BR-05/BR-06）；此处按简化约定取默认组合。"""
-        pred_method = "指数平滑"
-        pred_params = '{"alpha": 0.3, "trend": false}'
-        if not history:
-            return pred_method, pred_params, 0.0
+        按历史非零占比分流（常规 AutoTheta/AutoARIMA/AutoETS，间歇 Croston/TSB），
+        SeasonalNaive 始终作 MASE 标尺。返回 dict（pred_method/pred_params/mase/smape/
+        pred_qty/pred_lo/pred_hi/detail）。"""
+        import json
+        import pandas as pd
+        from statsforecast import StatsForecast
+        from statsforecast.models import (AutoTheta, AutoARIMA, AutoETS,
+                                          SeasonalNaive, CrostonOptimized, TSB)
 
-        mean = sum(history) / len(history)
-        total = 0.0
-        cnt = 0
-        for d in history:
-            if d <= 0:
+        n = len(history)
+        if n < self._K_MIN:
+            return self._default_result()
+
+        ds = pd.date_range(end=pd.Timestamp.today().normalize(), periods=n, freq="MS")
+        df = pd.DataFrame({"unique_id": "M", "ds": ds, "y": history})
+
+        nonzero_ratio = sum(1 for v in history if v > 0) / n
+        if nonzero_ratio < 0.3:
+            models = [CrostonOptimized(), TSB(alpha_d=0.1, alpha_p=0.1),
+                      SeasonalNaive(season_length=12)]
+        else:
+            models = [AutoTheta(season_length=12), AutoARIMA(season_length=12),
+                      AutoETS(season_length=12), SeasonalNaive(season_length=12)]
+
+        sf = StatsForecast(models=models, freq="MS", n_jobs=1)
+        try:
+            cv = sf.cross_validation(h=1, df=df, n_windows=3)
+        except Exception:
+            return self._default_result()
+        if cv is None or cv.empty:
+            return self._default_result()
+
+        base = float((cv["SeasonalNaive"] - cv["y"]).abs().mean())
+        candidates = []
+        for m in models:
+            name = str(m)
+            if name == "SeasonalNaive":
                 continue
-            denom = (abs(mean) + d) / 2.0
-            if denom <= 0:
+            if name not in cv.columns:
                 continue
-            total += abs(mean - d) / denom
-            cnt += 1
-        smape = round(total / cnt, 4) if cnt else 0.0
-        return pred_method, pred_params, smape
+            preds = cv[name]
+            actuals = cv["y"]
+            mae = float((preds - actuals).abs().mean())
+            mase = round(mae / base, 4) if base > 0 else 0.0
+            smape_vals = []
+            for p, a in zip(preds, actuals):
+                if a <= 0:
+                    continue
+                denom = (abs(p) + a) / 2.0
+                if denom <= 0:
+                    continue
+                smape_vals.append(abs(p - a) / denom)
+            smape = round(sum(smape_vals) / len(smape_vals), 4) if smape_vals else 0.0
+            steps = [{"period": str(row["ds"].date()),
+                      "pred": round(float(row[name]), 2), "actual": row["y"]}
+                     for _, row in cv.iterrows()]
+            _p = {"season_length": 12} if name in ("AutoTheta", "AutoARIMA", "AutoETS", "SeasonalNaive") else {}
+            candidates.append({"method": name, "params": _p, "mase": mase,
+                               "smape": smape, "steps": steps})
+
+        if not candidates:
+            return self._default_result()
+
+        candidates.sort(key=lambda c: c["mase"])
+        best = candidates[0]
+
+        import base64
+        import pickle
+        import numpy as np
+        pred_qty = pred_lo = pred_hi = None
+        model_blob = None
+        try:
+            winner_model = self._make_model(best["method"])
+            winner_model.fit(np.array(history, dtype=np.float64))
+            fc = winner_model.predict(1, level=[80])
+            pred_qty = round(float(fc["mean"][0]), 2)
+            pred_lo = round(float(fc["lo-80"][0]), 2)
+            pred_hi = round(float(fc["hi-80"][0]), 2)
+            model_blob = base64.b64encode(pickle.dumps(winner_model)).decode()
+        except Exception:
+            pass
+
+        detail = {
+            "candidates": candidates, "winner": best["method"],
+            "predict": {"qty": pred_qty, "lo": pred_lo, "hi": pred_hi},
+            "model_blob": model_blob,
+            "mase_baseline": round(base, 2),
+            "k_min": self._K_MIN, "recent_window": self._RECENT_WINDOW,
+        }
+        return {"pred_method": best["method"],
+                "pred_params": json.dumps(best["params"], ensure_ascii=False),
+                "mase": best["mase"], "smape": best["smape"],
+                "pred_qty": pred_qty, "pred_lo": pred_lo, "pred_hi": pred_hi,
+                "detail": detail}
+
+    @staticmethod
+    def _make_model(method, season_length=12):
+        """按 winner 方法名构造 statsforecast 模型实例（用于全量 refit + pickle 固化）。"""
+        from statsforecast.models import (AutoTheta, AutoARIMA, AutoETS,
+                                          SeasonalNaive, CrostonOptimized, TSB)
+        if method == "AutoTheta":
+            return AutoTheta(season_length=season_length)
+        if method == "AutoARIMA":
+            return AutoARIMA(season_length=season_length)
+        if method == "AutoETS":
+            return AutoETS(season_length=season_length)
+        if method == "SeasonalNaive":
+            return SeasonalNaive(season_length=season_length)
+        if method == "CrostonOptimized":
+            return CrostonOptimized()
+        if method == "TSB":
+            return TSB(alpha_d=0.1, alpha_p=0.1)
+        return None
+
+    def _default_result(self):
+        return {"pred_method": "指数平滑", "pred_params": '{"alpha": 0.3, "trend": false}',
+                "mase": 0.0, "smape": 0.0,
+                "pred_qty": None, "pred_lo": None, "pred_hi": None,
+                "detail": {"candidates": [], "k_min": self._K_MIN,
+                           "recent_window": self._RECENT_WINDOW}}
 
     def _inventory_fit(self, history):
         """库存拟合（简化）：取默认组合（服务系数 1.65、组批窗口 28 天 = 4 周）。
@@ -379,6 +502,7 @@ class StrategyFitting:
     def _get_row(self, fit_version, material_no):
         return self.db.execute(
             "SELECT material_no, fit_version, pred_method, pred_params, smape, "
+            "mase, pred_qty, pred_lo, pred_hi, detail_json, "
             "service_factor, safety_level, batch_window, fulfill_rate, "
             "inv_days, changeover_cnt, abnormal_flag, status "
             "FROM strategy_fitting WHERE fit_version = ? AND material_no = ?",
@@ -386,12 +510,18 @@ class StrategyFitting:
         ).fetchone()
 
     def _to_dict(self, row):
+        keys = row.keys()
         return {
             "material_no": row["material_no"],
             "fit_version": row["fit_version"],
             "pred_method": row["pred_method"],
             "pred_params": row["pred_params"],
             "smape": row["smape"],
+            "mase": row["mase"] if "mase" in keys else None,
+            "pred_qty": row["pred_qty"] if "pred_qty" in keys else None,
+            "pred_lo": row["pred_lo"] if "pred_lo" in keys else None,
+            "pred_hi": row["pred_hi"] if "pred_hi" in keys else None,
+            "detail_json": row["detail_json"] if "detail_json" in keys else None,
             "service_factor": row["service_factor"],
             "safety_level": row["safety_level"],
             "batch_window": row["batch_window"],

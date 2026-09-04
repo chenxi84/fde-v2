@@ -121,6 +121,16 @@
             </div>
           </div>
 
+          <div class="sec">下月预测</div>
+          <div class="kv">
+            <div><div class="k">预测销量</div><div class="v mono" x-text="fmt(modalX.d.pred_qty)"></div>
+              <div class="muted" style="font-size:11px">winner 模型全量 refit → predict(h=1)</div></div>
+            <div><div class="k">80% 区间</div><div class="v mono"
+              x-text="(modalX.d.pred_lo != null ? fmt(modalX.d.pred_lo) + ' ~ ' + fmt(modalX.d.pred_hi) : '—')"></div></div>
+            <div><div class="k">MASE</div><div class="v mono" x-text="fmt(modalX.d.mase)"></div>
+              <div class="muted" style="font-size:11px">越小越准；&gt;1 表示不可预测</div></div>
+          </div>
+
           <div class="sec">库存拟合结果</div>
           <div class="kv">
             <div><div class="k">服务系数</div><div class="v mono" x-text="fmt(modalX.d.service_factor)"></div></div>
@@ -137,6 +147,33 @@
             <div><div class="k">库存天数</div><div class="v mono" x-text="fmt(modalX.d.inv_days)"></div></div>
             <div><div class="k">切线次数</div><div class="v mono" x-text="fmt(modalX.d.changeover_cnt)"></div></div>
           </div>
+
+          <div class="sec">拟合过程（候选排名 · 逐月曲线）</div>
+          <template x-if="fitCandidates().length">
+            <div>
+              <div class="scroll-x" style="margin-bottom:8px">
+                <table class="tbl tight">
+                  <tr><th>预测方法</th><th>MASE</th><th>sMAPE</th></tr>
+                  <template x-for="(c, i) in fitCandidates()" :key="c.method + JSON.stringify(c.params)">
+                    <tr class="data" style="cursor:pointer"
+                        :style="i === selIdx ? 'background:var(--prime-soft, #e3eee9)' : ''"
+                        @click="pickCand(i)">
+                      <td><span class="st" :class="'st-' + hue(c.method)" x-text="c.method"></span>
+                        <span class="st st-amber" style="margin-left:4px" x-show="i === 0">★ 推荐</span>
+                        <span class="muted" style="margin-left:4px;font-size:10px" x-show="c.mase > 1">⚠ 不可预测</span></td>
+                      <td class="mono" x-text="fmt(c.mase)"></td>
+                      <td class="mono" x-text="pct(c.smape)"></td>
+                    </tr>
+                  </template>
+                </table>
+              </div>
+              <div class="muted" style="font-size:11px; margin-bottom:8px">
+                逐月拟合曲线（点候选行切换）：实线 = 实际需求，虚线 = 预测值；「全周期」与「近期 6 期」sMAPE 差异大，提示趋势可能已变化
+              </div>
+              <div id="fitChart" style="height:260px; margin-bottom:10px"></div>
+            </div>
+          </template>
+          <div x-show="!fitCandidates().length" class="muted" style="font-size:12px; margin-bottom:8px">无拟合过程数据</div>
 
           <div class="sec">复核状态</div>
           <div class="kv">

@@ -7,15 +7,14 @@
 
 ### 服务契约
 ```
+compute(months=6:string)
+    — 口径A 单表计算 MAPE/bias 并回写：直接读 sales_history 行内
 get(customer_no*, material_no*)
     — 按客户+物料查询该组合的 MAPE/bias；未命中返回 None，不抛异常。
 list(customer_no=None:string, material_no=None:string, page=None:integer, size=None:integer)
     — 按客户/物料（AND 关系，可选）筛选达成率列表，分页返回 {items, total}。
 upsert(customer_no*, material_no*, mape*, bias*)
     — ERP 统计回写 MAPE/bias：同客户+物料存在则覆盖更新，不存在则插入（幂等）。
-compute(months=None:integer)
-    — 口径A 单表计算 MAPE/bias 并回写：直接读 sales_history 行内 forecast_qty(F) 与 qty(A)，无需 join 销售预测；
-      默认滚动 6 个月，窗口内有效样本<3 或 Σ实际=0 跳过。返回 {computed, skipped}。
 ```
 
 ### get/list 示例
@@ -24,8 +23,8 @@ compute(months=None:integer)
 ### list 返回项示例
 ```json
 {
- "customer_no": "C001",
- "material_no": "M1",
+ "customer_no": "AITO",
+ "material_no": "M9-BEAM",
  "mape": 0.1,
  "bias": 0.05
 }
@@ -57,15 +56,15 @@ publish(version_no*)
 ```json
 {
  "version_no": "202608",
- "material_no": "M1",
+ "material_no": "M9-BEAM",
  "rolling_month": "N+1",
- "forecast_qty": 950.0,
- "inventory_qty": 0.0,
- "gross_qty": 950.0,
+ "forecast_qty": 10000.0,
+ "inventory_qty": 353.45,
+ "gross_qty": 10353.45,
  "open_order_qty": 0.0,
  "onhand_qty": 0.0,
  "in_transit_qty": 0.0,
- "net_qty": 950.0
+ "net_qty": 10353.45
 }
 ```
 
@@ -96,13 +95,13 @@ release(replenish_no*, promised_inbound=None:string)
 ### list 返回项示例
 ```json
 {
- "replenish_no": "RP202608140001",
- "material_no": "M1",
- "replenish_type": "缺货补库",
- "replenish_qty": 100.0,
- "required_inbound": "2026-08-20",
- "promised_inbound": "2026-08-20",
- "status": "已完成"
+ "replenish_no": "RP202609030001",
+ "material_no": "M9-BEAM",
+ "replenish_type": "最低库存补库",
+ "replenish_qty": 353.45,
+ "required_inbound": "2026-09-03",
+ "promised_inbound": null,
+ "status": "待下达"
 }
 ```
 
@@ -114,16 +113,11 @@ release(replenish_no*, promised_inbound=None:string)
 get(material_no*, biz_date*)
     — 按物料号 + 日期查询单日推移明细。
 list(material_no=None:string, biz_date=None:string, alert_type=None:string, page=None:integer, size=None:integer)
-    — 按物料号 / 日期 / 预警类型筛选推移表列表，支持分页；默认 biz_date 升序（从早到晚），
-      未选日期时仅返回当日及以后（BR-11 历史隐藏），选定具体日期（含历史）精确回看。
+    — 按物料号 / 日期 / 预警类型筛选推移表列表，支持分页。
 refresh(material_no*, biz_date*, opening_stock=None:string)
     — 对单个物料逐日推演未来 3 个月库存水位并落盘（含预警标记）。
-      预计入库量 = master_plan.get_latest + demand_pool.list（已下达/生产中）；
-      预计出库量 = outbound_plan.list（status=待出库，按计划出库日期合计）。
 refresh_batch(biz_date=None:string, material_nos=None:string)
-    — 整批刷新推移表（biz_date 缺省=当天，material_nos 缺省=全量正常物料），
-      刷新后逐物料联动预警扫描（击穿水位自动创建需求池补库单）；
-      返回 {total, success, fail, success_materials, errors, replenishments}。
+    — 整批刷新全量物料推移表，并在刷新后联动预警扫描（击穿自动创建需求池补库单）。
 scan_alert(material_no*, version_no=None:string)
     — 对照水位线扫描某物料推移表，回填 alert_type，击穿水位触发需求池补库。
 ```
@@ -134,12 +128,12 @@ scan_alert(material_no*, version_no=None:string)
 ### list 返回项示例
 ```json
 {
- "material_no": "M1",
- "biz_date": "2026-08-15",
+ "material_no": "M9-BEAM",
+ "biz_date": "2026-09-04",
  "inbound_qty": 0.0,
  "outbound_qty": 0.0,
  "balance": 0.0,
- "alert_type": "无"
+ "alert_type": "击穿最低"
 }
 ```
 
@@ -167,17 +161,17 @@ list(version_no=None:string, material_no=None:string, hedge_tool=None:string, pa
 ```json
 {
  "version_no": "202608",
- "material_no": "M1",
- "hedge_tool": "库存",
- "min_level": 0,
+ "material_no": "M9-BEAM",
+ "hedge_tool": "速度",
+ "min_level": 353.45,
  "service_factor": 1.65,
- "resp_volatility": 0,
+ "resp_volatility": 595.68,
  "safety_level": 0,
- "batch_window": 28,
+ "batch_window": 0,
  "batch_level": 0,
- "basis": "物料M1：生产10天+物流5天，满足率95%，组批窗口28天，近0期月均干净需求0件，对冲工具库存（无历史数据，水位按 0）",
- "lower": 0,
- "upper": 0
+ "basis": "物料M9-BEAM：生产3天+物流2天，满足率95%，组批窗口0天，近7期月均干净需求5301.71件，对冲工具速度",
+ "lower": 353.45,
+ "upper": 353.45
 }
 ```
 
@@ -202,12 +196,12 @@ list(version_no=None:string, material_no=None:string, page=None:integer, size=No
 ### list 返回项示例
 ```json
 {
- "material_no": "M1",
+ "material_no": "M9-BEAM",
  "version_no": "202608",
  "rolling_month": "N+1",
  "plan_version": 1,
- "plan_qty": 950.0,
- "latest_inbound_date": "2026-09-30"
+ "plan_qty": 10353.45,
+ "latest_inbound_date": "2026-08-28"
 }
 ```
 
@@ -223,13 +217,13 @@ disable(bp_id*)
 get(bp_id*)
     — 按断点标识查询单条断点记录（含已停用记录）。
 get_switch_time(new_material_no*, customer_no=None:string)
-    — 取某新物料的断点切换时间（可按客户收窄）；无断点返回 None。供销售预测 calc_baseline 回填处理表 switch_time。
+    — 取某新物料的断点切换时间（可按客户收窄）；无断点返回 None。
 list(customer_no=None:string, old_material_no=None:string, new_material_no=None:string, page=None:string, size=None:string)
     — 按客户/原物料号/新物料号（精确）筛选分页列表，默认不含已停用记录，按切换时间降序。
 trace(new_material_no*)
     — 沿断点向上追溯原物料号链，返回从最上游原物料号到给定新物料号的序列（无断点返回自身）。
 upcoming(days=60:integer)
-    — 即将切换的断点关系：switch_time 在 [今天, 今天+days] 且未停用，供销售预测/库存策略/流程总览做「即将切换」预警。
+    — 即将切换的断点关系：switch_time 在 [今天, 今天+days] 且未停用。
 update(bp_id*, customer_no=None:string, old_material_no=None:string, new_material_no=None:string, switch_time=None:string, ecn_no=None:string)
     — 更新断点的切换时间/变更单号等字段，重新校验物料引用、原≠新、组合唯一。
 ```
@@ -237,32 +231,19 @@ update(bp_id*, customer_no=None:string, old_material_no=None:string, new_materia
 ### get/list 示例
 （未造出样例 —— 字段请读源码 get()/INSERT 语句）
 
-### list 返回项示例
-```json
-{
- "bp_id": 1,
- "customer_no": "C001",
- "old_material_no": "M3",
- "new_material_no": "M4",
- "switch_time": "2026-09-01",
- "ecn_no": "ECN-002",
- "disabled": 0
-}
-```
-
 
 ## md_customer
 
 ### 服务契约
 ```
 create(customer_no*, customer_name*, settle_mode=None:string, line_stock_days=None:integer, transfer_lead_days=None:integer, credit_code=None:string)
-    — 新建客户主数据，customer_no 全局唯一；settle_mode 字典 现售/寄售；credit_code 18 位统一社会信用代码（GB 32100-2015 校验位）。
+    — 新建客户主数据，customer_no 全局唯一。
 get(customer_no*)
     — 按客户编码查看单条客户主数据详情。
 import_batch(rows*)
     — 批量导入/更新（upsert）：已存在 customer_no 更新，不存在则新增。
 list(customer_no=None:string, customer_name=None:string, credit_code=None:string, page=None:integer, size=None:integer)
-    — 按客户编码/名称/统一社会信用代码模糊筛选的分页列表（credit_code 自动大写化），按 customer_no 升序。
+    — 按客户编码/名称/统一社会信用代码模糊筛选的分页列表，按 customer_no 升序。
 update(customer_no*, customer_name=None:string, settle_mode=None:string, line_stock_days=None:integer, transfer_lead_days=None:integer, credit_code=None:string)
     — 更新客户主数据（customer_no 主键不可改）。
 ```
@@ -273,12 +254,12 @@ update(customer_no*, customer_name=None:string, settle_mode=None:string, line_st
 ### list 返回项示例
 ```json
 {
- "customer_no": "C001",
- "customer_name": "客户A",
- "credit_code": "91110000710931000M",
+ "customer_no": "AITO",
+ "customer_name": "问界汽车（赛力斯）",
+ "credit_code": null,
  "settle_mode": "寄售",
- "line_stock_days": 0,
- "transfer_lead_days": 3
+ "line_stock_days": 3,
+ "transfer_lead_days": 2
 }
 ```
 
@@ -294,8 +275,8 @@ get(material_no*)
 import_batch(rows*)
     — 批量导入/更新（upsert）：逐行校验，成功行入库，失败行返回错误明细。
 list(material_no=None:string, material_name=None:string, status=None:string, page=None:integer, size=None:integer)
-    — 按物料号/名称模糊、状态精确筛选的分页列表。
-set_fit_params(material_no*, base_method*, base_params*, batch_window*, service_level*, fit_version*)
+    — 按物料号/名称模糊、状态精确筛选的分页列表。返回全字段，供列表自选显示列。
+set_fit_params(material_no*, base_method*, base_params*, batch_window*, service_level*, fit_version*, model_blob=None:string)
     — 拟合参数回填（被 strategy_fitting 调用），更新方法/参数并记录版本快照。
 update(material_no*, material_name=None:string, status=None:string, unit_value=None:number, value_class=None:string, change_cost=None:number, prod_days=None:number, logistics_days=None:number, change_risk=None:string, service_level=None:number, batch_window=None:number, base_method=None:string, base_params=None:string)
     — 更新物料名称与各参数；material_no（主键）与 status（只读）不可修改。
@@ -307,12 +288,22 @@ update(material_no*, material_name=None:string, status=None:string, unit_value=N
 ### list 返回项示例
 ```json
 {
- "material_no": "M1",
- "material_name": "物料A更新",
+ "material_no": "M9-BEAM",
+ "material_name": "前防撞梁总成",
  "status": "正常",
- "value_class": null,
+ "unit_value": null,
+ "value_class": "高",
+ "change_cost": null,
+ "prod_days": 3.0,
+ "logistics_days": 2.0,
  "change_risk": null,
- "base_method": null
+ "service_level": 0.95,
+ "batch_window": 28.0,
+ "base_method": "AutoETS",
+ "base_params": "{\"season_length\": 12}",
+ "fit_version": "202609",
+ "fit_effective_at": "2026-09-04 14:53:08",
+ "model_blob": null
 }
 ```
 
@@ -335,9 +326,9 @@ publish(version_no*)
 ### list 返回项示例
 ```json
 {
- "version_no": "202609",
- "anchor_period": "2026-09",
- "opening_date": "2026-09-01",
+ "version_no": "202610",
+ "anchor_period": "2026-10",
+ "opening_date": "2026-10-01",
  "lock_status": "草稿"
 }
 ```
@@ -362,23 +353,12 @@ update(rel_no*, old_material_no*, new_material_no*, ecn_no=None:string)
 ### get/list 示例
 （未造出样例 —— 字段请读源码 get()/INSERT 语句）
 
-### list 返回项示例
-```json
-{
- "rel_no": "R544623FABE0647B2AAF9836410177B51",
- "old_material_no": "M3",
- "new_material_no": "M4",
- "ecn_no": "ECN-001",
- "status": "失效"
-}
-```
-
 
 ## md_project
 
 ### 服务契约
 ```
-create(project_no*, project_name*, owner*, stage=None:string, sop_date=None:string, eop_date=None:string)
+create(project_no*, project_name*, owner*, stage=None:string, sop_date=None:string, eop_date=None:string, veh_model=None:string, share=None:string)
     — 新建项目台账。project_no 全局唯一，stage 默认「进行中」。
 get(project_no*)
     — 按项目号查询项目台账详情。
@@ -386,7 +366,7 @@ import_batch(rows*)
     — 批量导入/更新项目台账（upsert）。已存在主键行更新，新行新增；逐行校验，失败行记录错误明细。
 list(project_no=None:string, project_name=None:string, stage=None:string, page=None:integer, size=None:integer)
     — 按项目号（模糊）、项目名称（模糊）、阶段（精确）筛选项目台账，支持分页。
-update(project_no*, project_name=None:string, stage=None:string, sop_date=None:string, eop_date=None:string, owner=None:string)
+update(project_no*, project_name=None:string, stage=None:string, sop_date=None:string, eop_date=None:string, owner=None:string, veh_model=None:string, share=None:string)
     — 更新项目台账（project_no 为主键不可修改）。stage 遵循单向流转，禁止跳级/回退。
 ```
 
@@ -396,12 +376,14 @@ update(project_no*, project_name=None:string, stage=None:string, sop_date=None:s
 ### list 返回项示例
 ```json
 {
- "project_no": "PRJ-1",
- "project_name": "项目1",
- "stage": "SOP",
- "sop_date": "2026-01-01",
- "eop_date": "2027-12-31",
- "owner": "S001"
+ "project_no": "M9",
+ "project_name": "问界M9",
+ "stage": "进行中",
+ "sop_date": "",
+ "eop_date": "",
+ "owner": "赛力斯",
+ "veh_model": "问界M9",
+ "share": 1.0
 }
 ```
 
@@ -411,7 +393,7 @@ update(project_no*, project_name=None:string, stage=None:string, sop_date=None:s
 ### 服务契约
 ```
 create(project_no*, material_no*, usage*)
-    — 新建项目×物料映射，校验项目/物料引用存在与单车用量范围；车型/供应份额不入库（项目级信息，前端关联 md_project 显示）。
+    — 新建项目×物料映射，校验项目/物料引用存在与单车用量范围。车型/份额由项目关联，不入库。
 get(project_no*, material_no*)
     — 按复合主键查看单条映射。
 import_batch(rows*)
@@ -421,7 +403,7 @@ list(project_no=None:string, material_no=None:string, page=None:integer, size=No
 list_by_material(material_no*)
     — 按物料号查询其全部项目映射（不分页，供量纲折算/预测分摊跨应用调用）。
 update(project_no*, material_no*, usage=None:string)
-    — 更新映射的单车用量；project_no+material_no 不可修改。
+    — 更新映射的单车用量；project_no+material_no 不可修改。车型/份额由项目关联，不入库。
 ```
 
 ### get/list 示例
@@ -430,9 +412,9 @@ update(project_no*, material_no*, usage=None:string)
 ### list 返回项示例
 ```json
 {
- "project_no": "PRJ-1",
- "material_no": "M1",
- "usage": 1.0
+ "project_no": "M9",
+ "material_no": "M9-BEAM",
+ "usage": 1
 }
 ```
 
@@ -442,38 +424,21 @@ update(project_no*, material_no*, usage=None:string)
 ### 服务契约
 ```
 close_expired()
-    — 关闭到期计划：待出库且计划出库日期早于今日的计划自动关闭（幂等），返回 {closed: N}。
+    — 关闭到期计划：待出库且计划出库日期早于今日的计划自动关闭（幂等）。
 create(customer_no*, material_no*, qty*, out_date*, actual_out_no=None:string)
-    — 手工新建出库计划：校验主数据引用，按日期判定初始状态（今日及以后=待出库，早于今日=已关闭）。
+    — 手工新建出库计划：校验主数据引用，按日期判定初始状态。
 delete(plan_no*)
     — 删除出库计划：仅「待出库」可删；已关闭为历史留痕，不可删除。
 get(plan_no*)
-    — 按出库计划号查看单条计划详情（读取前先惰性关闭到期计划）。
-list(material_no=None:string, customer_no=None:string, status=None:string, page=None:integer, size=None:integer)
-    — 按物料 / 客户 / 状态筛选出库计划分页列表（读取前先惰性关闭到期计划），按 out_date 降序。
-update(plan_no*, customer_no=None:string, material_no=None:string, qty=None, out_date=None:string, actual_out_no=None:string)
-    — 编辑出库计划（已关闭亦可编辑延期）：传入字段覆盖，状态按最终日期重算（延期到今日及以后恢复待出库）。
+    — 按出库计划号查看单条计划详情。
+list(material_no=None:string, customer_no=None:string, status=None:string, page=None:string, size=None:string)
+    — 按物料 / 客户 / 状态筛选出库计划分页列表（读取前先惰性关闭到期计划）。
+update(plan_no*, customer_no=None:string, material_no=None:string, qty=None:string, out_date=None:string, actual_out_no=None:string)
+    — 编辑出库计划（已关闭亦可编辑延期）：传入字段覆盖，状态按最终日期重算。
 ```
-
-### 跨应用依赖
-- create / update 调用 `md_material.get`、`md_customer.get` 校验主数据存在性（主数据引用铁律）。
-- 被 `inventory_projection.refresh` 消费：`list(status=待出库)` 生成推移表预计出库量。
 
 ### get/list 示例
 （未造出样例 —— 字段请读源码 get()/INSERT 语句）
-
-### list 返回项示例
-```json
-{
- "plan_no": "OB202608200001",
- "customer_no": "C001",
- "material_no": "M1",
- "qty": 300.0,
- "out_date": "2026-09-20",
- "actual_out_no": null,
- "status": "待出库"
-}
-```
 
 
 ## sales_forecast
@@ -485,37 +450,31 @@ adjust_event(version_no*, material_no*, customer_no*, rolling_month*, event_anal
 calc_baseline(version_no*, material_no*, customer_no*, rolling_month*)
     — 断点追溯前置 + 按物料基线方法/参数作用于历史干净需求，得到基线数量。
 calc_baseline_batch(version_no*, material_no=None:string, customer_no=None:string)
-    — 批量算基线：遍历版本内全部处理行（可按物料/客户收窄）逐行 calc_baseline，单行失败跳过。
-      返回 {version_no, computed, failed}。仅草稿版本可执行。
+    — 批量算基线：遍历版本内全部处理行（可按物料/客户收窄）逐行 calc_baseline，
 create(version_no*, material_no*, customer_no=None:string)
-    — 手工新建物料×客户组合（客户可空），覆盖 open_version 未生成的组合；拆 N+1/N+2/N+3 三行进处理表。
-      组合已存在 / 物料或客户不存在 / 版本非草稿均拒绝。
-import_orig_qty(version_no*, rows*)
-    — 批量导入客户原始预测：逐行 fill_customer 写 orig_qty（自动算 adj、N+1 关联历史台账），单行失败跳过。
-      rows 项 {material_no, customer_no, rolling_month, orig_qty}。返回 {total, success, fail, errors}。仅草稿版本。
-decide_batch(version_no*, material_no=None:string, customer_no=None:string)
-    — 批量决策：遍历版本内全部处理行（可按物料/客户收窄）逐行 decide（物料级 base vs adj_sum 判异常），单行失败跳过。
-      返回 {version_no, computed, failed, abnormal}。仅草稿版本。
+    — 手工新建物料×客户组合（客户可空），覆盖 open_version 未生成的组合。
+customer_forecast_history(material_no*, customer_no*, months=None:integer)
+    — 历史客户预测投影（供达成率计算，口径A）：取 rolling=N+1 且 orig_qty 非空的行，
 decide(version_no*, material_no*, customer_no*, rolling_month*)
     — 按 MAPE 与偏离率自动标记异常并给出最终预测建议（异常行不自动填写）。
+decide_batch(version_no*, material_no=None:string, customer_no=None:string)
+    — 批量决策：遍历版本内全部处理行（可按物料/客户收窄）逐行 decide，单行失败跳过。
 fill_customer(version_no*, material_no*, customer_no*, rolling_month*, orig_qty=None:string, adj_qty=None:string)
     — 填写客户原始预测数量，系统按 bias 自动算调整后需求（人工可调）。
 get(version_no*, material_no*, customer_no*, rolling_month*)
     — 按主键取处理表单行全部字段。
 get_summary(version_no*, material_no=None:string)
     — 取指定版本（可指定物料）的汇总行，供毛需求合成。
+import_orig_qty(version_no*, rows*)
+    — 批量导入客户原始预测：逐行调 fill_customer 写 orig_qty（自动算 adj、N+1 关联历史台账），
 list(version_no=None:string, material_no=None:string, customer_no=None:string, rolling_month=None:string, abnormal_flag=None:string, page=None:string, size=None:string)
     — 按版本/物料/客户/滚动月度/异常标记筛选分页查询处理表。
 open_version(version_no*)
-    — 开启月度版本：按正常状态物料 × 该物料的历史采购客户生成清单并拆 N+1/N+2/N+3 进处理表；
-      某物料无历史采购记录时客户字段为空、仅初始化一行（避免 300 客户 × 3 月铺满）。
+    — 开启月度版本：按正常状态物料 × 该物料的历史采购客户生成清单并拆 N+1/N+2/N+3 进处理表。
 set_final(version_no*, material_no*, customer_no*, rolling_month*, final_qty*)
     — 异常行人工填写最终预测量（非异常行拒绝人工覆盖）。
 summarize(version_no*)
     — 按物料 × 滚动月度合计所有客户最终预测量，刷新汇总表。
-customer_forecast_history(material_no*, customer_no*, months=None:integer)
-    — 历史客户预测投影（口径A 达成率用）：rolling=N+1 且 orig_qty 非空，期间=版本月+1，
-      返回 [{period, orig_qty}] 升序；months 取末尾 N 个月。
 ```
 
 ### get/list 示例
@@ -525,25 +484,25 @@ customer_forecast_history(material_no*, customer_no*, months=None:integer)
 ```json
 {
  "version_no": "202608",
- "material_no": "M1",
- "customer_no": "C001",
+ "material_no": "M9-BEAM",
+ "customer_no": "AITO",
  "rolling_month": "N+1",
- "orig_qty": 1000.0,
+ "orig_qty": 10000.0,
  "mape": 0.1,
  "bias": 0.05,
- "adj_qty": 950.0,
+ "adj_qty": 9500.0,
  "base_method": "移动平均",
  "base_params": "{\"window\": 6}",
- "base_qty": null,
+ "base_qty": 5139.0,
  "event_analysis": null,
  "event_adj": 0.0,
- "base_event_qty": null,
+ "base_event_qty": 5139.0,
  "bp_material_no": null,
  "switch_time": null,
- "abnormal_flag": 0,
- "final_qty": 950.0,
- "created_at": "2026-08-14 18:57:32",
- "updated_at": "2026-08-14 18:57:33",
+ "abnormal_flag": 1,
+ "final_qty": 10000.0,
+ "created_at": "2026-08-20 20:09:39",
+ "updated_at": "2026-08-20 20:09:39",
  "created_by": "demo",
  "updated_by": "demo"
 }
@@ -554,30 +513,35 @@ customer_forecast_history(material_no*, customer_no*, months=None:integer)
 
 ### 服务契约
 ```
-upsert(material_no*, customer_no*, period*, qty*)
-    — ERP 单条幂等回写：同 物料+客户+期间 覆盖 qty，否则插入；并自动拉取 N+1 原始预测写入 forecast_qty。period 须 YYYY-MM，qty≥0。
+attach_forecast(material_no*, customer_no*, period*, qty*)
+    — 预测侧推送：把 N+1 原始预测写入对应台账行的 forecast_qty。
+history_sequence(material_nos=None:string, customer_no=None:string, limit=None:integer)
+    — 消费方投影：按 period 升序返回干净需求数量序列（数字列表）。
 import_batch(rows*)
-    — 批量导入（upsert 语义）：逐行校验，返回 {total, success, fail, errors}。
-attach_forecast(material_no*, customer_no*, period*, qty=None)
-    — 预测侧推送：把 N+1 原始预测写入对应台账行 forecast_qty；实际行不存在则跳过（attached=false）。
-sync_forecast()
-    — 批量回填存量台账行 forecast_qty（按 物料+客户 拉销售预测 N+1 按期对齐）。返回 {updated}。
+    — 批量导入（upsert 语义）：逐行校验，合法行入库，失败行返回错误明细，不阻断其余行。
 list(material_no=None:string, customer_no=None:string, period=None:string, page=None:integer, size=None:integer)
-    — 按物料/客户/期间（精确、AND）筛选分页列表 {items, total}。
-history_sequence(material_nos=None, customer_no=None:string, limit=None:integer)
-    — 消费方投影：按 period 升序返回数量序列（数字列表）；material_nos 支持单物料或断点链（多物料按期求和、缺期补 0）；limit 取末尾 N 期。
+    — 按物料/客户/期间（精确、AND、可选）筛选台账分页列表 {items, total}。
 purchasing_customers(material_no=None:string)
-    — 历史采购客户集（去重升序，可按物料收窄）。
+    — 历史采购客户集（去重升序，可按物料收窄），供销售预测清单客户维度。
+sync_external_history()
+    — 对外服务：拉取外部历史台账接口并经 import_batch 落库（供定时任务 / Agent 调用）。
+sync_forecast()
+    — 批量回填 forecast_qty：按 (物料,客户) 拉销售预测 N+1 原始预测，按期对齐更新存量台账行。
+upsert(material_no*, customer_no*, period*, qty*)
+    — ERP 单条回写：同 物料+客户+期间 存在则覆盖 qty，不存在则插入（幂等）。
 ```
+
+### get/list 示例
+（未造出样例 —— 字段请读源码 get()/INSERT 语句）
 
 ### list 返回项示例
 ```json
 {
- "material_no": "M1",
+ "material_no": "M9-BEAM",
  "customer_no": "C001",
- "period": "2026-01",
- "qty": 900.0,
- "forecast_qty": 910.0
+ "period": "2025-04",
+ "qty": 100.0,
+ "forecast_qty": null
 }
 ```
 
@@ -598,7 +562,7 @@ rollback(fit_version*, material_no*)
     — 回滚：已生效 → 已否决（本版作废），并回填上一版参数。
 run(material_no*, fit_version*)
     — 对指定物料发起一次策略拟合（预测拟合 + 库存拟合），结果落表（待复核）。
-run_batch(fit_version*)
+run_batch(fit_version=None:string)
     — 整批拟合：按 fit_version 对全部正常状态物料逐物料拟合（简化同步实现）。
 ```
 
@@ -608,18 +572,23 @@ run_batch(fit_version*)
 ### list 返回项示例
 ```json
 {
- "material_no": "M1",
+ "material_no": "M9-BEAM",
  "fit_version": "202609",
- "pred_method": "指数平滑",
- "pred_params": "{\"alpha\": 0.3, \"trend\": false}",
- "smape": 0.0,
+ "pred_method": "AutoETS",
+ "pred_params": "{\"season_length\": 12}",
+ "smape": 0.0272,
+ "mase": null,
+ "pred_qty": null,
+ "pred_lo": null,
+ "pred_hi": null,
+ "detail_json": null,
  "service_factor": 1.65,
- "safety_level": 0.0,
+ "safety_level": 42.47,
  "batch_window": 28.0,
  "fulfill_rate": 0.95,
- "inv_days": 0.0,
- "changeover_cnt": 0,
+ "inv_days": 38.73,
+ "changeover_cnt": 4,
  "abnormal_flag": false,
- "status": "待复核"
+ "status": "已生效"
 }
 ```
