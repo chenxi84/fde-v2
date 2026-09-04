@@ -268,17 +268,21 @@ update(customer_no*, customer_name=None:string, settle_mode=None:string, line_st
 
 ### 服务契约
 ```
-create(material_no*, material_name*, status='正常':string, unit_value=None:number, value_class=None:string, change_cost=None:number, prod_days=None:number, logistics_days=None:number, change_risk=None:string, service_level=None:number, batch_window=None:number, base_method=None:string, base_params=None:string)
+create(material_no*, material_name*, status='正常':string, unit_value=None:number, value_class=None:string, change_cost=None:number, prod_days=None:number, logistics_days=None:number, change_risk=None:string, service_level=None:number, batch_window=None:number, base_method=None:string, base_params=None:string, predecessor_material_no=None:string)
     — 新建物料主数据记录，material_no 全局唯一。
 get(material_no*)
     — 查询单个物料的完整主数据与参数。
+history_chain(material_no*)
+    — 统一历史链：前序链 ∪ 断点链（md_breakpoint.trace）去重，供 history_sequence 取历史。
 import_batch(rows*)
     — 批量导入/更新（upsert）：逐行校验，成功行入库，失败行返回错误明细。
 list(material_no=None:string, material_name=None:string, status=None:string, page=None:integer, size=None:integer)
     — 按物料号/名称模糊、状态精确筛选的分页列表。返回全字段，供列表自选显示列。
-set_fit_params(material_no*, base_method*, base_params*, batch_window*, service_level*, fit_version*, model_blob=None:string)
+predecessor_chain(material_no*)
+    — 递归追溯前序物料链，返回 [最老前序, …, 直接前序, 本物料]（最老在前）。
+set_fit_params(material_no*, base_method*, base_params*, batch_window*, service_level*, fit_version*, model_blob=None:string, sigma_l=None:number)
     — 拟合参数回填（被 strategy_fitting 调用），更新方法/参数并记录版本快照。
-update(material_no*, material_name=None:string, status=None:string, unit_value=None:number, value_class=None:string, change_cost=None:number, prod_days=None:number, logistics_days=None:number, change_risk=None:string, service_level=None:number, batch_window=None:number, base_method=None:string, base_params=None:string)
+update(material_no*, material_name=None:string, status=None:string, unit_value=None:number, value_class=None:string, change_cost=None:number, prod_days=None:number, logistics_days=None:number, change_risk=None:string, service_level=None:number, batch_window=None:number, base_method=None:string, base_params=None:string, predecessor_material_no=None:string)
     — 更新物料名称与各参数；material_no（主键）与 status（只读）不可修改。
 ```
 
@@ -290,6 +294,7 @@ update(material_no*, material_name=None:string, status=None:string, unit_value=N
 {
  "material_no": "M9-BEAM",
  "material_name": "前防撞梁总成",
+ "predecessor_material_no": null,
  "status": "正常",
  "unit_value": null,
  "value_class": "高",
@@ -303,7 +308,8 @@ update(material_no*, material_name=None:string, status=None:string, unit_value=N
  "base_params": "{\"season_length\": 12}",
  "fit_version": "202609",
  "fit_effective_at": "2026-09-04 14:53:08",
- "model_blob": null
+ "model_blob": null,
+ "sigma_l": null
 }
 ```
 
@@ -581,6 +587,7 @@ run_batch(fit_version=None:string)
  "pred_qty": null,
  "pred_lo": null,
  "pred_hi": null,
+ "sigma_l": null,
  "detail_json": null,
  "service_factor": 1.65,
  "safety_level": 42.47,

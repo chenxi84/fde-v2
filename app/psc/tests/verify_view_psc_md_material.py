@@ -365,7 +365,7 @@ def main():
             page.wait_for_timeout(300)
             txt = modal.inner_text()
 
-            for label in ["物料号", "物料名称", "状态", "单位货值", "价值分类", "切线成本",
+            for label in ["物料号", "物料名称", "前序物料", "状态", "单位货值", "价值分类", "切线成本",
                           "生产时间", "物流时间", "变更风险", "满足率目标", "组批窗口",
                           "基线方法", "基线参数", "拟合版本", "生效时间"]:
                 assert label in txt, f"md_material 详情模态缺字段标签：{label}"

@@ -25,12 +25,13 @@ class MdMaterial:
                unit_value: float = None, value_class: str = None, change_cost: float = None,
                prod_days: float = None, logistics_days: float = None, change_risk: str = None,
                service_level: float = None, batch_window: float = None,
-               base_method: str = None, base_params: str = None):
+               base_method: str = None, base_params: str = None,
+               predecessor_material_no: str = None):
         """新建物料主数据记录，material_no 全局唯一。"""
         values, errors = self._normalize_record(
             material_no, material_name, status, unit_value, value_class, change_cost,
             prod_days, logistics_days, change_risk, service_level, batch_window,
-            base_method, base_params,
+            base_method, base_params, predecessor_material_no,
         )
         if errors:
             raise FdeError(next(iter(errors.values())))
@@ -52,9 +53,9 @@ class MdMaterial:
     def list(self, material_no: str = None, material_name: str = None,
              status: str = None, page: int = None, size: int = None):
         """按物料号/名称模糊、状态精确筛选的分页列表。返回全字段，供列表自选显示列。"""
-        sql = ("SELECT material_no, material_name, status, unit_value, value_class, change_cost, "
-               "prod_days, logistics_days, change_risk, service_level, batch_window, base_method, "
-               "base_params, fit_version, fit_effective_at FROM md_material")
+        sql = ("SELECT material_no, material_name, predecessor_material_no, status, unit_value, "
+               "value_class, change_cost, prod_days, logistics_days, change_risk, service_level, "
+               "batch_window, base_method, base_params, fit_version, fit_effective_at FROM md_material")
         clauses = []
         params = []
 
@@ -99,7 +100,8 @@ class MdMaterial:
                unit_value: float = None, value_class: str = None, change_cost: float = None,
                prod_days: float = None, logistics_days: float = None, change_risk: str = None,
                service_level: float = None, batch_window: float = None,
-               base_method: str = None, base_params: str = None):
+               base_method: str = None, base_params: str = None,
+               predecessor_material_no: str = None):
         """更新物料名称与各参数；material_no（主键）与 status（只读）不可修改。"""
         material_no = self._clean(material_no)
         if not material_no:
@@ -119,6 +121,11 @@ class MdMaterial:
             name = self._clean(material_name)
             if not name:
                 raise FdeError("物料名称不能为空")
+
+        if predecessor_material_no is not None:
+            predecessor_material_no = self._check_predecessor(predecessor_material_no, material_no)
+        else:
+            predecessor_material_no = row["predecessor_material_no"]
 
         if value_class is not None:
             value_class = self._check_value_class(value_class)
@@ -174,12 +181,13 @@ class MdMaterial:
             new_params = self._normalize_base_params(new_method, base_params)
 
         self.db.execute(
-            "UPDATE md_material SET material_name = ?, unit_value = ?, value_class = ?, "
-            "change_cost = ?, prod_days = ?, logistics_days = ?, change_risk = ?, "
-            "service_level = ?, batch_window = ?, base_method = ?, base_params = ? "
-            "WHERE material_no = ?",
-            (name, unit_value, value_class, change_cost, prod_days, logistics_days,
-             change_risk, service_level, batch_window, new_method, new_params, material_no),
+            "UPDATE md_material SET material_name = ?, predecessor_material_no = ?, "
+            "unit_value = ?, value_class = ?, change_cost = ?, prod_days = ?, "
+            "logistics_days = ?, change_risk = ?, service_level = ?, batch_window = ?, "
+            "base_method = ?, base_params = ? WHERE material_no = ?",
+            (name, predecessor_material_no, unit_value, value_class, change_cost, prod_days,
+             logistics_days, change_risk, service_level, batch_window, new_method, new_params,
+             material_no),
         )
         return self._to_dict(self._row(material_no))
 
@@ -201,7 +209,7 @@ class MdMaterial:
                 row.get("unit_value"), row.get("value_class"), row.get("change_cost"),
                 row.get("prod_days"), row.get("logistics_days"), row.get("change_risk"),
                 row.get("service_level"), row.get("batch_window"), row.get("base_method"),
-                row.get("base_params"),
+                row.get("base_params"), row.get("predecessor_material_no"),
             )
             if row_errors:
                 fail += 1
@@ -218,8 +226,9 @@ class MdMaterial:
 
     def set_fit_params(self, material_no: str, base_method: str, base_params: str,
                        batch_window: float, service_level: float, fit_version: str,
-                       model_blob: str = None):
-        """拟合参数回填（被 strategy_fitting 调用），更新方法/参数并记录版本快照。"""
+                       model_blob: str = None, sigma_l: float = None):
+        """拟合参数回填（被 strategy_fitting 调用），更新方法/参数并记录版本快照。
+        sigma_l 为响应窗口预测误差标准差（供库存策略安全库存口径），可选。"""
         material_no = self._clean(material_no)
         if not material_no:
             raise FdeError("物料号不能为空")
@@ -246,9 +255,9 @@ class MdMaterial:
 
         self.db.execute(
             "UPDATE md_material SET base_method = ?, base_params = ?, batch_window = ?, "
-            "service_level = ?, fit_version = ?, fit_effective_at = ?, model_blob = ? "
-            "WHERE material_no = ?",
-            (base_method, params_norm, bw, sl, fit_version, now, model_blob, material_no),
+            "service_level = ?, fit_version = ?, fit_effective_at = ?, model_blob = ?, "
+            "sigma_l = ? WHERE material_no = ?",
+            (base_method, params_norm, bw, sl, fit_version, now, model_blob, sigma_l, material_no),
         )
 
         # 记录参数版本快照（material_no + fit_version 唯一，重复版本覆盖更新），供回滚追溯
@@ -273,12 +282,50 @@ class MdMaterial:
 
         return self._to_dict(self._row(material_no))
 
+    def predecessor_chain(self, material_no: str):
+        """递归追溯前序物料链，返回 [最老前序, …, 直接前序, 本物料]（最老在前）。
+        无前序返回 [本物料]；成环在已访问处断链；前序 EOP/停用不断链（其历史仍有效）。"""
+        clean = self._clean(material_no)
+        if not clean:
+            raise FdeError("物料号不能为空")
+        chain = [clean]
+        current = clean
+        visited = {clean}
+        while True:
+            row = self.db.execute(
+                "SELECT predecessor_material_no FROM md_material WHERE material_no = ?",
+                (current,),
+            ).fetchone()
+            if row is None:
+                break
+            pred = self._clean(row["predecessor_material_no"])
+            if not pred or pred in visited:
+                break
+            visited.add(pred)
+            chain.insert(0, pred)
+            current = pred
+        return chain
+
+    def history_chain(self, material_no: str):
+        """统一历史链：前序链 ∪ 断点链（md_breakpoint.trace）去重，供 history_sequence 取历史。
+        顺序无关（history_sequence 走 IN 集合）；断点追溯失败回落前序链。"""
+        chain = self.predecessor_chain(material_no)
+        try:
+            bp = self.fde.call("md_breakpoint", "trace", new_material_no=material_no)
+        except FdeError:
+            bp = None
+        if isinstance(bp, list):
+            for m in bp:
+                if m not in chain:
+                    chain.append(m)
+        return chain
+
     # ---- 内部辅助（_ 前缀，不对外暴露）----
 
     def _normalize_record(self, material_no, material_name, status="正常", unit_value=None,
                           value_class=None, change_cost=None, prod_days=None, logistics_days=None,
                           change_risk=None, service_level=None, batch_window=None,
-                          base_method=None, base_params=None):
+                          base_method=None, base_params=None, predecessor_material_no=None):
         """整行校验：返回 (values, errors)；errors 非空表示存在非法字段。"""
         errors = {}
         values = {}
@@ -292,6 +339,13 @@ class MdMaterial:
         if not material_name:
             errors["material_name"] = "物料名称不能为空"
         values["material_name"] = material_name
+
+        try:
+            values["predecessor_material_no"] = self._check_predecessor(
+                predecessor_material_no, values["material_no"])
+        except FdeError as e:
+            errors["predecessor_material_no"] = str(e)
+            values["predecessor_material_no"] = None
 
         try:
             values["status"] = self._check_status(status)
@@ -456,11 +510,12 @@ class MdMaterial:
 
     def _insert(self, values):
         self.db.execute(
-            "INSERT INTO md_material (material_no, material_name, status, unit_value, "
-            "value_class, change_cost, prod_days, logistics_days, change_risk, service_level, "
-            "batch_window, base_method, base_params) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (values["material_no"], values["material_name"], values["status"],
-             values["unit_value"], values["value_class"], values["change_cost"],
+            "INSERT INTO md_material (material_no, material_name, predecessor_material_no, "
+            "status, unit_value, value_class, change_cost, prod_days, logistics_days, "
+            "change_risk, service_level, batch_window, base_method, base_params) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (values["material_no"], values["material_name"], values["predecessor_material_no"],
+             values["status"], values["unit_value"], values["value_class"], values["change_cost"],
              values["prod_days"], values["logistics_days"], values["change_risk"],
              values["service_level"], values["batch_window"], values["base_method"],
              values["base_params"]),
@@ -468,21 +523,32 @@ class MdMaterial:
 
     def _update_all(self, values):
         self.db.execute(
-            "UPDATE md_material SET material_name = ?, status = ?, unit_value = ?, "
-            "value_class = ?, change_cost = ?, prod_days = ?, logistics_days = ?, "
-            "change_risk = ?, service_level = ?, batch_window = ?, base_method = ?, "
-            "base_params = ? WHERE material_no = ?",
-            (values["material_name"], values["status"], values["unit_value"],
-             values["value_class"], values["change_cost"], values["prod_days"],
-             values["logistics_days"], values["change_risk"], values["service_level"],
-             values["batch_window"], values["base_method"], values["base_params"],
-             values["material_no"]),
+            "UPDATE md_material SET material_name = ?, predecessor_material_no = ?, "
+            "status = ?, unit_value = ?, value_class = ?, change_cost = ?, prod_days = ?, "
+            "logistics_days = ?, change_risk = ?, service_level = ?, batch_window = ?, "
+            "base_method = ?, base_params = ? WHERE material_no = ?",
+            (values["material_name"], values["predecessor_material_no"], values["status"],
+             values["unit_value"], values["value_class"], values["change_cost"],
+             values["prod_days"], values["logistics_days"], values["change_risk"],
+             values["service_level"], values["batch_window"], values["base_method"],
+             values["base_params"], values["material_no"]),
         )
 
     def _check_status(self, value):
         v = self._clean(value) or "正常"
         if v not in self._STATUS:
             raise FdeError("状态仅支持正常/EOP/停用")
+        return v
+
+    def _check_predecessor(self, value, material_no):
+        """校验前序物料：可空；非空时须存在且不得指向自身。返回清洗后的值或 None。"""
+        v = self._clean(value)
+        if not v:
+            return None
+        if v == material_no:
+            raise FdeError("前序物料不能指向自身")
+        if not self._exists(v):
+            raise FdeError("前序物料不存在")
         return v
 
     def _check_value_class(self, value):
@@ -556,9 +622,10 @@ class MdMaterial:
 
     def _row(self, material_no):
         return self.db.execute(
-            "SELECT material_no, material_name, status, unit_value, value_class, change_cost, "
-            "prod_days, logistics_days, change_risk, service_level, batch_window, base_method, "
-            "base_params, fit_version, fit_effective_at, model_blob FROM md_material WHERE material_no = ?",
+            "SELECT material_no, material_name, predecessor_material_no, status, unit_value, "
+            "value_class, change_cost, prod_days, logistics_days, change_risk, service_level, "
+            "batch_window, base_method, base_params, fit_version, fit_effective_at, model_blob, sigma_l "
+            "FROM md_material WHERE material_no = ?",
             (material_no,),
         ).fetchone()
 
@@ -569,6 +636,7 @@ class MdMaterial:
         return {
             "material_no": row["material_no"],
             "material_name": row["material_name"],
+            "predecessor_material_no": row["predecessor_material_no"] if "predecessor_material_no" in keys else None,
             "status": row["status"],
             "unit_value": row["unit_value"],
             "value_class": row["value_class"],
@@ -583,5 +651,6 @@ class MdMaterial:
             "fit_version": row["fit_version"],
             "fit_effective_at": row["fit_effective_at"],
             "model_blob": row["model_blob"] if "model_blob" in keys else None,
+            "sigma_l": row["sigma_l"] if "sigma_l" in keys else None,
         }
 

@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS strategy_fitting (
                 pred_qty        REAL,
                 pred_lo         REAL,
                 pred_hi         REAL,
+                sigma_l         REAL,
                 detail_json     TEXT,
                 service_factor  REAL,
                 safety_level    REAL,

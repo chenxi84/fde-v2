@@ -36,7 +36,7 @@ const BASE_METHOD_PARAMS = {
 };
 
 const IMPORT_HEADER =
-  "material_no,material_name,status,unit_value,value_class,change_cost,prod_days,"
+  "material_no,material_name,predecessor_material_no,status,unit_value,value_class,change_cost,prod_days,"
   + "logistics_days,change_risk,service_level,batch_window,base_method,base_params";
 
 /* CSV 解析（支持双引号包裹含逗号字段，如 base_params JSON） */
@@ -76,11 +76,14 @@ export default function pageMdMaterial() {
     filter: "",                                        // 状态过滤：'' 全部 / 正常 / EOP / 停用
     modalX: { open: false, loading: false, d: null },  // 详情模态
     form: { open: false, busy: false, mode: "create",  // 创建/编辑表单（status 不进表单）
-      material_no: "", material_name: "",
+      material_no: "", material_name: "", predecessor_material_no: "",
       unit_value: "", value_class: "", change_cost: "",
       prod_days: "", logistics_days: "", change_risk: "",
       service_level: "", batch_window: "", base_method: "", base_params: "" },
     imp: { open: false, busy: false, fileName: "", rows: [], summary: null },  // 批量导入模态
+    materialOptions: [],                                  // 前序物料 autocomplete 全量（material_no/name）
+    materialMap: {},                                      // { material_no: material_name }
+    acP: { q: "", open: false },                          // 表单前序物料 autocomplete
 
     /* 数字字段：空/非法 → 空串（create 视作 None、update 可清空），否则转 Number */
     num(v) {
@@ -105,8 +108,36 @@ export default function pageMdMaterial() {
         status: self.filter || undefined,
         ...q,
       }));                                             // 闭包引用 self（代理）
+      await self.loadMaterialOptions();
       await self.list.load();
     },
+
+    /* 前序物料 autocomplete：全量物料（含停用/EOP，仍可作前序），quiet 探测失败兜底空 */
+    async loadMaterialOptions() {
+      try {
+        const r = await svc("md_material", "list", { page: 1, size: 500 }, { quiet: true });
+        const rows = Array.isArray(r) ? r : (r && r.items) || [];
+        self.materialOptions = rows
+          .filter((m) => m && m.material_no)
+          .map((m) => ({ material_no: m.material_no, material_name: m.material_name || "" }));
+        const mmap = {};
+        for (const m of self.materialOptions) mmap[m.material_no] = m.material_name;
+        self.materialMap = mmap;
+      } catch { self.materialOptions = []; }
+    },
+    filterMaterials(q) {
+      const s = (q || "").trim().toLowerCase();
+      if (!s) return self.materialOptions;
+      return self.materialOptions.filter((m) =>
+        (m.material_no || "").toLowerCase().includes(s) ||
+        (m.material_name || "").toLowerCase().includes(s));
+    },
+    pickPredecessor(m) {
+      self.form.predecessor_material_no = m.material_no;
+      self.acP.q = m.material_no;
+      self.acP.open = false;
+    },
+    materialName(no) { return (no && self.materialMap[no]) || ""; },
 
     search() { self.list.load(1); },
 
@@ -149,10 +180,11 @@ export default function pageMdMaterial() {
     /* 创建表单 */
     openCreate() {
       self.form = { open: true, busy: false, mode: "create",
-        material_no: "", material_name: "",
+        material_no: "", material_name: "", predecessor_material_no: "",
         unit_value: "", value_class: "", change_cost: "",
         prod_days: "", logistics_days: "", change_risk: "",
         service_level: "", batch_window: "", base_method: "", base_params: "" };
+      self.acP = { q: "", open: false };
     },
     closeCreate() { self.form.open = false; },
 
@@ -162,11 +194,13 @@ export default function pageMdMaterial() {
         const d = await svc("md_material", "get", { material_no: doc.material_no });
         self.form = { open: true, busy: false, mode: "edit",
           material_no: d.material_no, material_name: d.material_name || "",
+          predecessor_material_no: d.predecessor_material_no || "",
           unit_value: d.unit_value ?? "", value_class: d.value_class || "",
           change_cost: d.change_cost ?? "", prod_days: d.prod_days ?? "",
           logistics_days: d.logistics_days ?? "", change_risk: d.change_risk || "",
           service_level: d.service_level ?? "", batch_window: d.batch_window ?? "",
           base_method: d.base_method || "", base_params: d.base_params || "" };
+        self.acP = { q: d.predecessor_material_no || "", open: false };
         self.modalX.open = false;
       } catch { /* api.js 已 toast */ }
     },
@@ -179,6 +213,7 @@ export default function pageMdMaterial() {
         const payload = {
           material_no: f.material_no.trim(),
           material_name: f.material_name.trim(),
+          predecessor_material_no: (f.predecessor_material_no || "").trim(),
           unit_value: self.num(f.unit_value),
           value_class: f.value_class,
           change_cost: self.num(f.change_cost),
@@ -213,7 +248,7 @@ export default function pageMdMaterial() {
     closeImport() { self.imp.open = false; },
 
     downloadTemplate() {
-      const sample = 'M10001,示例螺栓,正常,12.5,高,300,10,5,低,0.95,28,移动平均,"{""window"": 6}"';
+      const sample = 'M10001,示例螺栓,,正常,12.5,高,300,10,5,低,0.95,28,移动平均,"{""window"": 6}"';
       const csv = "﻿" + IMPORT_HEADER + "\n" + sample + "\n";
       const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
       const a = document.createElement("a");

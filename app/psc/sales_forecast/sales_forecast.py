@@ -219,7 +219,7 @@ class SalesForecast:
         if isinstance(chain, list) and len(chain) > 1:
             bp_material_no = chain[0]
 
-        history = self._load_sales_history(material_no=material_no, bp_chain=chain)
+        history = self._load_sales_history(material_no=material_no)
         horizon = {"N+1": 1, "N+2": 2, "N+3": 3}.get(rolling_month, 1)
         base_qty = self._calc_base_qty(base_method, base_params, history, horizon=horizon,
                                        model_blob=model_blob)
@@ -669,13 +669,18 @@ class SalesForecast:
     def _load_sales_history(self, material_no=None, bp_chain=None, **kwargs):
         """历史台账适配器（替代 V1 stub）：委托 sales_history 应用，不动公共方法。
         物料/断点链均空 → purchasing_customers（全量客户维度）；
-        否则 → history_sequence（期升序数量；断点链=多物料按期求和）。失败/为空返回 []。"""
+        有断点链 → 按链取；否则 → md_material.history_chain（前序链 ∪ 断点链）取历史。
+        失败/为空返回 []。"""
         try:
             has_chain = isinstance(bp_chain, list) and bp_chain
             if not material_no and not has_chain:
                 customers = self.fde.call("sales_history", "purchasing_customers")
                 return customers if isinstance(customers, list) else []
-            materials = bp_chain if has_chain else material_no
+            if has_chain:
+                materials = bp_chain
+            else:
+                chain = self.fde.call("md_material", "history_chain", material_no=material_no)
+                materials = chain if isinstance(chain, list) and chain else material_no
             seq = self.fde.call("sales_history", "history_sequence", material_nos=materials)
             return seq if isinstance(seq, list) else []
         except FdeError:

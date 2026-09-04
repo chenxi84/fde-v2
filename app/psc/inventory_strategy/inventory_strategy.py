@@ -171,8 +171,18 @@ class InventoryStrategy:
         monthly_avg = sum(history) / len(history)
         daily_demand = monthly_avg / 30.0
 
-        # BR-06 响应窗口需求波动 σ_L（滚动 L 期累计标准差）
-        resp_volatility = self._resp_window_volatility(history, prod_days, logistics_days)
+        # BR-06 响应窗口需求波动 σ_L：优先用预测误差 σ_L（md_material.sigma_l，策略拟合回填），
+        # 无（未拟合 / 旧数据）→ 回退历史滚动累计需求标准差
+        sigma_l = material.get("sigma_l")
+        if sigma_l is not None:
+            try:
+                sigma_l = float(sigma_l)
+            except (TypeError, ValueError):
+                sigma_l = None
+        if sigma_l is not None and sigma_l > 0:
+            resp_volatility = sigma_l
+        else:
+            resp_volatility = self._resp_window_volatility(history, prod_days, logistics_days)
 
         # BR-03 最低库存 A = 日需求 × max(0, 生产时间 + 物流时间 − 可用缓冲天数)
         min_level = daily_demand * max(0.0, prod_days + logistics_days - line_stock_days)
@@ -235,11 +245,13 @@ class InventoryStrategy:
             ))
 
     def _load_sales_history(self, material_no, months=12):
-        # 历史台账适配器（替代 stub）：委托 sales_history.history_sequence 近 months 期；
-        # 失败/台账为空 → []（水位按 0 兜底不变）。
+        # 历史台账适配器（替代 stub）：md_material.history_chain（前序链 ∪ 断点链）取链，
+        # 再 history_sequence 近 months 期；失败/台账为空 → []（水位按 0 兜底不变）。
         try:
+            chain = self.fde.call("md_material", "history_chain", material_no=material_no)
+            materials = chain if isinstance(chain, list) and chain else [material_no]
             seq = self.fde.call("sales_history", "history_sequence",
-                                material_nos=[material_no], limit=months)
+                                material_nos=materials, limit=months)
             return seq if isinstance(seq, list) else []
         except FdeError:
             return []

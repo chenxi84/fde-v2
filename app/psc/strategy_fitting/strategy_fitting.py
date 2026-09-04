@@ -31,8 +31,14 @@ class StrategyFitting:
         # 历史干净需求（ERP 外部适配器；BR-19 剔除一次性脉冲）
         history = self._load_sales_history(clean_material)
 
-        # 预测拟合（statsforecast 统计模型池回测，MASE 选 winner + 出预测值）
-        r = self._predict_fit(history)
+        # 响应窗口（天）= 生产 + 物流：预测误差 σ_L 的窗口 L = lead_days/30
+        try:
+            lead_days = float(material.get("prod_days") or 0) + float(material.get("logistics_days") or 0)
+        except (TypeError, ValueError):
+            lead_days = 0.0
+
+        # 预测拟合（statsforecast 统计模型池回测，MASE 选 winner + 出预测值 + 响应窗口预测误差 σ_L）
+        r = self._predict_fit(history, lead_days=lead_days)
 
         # 库存拟合（实际干净需求回放，BR-02/BR-11 约束优化）
         (service_factor, safety_level, batch_window,
@@ -44,7 +50,7 @@ class StrategyFitting:
         # BR-13 拟合结果先落表 status=待复核，人工复核通过才回填
         values = (
             r["pred_method"], r["pred_params"], r["mase"], r["smape"],
-            r["pred_qty"], r["pred_lo"], r["pred_hi"], detail_json,
+            r["pred_qty"], r["pred_lo"], r["pred_hi"], r["sigma_l"], detail_json,
             service_factor, safety_level, batch_window,
             fulfill_rate, inv_days, changeover_cnt,
         )
@@ -59,11 +65,11 @@ class StrategyFitting:
                 """
                     INSERT INTO strategy_fitting (
                         material_no, fit_version, pred_method, pred_params, mase, smape,
-                        pred_qty, pred_lo, pred_hi, detail_json,
+                        pred_qty, pred_lo, pred_hi, sigma_l, detail_json,
                         service_factor, safety_level, batch_window,
                         fulfill_rate, inv_days, changeover_cnt, abnormal_flag, status
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '待复核')
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '待复核')
                 """,
                 (clean_material, clean_version) + values,
             )
@@ -73,7 +79,7 @@ class StrategyFitting:
                 """
                     UPDATE strategy_fitting SET
                         pred_method = ?, pred_params = ?, mase = ?, smape = ?,
-                        pred_qty = ?, pred_lo = ?, pred_hi = ?, detail_json = ?,
+                        pred_qty = ?, pred_lo = ?, pred_hi = ?, sigma_l = ?, detail_json = ?,
                         service_factor = ?, safety_level = ?, batch_window = ?,
                         fulfill_rate = ?, inv_days = ?, changeover_cnt = ?,
                         abnormal_flag = 0, status = '待复核'
@@ -240,6 +246,7 @@ class StrategyFitting:
             service_level=row["fulfill_rate"],
             fit_version=clean_version,
             model_blob=model_blob,
+            sigma_l=row["sigma_l"] if "sigma_l" in row.keys() else None,
         )
 
         self.db.execute(
@@ -313,11 +320,13 @@ class StrategyFitting:
     # ---- 内部辅助（_ 前缀，不对外暴露）----
 
     def _load_sales_history(self, material_no, periods=24):
-        """历史台账适配器（替代 V1 stub）：委托 sales_history.history_sequence 近 periods 期。
-        失败/台账为空 → []（回测兜底不变），不改动公共方法。"""
+        """历史台账适配器（替代 V1 stub）：md_material.history_chain（前序链 ∪ 断点链）取链，
+        再 history_sequence 近 periods 期。失败/台账为空 → []（回测兜底不变），不改动公共方法。"""
         try:
+            chain = self.fde.call("md_material", "history_chain", material_no=material_no)
+            materials = chain if isinstance(chain, list) and chain else [material_no]
             seq = self.fde.call("sales_history", "history_sequence",
-                                material_nos=[material_no], limit=periods)
+                                material_nos=materials, limit=periods)
             return seq if isinstance(seq, list) else []
         except FdeError:
             return []
@@ -327,12 +336,12 @@ class StrategyFitting:
     _K_MIN = 12          # 最小训练窗口
     _RECENT_WINDOW = 6   # 近期窗口（趋势对比，用户自己判断）
 
-    def _predict_fit(self, history):
+    def _predict_fit(self, history, lead_days=0.0):
         """预测拟合：statsforecast 统计模型池 + cross_validation 回测 + MASE 选 winner + predict。
 
         按历史非零占比分流（常规 AutoTheta/AutoARIMA/AutoETS，间歇 Croston/TSB），
-        SeasonalNaive 始终作 MASE 标尺。返回 dict（pred_method/pred_params/mase/smape/
-        pred_qty/pred_lo/pred_hi/detail）。"""
+        SeasonalNaive 始终作 MASE 标尺。lead_days>0 时顺带算响应窗口预测误差 σ_L。
+        返回 dict（pred_method/pred_params/mase/smape/pred_qty/pred_lo/pred_hi/sigma_l/detail）。"""
         import json
         import pandas as pd
         from statsforecast import StatsForecast
@@ -412,10 +421,14 @@ class StrategyFitting:
         except Exception:
             pass
 
+        # 响应窗口预测误差 σ_L：再跑 h=L 的 cross_validation，按 cutoff 累计误差取样本标准差
+        sigma_l = self._forecast_error_sigma(history, lead_days, best["method"])
+
         detail = {
             "candidates": candidates, "winner": best["method"],
             "predict": {"qty": pred_qty, "lo": pred_lo, "hi": pred_hi},
             "model_blob": model_blob,
+            "sigma_l": sigma_l,
             "mase_baseline": round(base, 2),
             "k_min": self._K_MIN, "recent_window": self._RECENT_WINDOW,
         }
@@ -423,6 +436,7 @@ class StrategyFitting:
                 "pred_params": json.dumps(best["params"], ensure_ascii=False),
                 "mase": best["mase"], "smape": best["smape"],
                 "pred_qty": pred_qty, "pred_lo": pred_lo, "pred_hi": pred_hi,
+                "sigma_l": sigma_l,
                 "detail": detail}
 
     @staticmethod
@@ -444,10 +458,49 @@ class StrategyFitting:
             return TSB(alpha_d=0.1, alpha_p=0.1)
         return None
 
+    def _forecast_error_sigma(self, history, lead_days, method):
+        """响应窗口预测误差 σ_L（L = lead_days/30 月）：再跑一次 cross_validation(h=L)，
+        按 cutoff 累计「实际 − 预测」误差取样本标准差。L<1 时用 1 步误差 × L 缩放；
+        历史不足 / 模型不支持 / 回测失败 → None（调用方回退历史口径）。"""
+        if not history or lead_days <= 0 or len(history) < self._K_MIN:
+            return None
+        import pandas as pd
+        from statsforecast import StatsForecast
+        model = self._make_model(method)
+        if model is None:
+            return None
+        L = lead_days / 30.0
+        if L < 1.0:
+            h, scale = 1, L
+        else:
+            h, scale = max(1, int(round(L))), 1.0
+        ds = pd.date_range(end=pd.Timestamp.today().normalize(), periods=len(history), freq="MS")
+        df = pd.DataFrame({"unique_id": "M", "ds": ds, "y": history})
+        sf = StatsForecast(models=[model], freq="MS", n_jobs=1)
+        try:
+            cv = sf.cross_validation(h=h, df=df, n_windows=3)
+        except Exception:
+            return None
+        if cv is None or cv.empty:
+            return None
+        name = str(model)
+        if name not in cv.columns or "cutoff" not in cv.columns:
+            return None
+        errs = []
+        for _, grp in cv.groupby("cutoff"):
+            act = float(grp["y"].sum())
+            pred = float(grp[name].sum())
+            errs.append(act - pred)
+        if len(errs) < 2:
+            return None
+        mean = sum(errs) / len(errs)
+        var = sum((e - mean) ** 2 for e in errs) / (len(errs) - 1)
+        return round((var ** 0.5) * scale, 4)
+
     def _default_result(self):
         return {"pred_method": "指数平滑", "pred_params": '{"alpha": 0.3, "trend": false}',
                 "mase": 0.0, "smape": 0.0,
-                "pred_qty": None, "pred_lo": None, "pred_hi": None,
+                "pred_qty": None, "pred_lo": None, "pred_hi": None, "sigma_l": None,
                 "detail": {"candidates": [], "k_min": self._K_MIN,
                            "recent_window": self._RECENT_WINDOW}}
 
@@ -502,7 +555,7 @@ class StrategyFitting:
     def _get_row(self, fit_version, material_no):
         return self.db.execute(
             "SELECT material_no, fit_version, pred_method, pred_params, smape, "
-            "mase, pred_qty, pred_lo, pred_hi, detail_json, "
+            "mase, pred_qty, pred_lo, pred_hi, sigma_l, detail_json, "
             "service_factor, safety_level, batch_window, fulfill_rate, "
             "inv_days, changeover_cnt, abnormal_flag, status "
             "FROM strategy_fitting WHERE fit_version = ? AND material_no = ?",
@@ -521,6 +574,7 @@ class StrategyFitting:
             "pred_qty": row["pred_qty"] if "pred_qty" in keys else None,
             "pred_lo": row["pred_lo"] if "pred_lo" in keys else None,
             "pred_hi": row["pred_hi"] if "pred_hi" in keys else None,
+            "sigma_l": row["sigma_l"] if "sigma_l" in keys else None,
             "detail_json": row["detail_json"] if "detail_json" in keys else None,
             "service_factor": row["service_factor"],
             "safety_level": row["safety_level"],

@@ -340,6 +340,98 @@ def run_part(call, step, expect_err, record):
     except Exception as e:
         record(False, f"{e}")
 
+    # ════════════════════ §3.6b 前序物料链追溯 ════════════════════
+
+    step("TC-PRED-01 前序物料链递归追溯")
+    try:
+        call("md_material", "create", material_no="M7", material_name="最老前序")
+        call("md_material", "create", material_no="M8", material_name="中间前序",
+             predecessor_material_no="M7")
+        call("md_material", "create", material_no="M9", material_name="当前物料",
+             predecessor_material_no="M8")
+        chain = call("md_material", "predecessor_chain", material_no="M9")
+        assert chain == ["M7", "M8", "M9"], chain
+        record(True)
+    except Exception as e:
+        record(False, f"{e}")
+
+    step("TC-PRED-02 前序物料不存在拦截")
+    try:
+        expect_err(lambda: call("md_material", "create", material_no="M10",
+                                material_name="坏前序", predecessor_material_no="NO_SUCH"),
+                   "前序物料不存在")
+        record(True)
+    except Exception as e:
+        record(False, f"{e}")
+
+    step("TC-PRED-03 前序物料自指拦截")
+    try:
+        expect_err(lambda: call("md_material", "create", material_no="M10",
+                                material_name="自指", predecessor_material_no="M10"),
+                   "自身")
+        record(True)
+    except Exception as e:
+        record(False, f"{e}")
+
+    step("TC-PRED-04 统一历史链 = 前序链 ∪ 断点链")
+    try:
+        hc = call("md_material", "history_chain", material_no="M9")
+        assert hc == ["M7", "M8", "M9"], hc
+        # M4 已建断点 M3→M4（TC-ERR-24），history_chain(M4) 应并集含 M3
+        hc4 = call("md_material", "history_chain", material_no="M4")
+        assert M3 in hc4 and M4 in hc4, hc4
+        record(True)
+    except Exception as e:
+        record(False, f"{e}")
+
+    step("TC-PRED-05 前序链并入历史（history_sequence 按期聚合）")
+    try:
+        # 前序 M7 在早期有历史，当前 M9 无历史 → history_sequence(M9 链) 应并入 M7/M8 历史
+        call("sales_history", "upsert", material_no="M7", customer_no=C001,
+             period="2026-01", qty=100)
+        call("sales_history", "upsert", material_no="M8", customer_no=C001,
+             period="2026-03", qty=200)
+        chain = call("md_material", "history_chain", material_no="M9")
+        seq = call("sales_history", "history_sequence", material_nos=chain)
+        assert len(seq) >= 3 and seq[0] == 100.0 and seq[2] == 200.0, seq
+        record(True)
+    except Exception as e:
+        record(False, f"{e}")
+
+    # ════════════════════ §3.6c 预测误差 σ_L（statsforecast 回填） ════════════════════
+
+    step("TC-SIGMA-01 拟合产出响应窗口预测误差 σ_L 并回填 md_material")
+    try:
+        call("md_material", "create", material_no="M11", material_name="σ物料",
+             prod_days=20, logistics_days=10, service_level=0.95, batch_window=28,
+             base_method="移动平均", base_params='{"window":6}')
+        rows = []
+        for i in range(18):
+            y = 2025 + i // 12
+            m = (i % 12) + 1
+            rows.append({"material_no": "M11", "customer_no": C001,
+                         "period": f"{y}-{m:02d}", "qty": 100 + (i % 4) * 25})
+        call("sales_history", "import_batch", rows=rows)
+        r = call("strategy_fitting", "run", material_no="M11", fit_version="202608")
+        sigma = r.get("sigma_l")
+        assert sigma is not None and sigma > 0, r
+        call("strategy_fitting", "approve", fit_version="202608", material_no="M11")
+        m = call("md_material", "get", material_no="M11")
+        assert m.get("sigma_l") == sigma, m
+        record(True)
+    except Exception as e:
+        record(False, f"{e}")
+
+    step("TC-SIGMA-02 库存策略用 σ_L 替换历史波动")
+    try:
+        # V202609 已在 part2 前置建好（草稿）；inventory_strategy.calc 仅需合法 YYYYMM，不校验活跃态
+        r = call("inventory_strategy", "calc", version_no=V202609, material_no="M11")
+        sigma = call("md_material", "get", material_no="M11").get("sigma_l")
+        assert r.get("resp_volatility") == round(sigma, 2), (r, sigma)
+        record(True)
+    except Exception as e:
+        record(False, f"{e}")
+
     # ════════════════════ §3.7 策略拟合状态机分支 ════════════════════
 
     step("TC-ERR-25 非待复核状态复核通过拦截")

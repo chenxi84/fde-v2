@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS md_material (
                 material_no      TEXT PRIMARY KEY,
                 material_name    TEXT NOT NULL,
+                predecessor_material_no TEXT,
                 status           TEXT NOT NULL DEFAULT '正常',
                 unit_value       REAL,
                 value_class      TEXT,
@@ -14,7 +15,8 @@ CREATE TABLE IF NOT EXISTS md_material (
                 base_params      TEXT,
                 fit_version      TEXT,
                 fit_effective_at TIMESTAMP,
-                model_blob       TEXT
+                model_blob       TEXT,
+                sigma_l          REAL
             );
 
 CREATE TABLE IF NOT EXISTS md_material_param_version (
