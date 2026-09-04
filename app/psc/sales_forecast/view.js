@@ -299,6 +299,14 @@ export default function pageSalesForecast() {
     },
     closeX() { self.modalX.open = false; },
 
+    /* 跳转策略拟合页：把物料号写入 sessionStorage 供目标页预填过滤（纯前端、零后端） */
+    goFit(d) {
+      const no = d && d.material_no;
+      if (!no) return toast("该行缺少物料号", "warn");
+      try { sessionStorage.setItem("fde.fit.material", no); } catch { /* 隐私模式等忽略 */ }
+      location.hash = "#/strategy_fitting";
+    },
+
     /* ---- 行级加工：算基线 / 决策 为按钮直发（无表单）；填预测 / 事件调整 / 填最终 走小模态 ---- */
     async act(d, kind) {
       const key = { version_no: d.version_no, material_no: d.material_no,

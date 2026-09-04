@@ -157,7 +157,8 @@
               <div class="muted" style="font-size:11px">弱引用 md_monthly_version</div></div>
             <div><div class="k">物料</div><div class="v mono" x-text="dash(modalX.d.material_no)"></div>
               <div class="muted" style="font-size:11px" x-show="materialName(modalX.d.material_no)" x-text="materialName(modalX.d.material_no)"></div>
-              <div class="muted" style="font-size:11px" x-show="!materialName(modalX.d.material_no)">弱引用 md_material 主数据</div></div>
+              <div class="muted" style="font-size:11px" x-show="!materialName(modalX.d.material_no)">弱引用 md_material 主数据</div>
+              <button class="b-ghost b-sm" style="margin-top:8px" @click="goFit(modalX.d)">🎯 查看策略拟合</button></div>
             <div><div class="k">客户</div><div class="v mono" x-text="dash(modalX.d.customer_no)"></div>
               <div class="muted" style="font-size:11px" x-show="customerName(modalX.d.customer_no)" x-text="customerName(modalX.d.customer_no)"></div>
               <div class="muted" style="font-size:11px" x-show="!customerName(modalX.d.customer_no)">弱引用 md_customer 主数据</div></div>

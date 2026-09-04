@@ -59,6 +59,11 @@ export default function pageStrategyFitting() {
         ...q,                        // page / size
       }));
       await self.loadMasters();      // 备齐物料名称映射 + autocomplete 选项，再拉列表
+      // 销售预测页跳转带入的物料号：预填过滤（读取即清，落地定位到该物料、最新一版在最上）
+      try {
+        const no = sessionStorage.getItem("fde.fit.material");
+        if (no) { self.fMaterial = no; sessionStorage.removeItem("fde.fit.material"); }
+      } catch { /* 隐私模式等忽略 */ }
       await self.list.load();
     },
 
