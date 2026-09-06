@@ -283,8 +283,8 @@ class InventoryProjection:
     # ---- 内部辅助（_ 前缀，不对外暴露）----
 
     def _collect_inbound(self, version_no, material_no):
-        """预计入库量 = 主计划月度需求（集中最迟入库日）+ 需求池「已下达/生产中」单据
-        （按承诺入库日，无承诺则用要求入库日）。"""
+        """预计入库量 = 主计划月度需求（集中最迟入库日）+ 需求池「待下达/已下达/生产中」单据
+        （按承诺入库日，无承诺则用要求入库日；纳入待下达避免重复下单）。"""
         inbound_by_date = {}
         plan_rows = self.fde.call(
             "master_plan", "get_latest", version_no=version_no, material_no=material_no
@@ -298,7 +298,7 @@ class InventoryProjection:
                 key = str(inbound_date)
                 inbound_by_date[key] = inbound_by_date.get(key, 0) + qty
 
-        for status in ("已下达", "生产中"):
+        for status in ("待下达", "已下达", "生产中"):
             try:
                 pool = self.fde.call("demand_pool", "list",
                                      material_no=material_no, status=status) or {}
