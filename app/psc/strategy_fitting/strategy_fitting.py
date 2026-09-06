@@ -29,7 +29,9 @@ class StrategyFitting:
             raise FdeError("物料不存在")
 
         # 历史干净需求（ERP 外部适配器；BR-19 剔除一次性脉冲）
-        history = self._load_sales_history(clean_material)
+        series = self._load_sales_history(clean_material)
+        history = [s["qty"] for s in series]
+        periods = [s["period"] for s in series]
 
         # 响应窗口（天）= 生产 + 物流：预测误差 σ_L 的窗口 L = lead_days/30
         try:
@@ -38,7 +40,7 @@ class StrategyFitting:
             lead_days = 0.0
 
         # 预测拟合（statsforecast 统计模型池回测，MASE 选 winner + 出预测值 + 响应窗口预测误差 σ_L）
-        r = self._predict_fit(history, lead_days=lead_days)
+        r = self._predict_fit(history, lead_days=lead_days, periods=periods)
 
         # 库存拟合（实际干净需求回放，BR-02/BR-11 约束优化）
         (service_factor, safety_level, batch_window,
@@ -135,6 +137,21 @@ class StrategyFitting:
         row = self._get_row(clean_version, clean_material)
         if row is None:
             raise FdeError("拟合结果不存在")
+        return self._to_dict(row)
+
+    def get_latest(self, material_no: str):
+        """取某物料最新一版拟合结果（按 fit_version 降序）。无拟合返回 None（不抛错）。"""
+        clean_material = self._clean_material_no(material_no)
+        row = self.db.execute(
+            "SELECT material_no, fit_version, pred_method, pred_params, smape, "
+            "mase, pred_qty, pred_lo, pred_hi, sigma_l, detail_json, "
+            "service_factor, safety_level, batch_window, fulfill_rate, "
+            "inv_days, changeover_cnt, abnormal_flag, status "
+            "FROM strategy_fitting WHERE material_no = ? ORDER BY fit_version DESC LIMIT 1",
+            (clean_material,),
+        ).fetchone()
+        if row is None:
+            return None
         return self._to_dict(row)
 
     def list(
@@ -321,13 +338,14 @@ class StrategyFitting:
 
     def _load_sales_history(self, material_no, periods=24):
         """历史台账适配器（替代 V1 stub）：md_material.history_chain（前序链 ∪ 断点链）取链，
-        再 history_sequence 近 periods 期。失败/台账为空 → []（回测兜底不变），不改动公共方法。"""
+        再 history_series 近 periods 期（返回 [{period, qty}]，含期间标签供回测横轴）。
+        失败/台账为空 → []（回测兜底不变），不改动公共方法。"""
         try:
             chain = self.fde.call("md_material", "history_chain", material_no=material_no)
             materials = chain if isinstance(chain, list) and chain else [material_no]
-            seq = self.fde.call("sales_history", "history_sequence",
-                                material_nos=materials, limit=periods)
-            return seq if isinstance(seq, list) else []
+            series = self.fde.call("sales_history", "history_series",
+                                   material_nos=materials, limit=periods)
+            return series if isinstance(series, list) else []
         except FdeError:
             return []
 
@@ -336,11 +354,12 @@ class StrategyFitting:
     _K_MIN = 12          # 最小训练窗口
     _RECENT_WINDOW = 6   # 近期窗口（趋势对比，用户自己判断）
 
-    def _predict_fit(self, history, lead_days=0.0):
+    def _predict_fit(self, history, lead_days=0.0, periods=None):
         """预测拟合：statsforecast 统计模型池 + cross_validation 回测 + MASE 选 winner + predict。
 
         按历史非零占比分流（常规 AutoTheta/AutoARIMA/AutoETS，间歇 Croston/TSB），
         SeasonalNaive 始终作 MASE 标尺。lead_days>0 时顺带算响应窗口预测误差 σ_L。
+        periods 为真实历史期间（YYYY-MM），用于回测横轴；缺失则回退"今天往前推"。
         返回 dict（pred_method/pred_params/mase/smape/pred_qty/pred_lo/pred_hi/sigma_l/detail）。"""
         import json
         import pandas as pd
@@ -352,7 +371,10 @@ class StrategyFitting:
         if n < self._K_MIN:
             return self._default_result()
 
-        ds = pd.date_range(end=pd.Timestamp.today().normalize(), periods=n, freq="MS")
+        if periods and len(periods) == n:
+            ds = pd.to_datetime(periods)  # 真实历史期间 YYYY-MM → 月初
+        else:
+            ds = pd.date_range(end=pd.Timestamp.today().normalize(), periods=n, freq="MS")
         df = pd.DataFrame({"unique_id": "M", "ds": ds, "y": history})
 
         nonzero_ratio = sum(1 for v in history if v > 0) / n
@@ -392,7 +414,7 @@ class StrategyFitting:
                     continue
                 smape_vals.append(abs(p - a) / denom)
             smape = round(sum(smape_vals) / len(smape_vals), 4) if smape_vals else 0.0
-            steps = [{"period": str(row["ds"].date()),
+            steps = [{"period": str(row["ds"].date())[:7],
                       "pred": round(float(row[name]), 2), "actual": row["y"]}
                      for _, row in cv.iterrows()]
             _p = {"season_length": 12} if name in ("AutoTheta", "AutoARIMA", "AutoETS", "SeasonalNaive") else {}
@@ -404,6 +426,30 @@ class StrategyFitting:
 
         candidates.sort(key=lambda c: c["mase"])
         best = candidates[0]
+
+        # 全量历史拟合曲线：为每个候选模型做 in-sample 拟合，覆盖 CV 的末 3 个测试点为完整历史
+        import numpy as np
+        for c in candidates:
+            try:
+                m = self._make_model(c["method"])
+                m.fit(np.array(history, dtype=np.float64))
+                fits = m.predict_in_sample()
+                fitted = (fits or {}).get("fitted") if isinstance(fits, dict) else None
+                if fitted is None or len(fitted) != n:
+                    continue
+                steps = []
+                for i in range(n):
+                    v = fitted[i]
+                    if v != v:  # 跳过 NaN（如首期拟合缺失）
+                        continue
+                    steps.append({
+                        "period": (periods[i] if periods and len(periods) == n else str(ds[i].date())[:7]),
+                        "actual": history[i],
+                        "pred": round(float(v), 2),
+                    })
+                c["steps"] = steps
+            except Exception:
+                pass
 
         import base64
         import pickle

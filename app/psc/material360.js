@@ -60,6 +60,9 @@ export default function pageMaterial360() {
     fcDetail: [],            // [{customer_no, rolling_month, final_qty, base_method, abnormal_flag}]
     waterStrategy: null,     // {min_level, safety_level, batch_level, lower, upper, hedge_tool, basis, ...}
     fittingHist: [],         // [{fit_version, pred_method, smape, status, abnormal_flag}]
+    fitLatest: null,         // get_latest 结果（含 mase/sigma_l/pred_qty/detail_json）
+    fitCandidates: [],       // 候选排名（解析 detail_json.candidates）
+    fitSteps: [],            // winner 逐月拟合 steps（供曲线）
 
     /* ④ 毛需求/净需求 */
     demandRows: [],          // [{rolling_month, forecast_qty, inventory_qty, gross_qty, open_order_qty, onhand_qty, in_transit_qty, net_qty}]
@@ -354,6 +357,7 @@ export default function pageMaterial360() {
         fv ? svc("sales_forecast", "list", { version_no: fv, material_no: m, page: 1, size: 200 }, { quiet: true }).catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
         fv ? svc("inventory_strategy", "get", { version_no: fv, material_no: m }, { quiet: true }).catch(() => null) : Promise.resolve(null),
         svc("strategy_fitting", "list", { material_no: m, page: 1, size: 20 }, { quiet: true }).catch(() => ({ items: [] })),
+        svc("strategy_fitting", "get_latest", { material_no: m }, { quiet: true }).catch(() => null),
         /* ④ 毛/净需求 */
         fv ? svc("demand", "list", { version_no: fv, material_no: m, page: 1, size: 50 }, { quiet: true }).catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
         /* ⑤ 入库计划 */
@@ -365,7 +369,7 @@ export default function pageMaterial360() {
         svc("inventory_projection", "list", { material_no: m, page: 1, size: 200 }, { quiet: true }).catch(() => ({ items: [] })),
         fv ? svc("inventory_strategy", "get_water_level", { version_no: fv, material_no: m }, { quiet: true }).catch(() => null) : Promise.resolve(null),
       ]);
-      const [fcSummary, fcDetail, waterStrategy, fittingHist,
+      const [fcSummary, fcDetail, waterStrategy, fittingHist, fitLatest,
         demandRows, masterLatest, replenishPool, outbound, projRows, projWater] = settled.map((s) => pick(s, null));
 
       self.fcSummary = Array.isArray(fcSummary) ? fcSummary : [];
@@ -373,6 +377,19 @@ export default function pageMaterial360() {
       self.waterStrategy = waterStrategy;
       self.fittingHist = ((fittingHist && fittingHist.items) || [])
         .filter((x) => x.material_no === m);
+      self.fitLatest = fitLatest;
+      if (fitLatest && fitLatest.detail_json) {
+        try {
+          const det = typeof fitLatest.detail_json === "string" ? JSON.parse(fitLatest.detail_json) : fitLatest.detail_json;
+          self.fitCandidates = (det && det.candidates) || [];
+          const win = self.fitCandidates[0];
+          self.fitSteps = (win && win.steps) || [];
+        } catch {
+          self.fitCandidates = []; self.fitSteps = [];
+        }
+      } else {
+        self.fitCandidates = []; self.fitSteps = [];
+      }
       self.demandRows = (demandRows && demandRows.items) || [];
       self.masterLatest = Array.isArray(masterLatest) ? masterLatest : [];
       self.replenishPool = (replenishPool && replenishPool.items) || [];
@@ -385,6 +402,7 @@ export default function pageMaterial360() {
       self.projects = []; self.replacements = []; self.breakpoints = []; self.bpChain = [];
       self.histPoints = []; self.attainment = [];
       self.fcSummary = []; self.fcDetail = []; self.waterStrategy = null; self.fittingHist = [];
+      self.fitLatest = null; self.fitCandidates = []; self.fitSteps = [];
       self.demandRows = [];
       self.masterLatest = []; self.replenishPool = [];
       self.outbound = [];
@@ -395,6 +413,7 @@ export default function pageMaterial360() {
     renderCharts() {
       this.renderHistoryChart();
       this.renderProjChart();
+      this.renderFitChart();
     },
     renderHistoryChart() {
       const el = document.getElementById("m360HistoryChart");
@@ -447,6 +466,33 @@ export default function pageMaterial360() {
             data: rows.filter(r => breach.includes(r.alert_type))
                       .map(r => [r.biz_date, Number(r.balance)]),
             itemStyle: { color: "#dc2626" } },
+        ],
+      });
+    },
+
+    /* 拟合过程曲线（winner 逐月 实际 vs 预测，浅色主题 · 复用 hist 图色板） */
+    renderFitChart() {
+      const el = document.getElementById("m360FitChart");
+      const E = window.echarts;
+      if (!el || !E) return;
+      if (E.getInstanceByDom(el)) E.getInstanceByDom(el).dispose();
+      const steps = self.fitSteps || [];
+      if (!steps.length) return;
+      const chart = E.init(el);
+      chart.setOption({
+        grid: { top: 30, left: 56, right: 24, bottom: 40 },
+        tooltip: { trigger: "axis" },
+        legend: { top: 4 },
+        xAxis: { type: "category", data: steps.map(s => s.period), boundaryGap: false,
+          axisLabel: { rotate: 45, fontSize: 10 } },
+        yAxis: { type: "value", name: "需求", scale: true },
+        series: [
+          { name: "实际", type: "line", smooth: true, showSymbol: true,
+            data: steps.map(s => Number(s.actual)),
+            lineStyle: { color: "#175e54", width: 2 } },
+          { name: "预测", type: "line", smooth: true, showSymbol: true,
+            data: steps.map(s => Number(s.pred)),
+            lineStyle: { color: "#d97706", width: 2, type: "dashed" } },
         ],
       });
     },

@@ -220,17 +220,73 @@
                 </div>
               </template>
               <div x-show="!waterStrategy" class="muted">暂无库存策略</div>
+            </div>
+          </div>
 
-              <div class="overline">策略拟合历史</div>
-              <div x-show="!fittingHist.length" class="muted">暂无拟合记录</div>
-              <template x-for="f in fittingHist.slice(0, 6)" :key="f.fit_version">
-                <div class="sline" style="gap:8px">
-                  <span class="mono" x-text="f.fit_version"></span>
-                  <span class="st" :class="'st-' + hue(f.status)" x-text="dash(f.status)"></span>
-                  <span class="st st-red" x-show="f.abnormal_flag">异常</span>
-                  <span class="muted" x-text="dash(f.pred_method)"></span>
-                  <span style="flex:1"></span>
-                  <span class="muted">SMAPE</span><span x-text="pct(f.smape)"></span>
+          <!-- 策略拟合详情（最新一版，全宽） -->
+          <div style="padding:0 14px 14px">
+            <div style="background:#f7f9f5;border:1px solid #dde2d9;border-radius:8px;padding:12px">
+              <div class="overline" style="margin-top:0">策略拟合详情（最新一版）
+                <span class="right mono" x-show="fitLatest" x-text="fitLatest ? 'v' + fitLatest.fit_version : ''"></span>
+              </div>
+              <div x-show="!fitLatest" class="muted">暂无拟合记录（请先在「策略拟合」页发起拟合并复核）</div>
+              <template x-if="fitLatest">
+                <div>
+                  <!-- 概要：方法 / 状态 / 下月预测 / 三指标 -->
+                  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+                    <span class="st" :class="'st-' + hue(fitLatest.pred_method)" x-text="dash(fitLatest.pred_method)"></span>
+                    <span class="st" :class="'st-' + hue(fitLatest.status)" x-text="dash(fitLatest.status)"></span>
+                    <span class="st st-red" x-show="fitLatest.abnormal_flag">异常</span>
+                    <span style="flex:1"></span>
+                    <span class="muted" style="font-size:11px">下月预测</span>
+                    <b x-text="fmt(fitLatest.pred_qty)"></b>
+                    <span class="muted mono" style="font-size:11px"
+                      x-show="fitLatest.pred_lo != null" x-text="'80% [' + fmt(fitLatest.pred_lo) + ' ~ ' + fmt(fitLatest.pred_hi) + ']'"></span>
+                  </div>
+                  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">
+                    <div style="background:#fff;border:1px solid #dde2d9;border-radius:6px;padding:6px 10px">
+                      <div class="muted" style="font-size:11px">MASE（越小越准）</div><b x-text="fmt(fitLatest.mase)"></b>
+                    </div>
+                    <div style="background:#fff;border:1px solid #dde2d9;border-radius:6px;padding:6px 10px">
+                      <div class="muted" style="font-size:11px">σ_L（预测误差）</div><b x-text="fmt(fitLatest.sigma_l)"></b>
+                    </div>
+                    <div style="background:#fff;border:1px solid #dde2d9;border-radius:6px;padding:6px 10px">
+                      <div class="muted" style="font-size:11px">sMAPE</div><b x-text="pct(fitLatest.smape)"></b>
+                    </div>
+                  </div>
+
+                  <!-- 候选排名 + 拟合曲线 -->
+                  <div style="display:grid;grid-template-columns:1fr 1.4fr;gap:14px">
+                    <div>
+                      <div class="overline" style="margin-top:0">候选排名</div>
+                      <div x-show="!fitCandidates.length" class="muted">无候选数据</div>
+                      <template x-if="fitCandidates.length">
+                        <table style="width:100%;border-collapse:collapse;font-size:12px">
+                          <thead><tr style="border-bottom:1px solid #dde2d9">
+                            <th class="muted" style="text-align:left;padding:4px 6px">方法</th>
+                            <th style="text-align:right;padding:4px 6px">MASE</th>
+                            <th style="text-align:right;padding:4px 6px">sMAPE</th>
+                          </tr></thead>
+                          <tbody>
+                            <template x-for="(c, i) in fitCandidates" :key="c.method + JSON.stringify(c.params)">
+                              <tr style="border-bottom:1px solid #eef1ec">
+                                <td style="padding:4px 6px">
+                                  <span class="st" :class="'st-' + hue(c.method)" x-text="c.method"></span>
+                                  <span class="st st-amber" x-show="i === 0">★</span>
+                                </td>
+                                <td style="text-align:right;padding:4px 6px" x-text="fmt(c.mase)"></td>
+                                <td style="text-align:right;padding:4px 6px" x-text="pct(c.smape)"></td>
+                              </tr>
+                            </template>
+                          </tbody>
+                        </table>
+                      </template>
+                    </div>
+                    <div>
+                      <div class="overline" style="margin-top:0">逐月拟合（实际 vs 预测）</div>
+                      <div id="m360FitChart" style="height:220px"></div>
+                    </div>
+                  </div>
                 </div>
               </template>
             </div>

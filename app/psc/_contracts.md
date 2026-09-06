@@ -101,7 +101,7 @@ release(replenish_no*, promised_inbound=None:string)
  "replenish_qty": 353.45,
  "required_inbound": "2026-09-03",
  "promised_inbound": null,
- "status": "待下达"
+ "status": "已取消"
 }
 ```
 
@@ -129,7 +129,7 @@ scan_alert(material_no*, version_no=None:string)
 ```json
 {
  "material_no": "M9-BEAM",
- "biz_date": "2026-09-04",
+ "biz_date": "2026-09-06",
  "inbound_qty": 0.0,
  "outbound_qty": 0.0,
  "balance": 0.0,
@@ -196,12 +196,12 @@ list(version_no=None:string, material_no=None:string, page=None:integer, size=No
 ### list 返回项示例
 ```json
 {
- "material_no": "M9-BEAM",
- "version_no": "202608",
+ "material_no": "M9-LAMP",
+ "version_no": "202610",
  "rolling_month": "N+1",
  "plan_version": 1,
- "plan_qty": 10353.45,
- "latest_inbound_date": "2026-08-28"
+ "plan_qty": 32647.5,
+ "latest_inbound_date": "2026-10-31"
 }
 ```
 
@@ -335,7 +335,7 @@ publish(version_no*)
  "version_no": "202610",
  "anchor_period": "2026-10",
  "opening_date": "2026-10-01",
- "lock_status": "草稿"
+ "lock_status": "冻结"
 }
 ```
 
@@ -523,6 +523,8 @@ attach_forecast(material_no*, customer_no*, period*, qty*)
     — 预测侧推送：把 N+1 原始预测写入对应台账行的 forecast_qty。
 history_sequence(material_nos=None:string, customer_no=None:string, limit=None:integer)
     — 消费方投影：按 period 升序返回干净需求数量序列（数字列表）。
+history_series(material_nos=None:string, customer_no=None:string, limit=None:integer)
+    — 与 history_sequence 同口径，但返回 [{period, qty}]（含期间标签）。
 import_batch(rows*)
     — 批量导入（upsert 语义）：逐行校验，合法行入库，失败行返回错误明细，不阻断其余行。
 list(material_no=None:string, customer_no=None:string, period=None:string, page=None:integer, size=None:integer)
@@ -543,10 +545,10 @@ upsert(material_no*, customer_no*, period*, qty*)
 ### list 返回项示例
 ```json
 {
- "material_no": "M9-BEAM",
- "customer_no": "C001",
- "period": "2025-04",
- "qty": 100.0,
+ "material_no": "M9-LAMP",
+ "customer_no": "AITO",
+ "period": "2024-09",
+ "qty": 6500.0,
  "forecast_qty": null
 }
 ```
@@ -560,6 +562,8 @@ approve(fit_version*, material_no*, confirm=False:string)
     — 复核通过：待复核 → 已生效，并回填物料主数据（带版本）。
 get(fit_version*, material_no*)
     — 查看单条拟合结果完整字段。
+get_latest(material_no*)
+    — 取某物料最新一版拟合结果（按 fit_version 降序）。无拟合返回 None（不抛错）。
 list(material_no=None:string, fit_version=None:string, status=None:string, abnormal_flag=None:string, page=None:string, size=None:string)
     — 按物料号（模糊）/拟合版本/状态/异常标记筛选分页列表。
 reject(fit_version*, material_no*)

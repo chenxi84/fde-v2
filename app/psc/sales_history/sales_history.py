@@ -255,6 +255,37 @@ class SalesHistory:
             seq = seq[-n:]
         return seq
 
+    def history_series(self, material_nos=None, customer_no: str = None, limit: int = None):
+        """与 history_sequence 同口径，但返回 [{period, qty}]（含期间标签）。
+        供策略拟合回测横轴使用——history_sequence 只给数量、丢期间，此处补期间语义。"""
+        materials = self._materials(material_nos)
+        if not materials:
+            return []
+        customer_no = self._clean(customer_no)
+
+        ph = ",".join("?" * len(materials))
+        sql = "SELECT period, SUM(qty) AS qty FROM sales_history WHERE material_no IN (" + ph + ")"
+        params = list(materials)
+        if customer_no:
+            sql += " AND customer_no = ?"
+            params.append(customer_no)
+        sql += " GROUP BY period ORDER BY period ASC"
+
+        rows = self.db.execute(sql, tuple(params)).fetchall()
+        if not rows:
+            return []
+
+        by_period = {r["period"]: (r["qty"] or 0.0) for r in rows}
+        out, p, last = [], min(by_period), max(by_period)
+        while p <= last:
+            out.append({"period": p, "qty": by_period.get(p, 0.0)})
+            p = self._next_month(p)
+
+        n = self._limit_int(limit)
+        if n:
+            out = out[-n:]
+        return out
+
     def purchasing_customers(self, material_no: str = None):
         """历史采购客户集（去重升序，可按物料收窄），供销售预测清单客户维度。"""
         material_no = self._clean(material_no)
