@@ -14,7 +14,7 @@ export const PAGE_META = {
   ic: "🎯",
   title: "策略拟合",
   crumb: "滚动回测拟合最优方法参数 · 待复核→已生效/已否决",
-  order: 160,
+  order: 90,
   bold: true,
 };
 
