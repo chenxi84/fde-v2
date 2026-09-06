@@ -160,6 +160,29 @@ def _platform_tool_defs(user=None) -> list:
             },
             "_meta": {"app": "__platform__", "service": "flow_progress", "dangerous": False},
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "platform_read_app_doc",
+                "description": (
+                    "按需读取某应用的详细设计文档，用于深入该应用开发/改造前了解其业务规则（BR）、"
+                    "功能（FUNC）、数据字典等。app 填应用 qualname（如 psc/sales_forecast）或短名；"
+                    "doc 填文档类型（应用详设/前端详设/前端测试用例/README）。仅当需要了解单个应用的"
+                    "业务细节时才调用，不要一次性读全部应用。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "app": {"type": "string", "description": "应用 qualname（如 psc/sales_forecast）或短名"},
+                        "doc": {"type": "string",
+                                "enum": ["应用详设", "前端详设", "前端测试用例", "README"],
+                                "description": "文档类型"},
+                    },
+                    "required": ["app", "doc"],
+                },
+            },
+            "_meta": {"app": "__platform__", "service": "read_app_doc", "dangerous": False},
+        },
     ]
     if user is None or user.get("is_admin"):
         defs.extend(_admin_platform_tool_defs())
@@ -349,6 +372,14 @@ def _call_platform_tool(platform, user, service: str, args: dict):
         from fde_platform import flow
 
         return flow.get_progress() or {}
+    if service == "read_app_doc":
+        from fde_platform.agent_common import read_app_doc
+
+        text = read_app_doc(platform, args.get("app", ""), args.get("doc", ""))
+        if not text:
+            return {"found": False, "app": args.get("app", ""),
+                    "doc": args.get("doc", ""), "message": "未找到该文档（应用/文档类型不存在或文档缺失）"}
+        return {"found": True, "app": args.get("app", ""), "doc": args.get("doc", ""), "content": text}
     # 集成 / 定时任务配置：仅管理员（user=None 视为无鉴权全通，与平台 _is_admin_user 一致）
     if user is not None and not user.get("is_admin"):
         raise FdeError("无权调用平台配置工具（仅管理员）")

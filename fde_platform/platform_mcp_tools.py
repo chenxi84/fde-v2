@@ -75,13 +75,21 @@ def tools():
         # ── 定时任务 ──
         _t("scheduler_list", "列出定时任务",
            {}, req=[]),
+
+        # ── 设计文档读取（只读）──
+        _t("read_app_doc", "按需读取某应用的设计文档（应用详设/前端详设/前端测试用例/README），"
+           "用于深入了解该应用的业务规则（BR）/功能（FUNC）/数据字典",
+           {"app": {"type": "string", "description": "应用 qualname（如 psc/sales_forecast）或短名"},
+            "doc": {"type": "string", "enum": ["应用详设", "前端详设", "前端测试用例", "README"],
+                    "description": "文档类型"}},
+           req=["app", "doc"]),
     ]
 
 
 # ── 路由：tool name → handler ──
 
-def handle_tool(tool_name: str, args: dict, ctx: dict) -> dict:
-    """执行平台工具，返回 JSON 可序列化结果。"""
+def handle_tool(tool_name: str, args: dict, ctx: dict, platform=None) -> dict:
+    """执行平台工具，返回 JSON 可序列化结果。platform 为 FdePlatform 实例（读取设计文档用）。"""
     # 用户管理
     if tool_name == "platform__user_list":
         return {"users": users.list_users()}
@@ -147,5 +155,17 @@ def handle_tool(tool_name: str, args: dict, ctx: dict) -> dict:
         p = FdePlatform()
         p.load_all()
         return {"external": integration.discover(p)}
+
+    elif tool_name == "platform__read_app_doc":
+        from fde_platform.agent_common import read_app_doc
+        if platform is None:
+            from fde_platform.runtime import FdePlatform
+            platform = FdePlatform()
+            platform.load_all()
+        text = read_app_doc(platform, args.get("app", ""), args.get("doc", ""))
+        if not text:
+            return {"found": False, "app": args.get("app", ""),
+                    "doc": args.get("doc", ""), "message": "未找到该文档（应用/文档类型不存在或文档缺失）"}
+        return {"found": True, "app": args.get("app", ""), "doc": args.get("doc", ""), "content": text}
 
     return {"ok": False, "message": f"未知工具：{tool_name}"}

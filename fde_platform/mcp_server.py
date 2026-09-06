@@ -123,7 +123,7 @@ class McpServer:
                     {"content": [{"type": "text", "text": "平台管理工具仅限管理员"}], "isError": True},
                 )
             try:
-                result = platform_mcp_tools.handle_tool(name, args, self.ctx or {})
+                result = platform_mcp_tools.handle_tool(name, args, self.ctx or {}, platform=self.platform)
                 text = json.dumps(result, ensure_ascii=False)
                 return self._result(msg_id, {"content": [{"type": "text", "text": text}]})
             except Exception as e:
