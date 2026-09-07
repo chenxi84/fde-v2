@@ -432,6 +432,30 @@ def run_part(call, step, expect_err, record):
     except Exception as e:
         record(False, f"{e}")
 
+    step("TC-SIGMA-03 间歇性 SKU 拟合（Croston/TSB 出预测，防静默失败回归）")
+    try:
+        import json as _json
+        call("md_material", "create", material_no="M12", material_name="间歇件",
+             prod_days=15, logistics_days=5, service_level=0.95, batch_window=28,
+             base_method="移动平均", base_params='{"window":6}')
+        vals = [0, 0, 5, 0, 0, 0, 8, 0, 0, 3, 0, 0, 0, 6, 0, 0, 0, 0, 4, 0, 0, 0, 7, 0]
+        rows = []
+        for i, q in enumerate(vals):
+            y = 2025 + i // 12
+            m = (i % 12) + 1
+            rows.append({"material_no": "M12", "customer_no": C001,
+                         "period": f"{y}-{m:02d}", "qty": q})
+        call("sales_history", "import_batch", rows=rows)
+        r = call("strategy_fitting", "run", material_no="M12", fit_version="202608")
+        assert r.get("pred_method") in ("CrostonOptimized", "TSB"), r
+        assert r.get("pred_qty") is not None, r
+        det = r.get("detail_json")
+        det = _json.loads(det) if isinstance(det, str) else det
+        assert det and det.get("model_blob"), "间歇模型 model_blob 未固化"
+        record(True)
+    except Exception as e:
+        record(False, f"{e}")
+
     # ════════════════════ §3.7 策略拟合状态机分支 ════════════════════
 
     step("TC-ERR-25 非待复核状态复核通过拦截")

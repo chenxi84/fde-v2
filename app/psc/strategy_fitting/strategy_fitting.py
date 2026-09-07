@@ -487,9 +487,11 @@ class StrategyFitting:
 
     @staticmethod
     def _make_model(method, season_length=12):
-        """按 winner 方法名构造 statsforecast 模型实例（用于全量 refit + pickle 固化）。"""
+        """按 winner 方法名构造 statsforecast 模型实例（用于全量 refit + pickle 固化）。
+        间歇模型（Croston/TSB）需显式传 prediction_intervals（共形区间），否则 predict(level=..) 抛异常。"""
         from statsforecast.models import (AutoTheta, AutoARIMA, AutoETS,
                                           SeasonalNaive, CrostonOptimized, TSB)
+        from statsforecast.utils import ConformalIntervals
         if method == "AutoTheta":
             return AutoTheta(season_length=season_length)
         if method == "AutoARIMA":
@@ -499,9 +501,10 @@ class StrategyFitting:
         if method == "SeasonalNaive":
             return SeasonalNaive(season_length=season_length)
         if method == "CrostonOptimized":
-            return CrostonOptimized()
+            return CrostonOptimized(prediction_intervals=ConformalIntervals(h=1, n_windows=2))
         if method == "TSB":
-            return TSB(alpha_d=0.1, alpha_p=0.1)
+            return TSB(alpha_d=0.1, alpha_p=0.1,
+                       prediction_intervals=ConformalIntervals(h=1, n_windows=2))
         return None
 
     def _forecast_error_sigma(self, history, lead_days, method):
