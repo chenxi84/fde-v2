@@ -1,6 +1,8 @@
 """FDE 冒烟测试 —— 部署后自动验证核心功能。"""
 import sys, json, urllib.request, urllib.error
 
+opener = None  # 登录后持有会话 cookie 的 opener（test 复用，避免默认 urlopen 不带 cookie 导致 401）
+
 
 def test(name, url, method="GET", data=None, expect_status=200):
     try:
@@ -10,7 +12,7 @@ def test(name, url, method="GET", data=None, expect_status=200):
             data_bytes = json.dumps(data).encode()
         else:
             data_bytes = None
-        resp = urllib.request.urlopen(req, data=data_bytes, timeout=10)
+        resp = opener.open(req, data=data_bytes, timeout=10)
         body = resp.read().decode(errors="replace")
         ok = resp.status == expect_status
         print(f"  {'OK' if ok else 'FAIL'}  {name} ({resp.status})")
@@ -32,6 +34,7 @@ def main(host):
     # 登录
     import http.cookiejar
     import urllib.parse
+    global opener
     cj = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
     login_data = urllib.parse.urlencode({"username": "admin", "password": "admin"}).encode()
