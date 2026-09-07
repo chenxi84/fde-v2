@@ -16,6 +16,10 @@ __pycache__/
 *.pyo
 *.egg-info/
 
+# 虚拟环境
+venv/
+.venv/
+
 # 密钥
 config/llm_master.key
 config/.secret_key
