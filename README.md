@@ -249,6 +249,8 @@ class Todo:                                  # 类 = 聚合根，PascalCase（�
 
 ## 测试与验收红线
 
+> 本章是【开发阶段】的验收红线（改代码 / 加功能后必跑）。【部署阶段】不需要跑这些测试——部署验收 = 冒烟测试 + 手动确认，见 [`HOW-TO-USE.md`](HOW-TO-USE.md) 与 [`AGENTS.md`](AGENTS.md)「先判断场景」。
+
 一切验收（第⑤步测试执行 / 第⑨步前端测试执行）共同遵守、不可逾越（规格见 `design-plus/测试执行.md`、`design-plus/前端测试执行.md`）：
 
 1. **数据库隔离（最高优先）**：在 `fde_platform/dbguard.py isolate_dbs()` 下跑——测试前移走全部应用库 / 平台库，结束原样还回，**绝不污染用户 demo 数据**。

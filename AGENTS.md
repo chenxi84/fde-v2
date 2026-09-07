@@ -2,6 +2,13 @@
 
 面向 AI 代理（Claude Code / Codex / Cursor / Workbuddy 等）的项目说明与工作约定。**完整版见 [`CLAUDE.md`](CLAUDE.md)，开工前请先完整阅读并遵守。**
 
+## 先判断场景：开发 vs 部署（决定要不要跑测试）
+
+- **部署 / 运行场景**（用户说「部署 / 运行 / 拉代码跑起来 / 给客户快速部署」）：
+  只需「装依赖 → 打 FDE-PATCH → 启动双进程 → 冒烟（可选）」。**不要**跑 `scanner` / `verify_chain` / `verify_view` —— 这些是**开发**验收，不是部署验收。
+- **开发 / 改造场景**（用户说「开发 / 加功能 / 改代码 / 改 bug」）：
+  才按 CLAUDE.md 红线跑完整验收：`scanner` → `verify_chain` → `verify_view`。
+
 ## 必须遵守的关键规矩
 
 1. **数据操作一律走 MCP 工具 / 平台服务，禁止直接写脚本读写 `.db` 文件。**
@@ -10,7 +17,7 @@
    - 直接往 `.db` 文件 INSERT 会绕过业务校验、审计列（created_at/updated_at/created_by/updated_by）、跨应用引用校验，且与运行中的服务抢库，属于错误做法。
 2. **改代码先读文档**：`design-plus/CONVENTION.md`（后端约定）、`design-plus/VIEW_CONVENTION.md`（前端约定）、目标组的 `app/<组>/architecture.md` 与各应用 `应用详设.md`（可按需用 `platform_read_app_doc` 工具读取）。
 3. **改了服务签名必须重冻结契约**：重跑 `python -m fde_platform.contract_dump <组>` 更新 `app/<组>/_contracts.md`。
-4. **测试红线**：跑 `verify_*` 脚本前先停 dev server；测试在 dbguard 隔离下运行，绝不污染用户数据。
+4. **测试红线（仅开发场景）**：改代码后按 CLAUDE.md 跑 `scanner` / `verify_chain` / `verify_view`；跑 `verify_*` 前先停 dev server，测试在 dbguard 隔离下运行，绝不污染用户数据。
 
 ## 常用入口
 

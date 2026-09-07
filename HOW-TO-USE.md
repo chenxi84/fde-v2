@@ -41,6 +41,8 @@ AI 代理会按九步法自动推进（架构设计 → 应用详设 → 编码 
 | **Windows / Mac 本机开发** | pip + Python 直接跑（双进程）→ 见「二、运行」 |
 | **Linux 服务器部署** | **默认容器化**（Docker Compose，含 nginx / postgres / agent-service）→ 见「三、Docker 部署」 |
 
+> **部署验收 ≠ 开发验收**：部署只需「装依赖 → 打 FDE-PATCH → 启动 → 冒烟（可选）」，**不需要**跑 `scanner` / `verify_chain` / `verify_view` —— 那些是【开发阶段】的验收（见 `AGENTS.md`「先判断场景」）。
+
 > 一句话：**本机（含 Windows / Mac）用 pip 直接跑；Linux 服务器默认用容器化。**
 
 ## 二、运行（本机开发 · Windows / Mac / Linux）
