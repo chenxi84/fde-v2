@@ -7,6 +7,8 @@
 
 > 仓库内自带现行约定样板 `app/e2e/`（成员/任务，最小完整、九步产物齐全）。
 
+> **给 AI 代理（Claude Code / Workbuddy 等）**：请先读 [`AGENTS.md`](AGENTS.md) 与 [`CLAUDE.md`](CLAUDE.md) 了解项目约定；**数据导入 / 创建主数据等业务操作必须走 MCP 工具，禁止直接写脚本读写数据库**。
+
 ---
 
 ## 目录
