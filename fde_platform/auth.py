@@ -116,11 +116,7 @@ def gate():
             return jsonify({"status": "error", "message": "未登录"}), 401
         return redirect(url_for("auth.login", next=path))
 
-    # ②.5 首次登录强制改密（password_changed=0）
-    if not user.get("password_changed") and path != "/change-password":
-        if path.startswith("/api/"):
-            return jsonify({"status": "error", "message": "请先修改默认密码"}), 403
-        return redirect(url_for("auth.change_password", next=path))
+    # （已取消：首次登录强制改密。change_password 仍可自愿访问。）
 
     # ③ 管理区仅管理员角色（is_admin 标志，见 users._is_admin_user 口径）
     if path.startswith("/auth/") and not user.get("is_admin"):
