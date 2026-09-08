@@ -113,7 +113,22 @@ def handle_tool(tool_name: str, args: dict, ctx: dict, platform=None) -> dict:
     elif tool_name == "platform__llm_list":
         return {"profiles": [p for p in llm.list_profiles() if not p.get("api_key_enc")]}
     elif tool_name == "platform__llm_save":
-        return {"ok": True, "message": "LLM 配置已保存（即时生效）"}
+        try:
+            llm.save_profile(
+                role=args.get("role", "operator"),
+                provider=args.get("provider", "openai_compat"),
+                base_url=args.get("base_url", ""),
+                model=args.get("model", ""),
+                api_key=args.get("api_key", ""),
+                temperature=args.get("temperature", 0.1),
+                max_tokens=None,
+                timeout_s=None,
+                enabled=True,
+                updated_by="mcp",
+            )
+            return {"ok": True, "message": "LLM 配置已保存（即时生效）"}
+        except Exception as e:
+            return {"ok": False, "message": f"保存失败：{e}"}
 
     # 集成接口
     elif tool_name == "platform__integration_list":
