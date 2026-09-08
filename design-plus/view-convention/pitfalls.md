@@ -21,7 +21,7 @@
 
 ## 权限 / 菜单
 
-8. **svc 字面量是隐式放行的命脉**：后端 `view_registry` 靠扫描页面源码里的 `svc("app", "service")` **字面量**派生"页→服务"边——角色获授页面即隐式放行这些服务。变量拼名（`svc(appVar, ...)`）**扫不到 → 受限用户该调用 403**（dashboard 主链管道曾因此踩雷：`defs.map(([, app]) => svc(app, "list"))`，改成每列一个 `svc: () => svc("settlement", "list", …)` 字面量闭包才好）。✅ 规则：服务调用一律字面量（可闭包逐项写）；三元拼服务名也不行（`svc("approval", ok ? "approve" : "reject")` → 拆成 if/else 两条字面量）。变量拼名**只许服务台用**（它仅 admin 可见、不参与派生）。
+8. **svc 字面量是隐式放行的命脉**：后端 `view_registry` 靠扫描页面源码里的 `svc("app", "service")` **字面量**派生"页→服务"边——角色获授页面即隐式放行这些服务。变量拼名（`svc(appVar, ...)`）**扫不到 → 受限用户该调用 403**（dashboard 主链管道曾因此踩雷：`defs.map(([, app]) => svc(app, "list"))`，改成每列一个 `svc: () => svc("settlement", "list", …)` 字面量闭包才好）。✅ 规则：服务调用一律字面量（可闭包逐项写）；三元拼服务名也不行（`svc("approval", ok ? "approve" : "reject")` → 拆成 if/else 两条字面量）。变量拼名（`svc(appVar, ...)`）扫不到。
 9. **X-Fde-Page 头不用管也不能滥用**：`lib/api.js` 的 `svc()` 自动注入当前页上下文（shell 在 `syncRoute` 时写 `window.__fdePage`）。页面代码不要手工设/改这个头；也不要假设"带头就能调"——放行还要求该页确属调用者角色（伪造无升级空间）。无头请求（curl/MCP/Agent）不享受隐式放行。
 10. **恒显探测用 quiet**：看板等聚合页的初始加载一律 `svc(app, svc, params, {quiet: true})` + `.catch` 零值兜底——即使派生放行覆盖不全，也不给受限用户喷错误 toast（用户主动操作仍保持非静默）。
 

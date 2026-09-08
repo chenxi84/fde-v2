@@ -2,7 +2,7 @@
 
 所有范式是成文化的前端视图范式，经参考实现实测。**参考实现 = `app/e2e/<应用>/view.*`（member / task）+ `app/e2e/dashboard.*`（组级看板）+ `app/e2e/process.*`（组级流程总览，见 §8）**，新模块照抄结构、换业务字段。
 
-> **页面组织**：菜单 = dashboard（组级页 `app/<组>/dashboard.*`）+ 每个应用一页（`app/<组>/<应用>/view.{js,html}`，与后端同文件夹）；Agent / 服务台由 shell 自动追加，**不在模块内声明**。公共基座（`view/lib/`）只 import、不复制、不修改。
+> **页面组织**：菜单 = dashboard（组级页 `app/<组>/dashboard.*`）+ 每个应用一页（`app/<组>/<应用>/view.{js,html}`，与后端同文件夹）；Agent 由 shell 自动追加，**不在模块内声明**。公共基座（`view/lib/`）只 import、不复制、不修改。
 
 ## 0. 列表字段 / 搜索条件 / CRUD 完整性规范
 

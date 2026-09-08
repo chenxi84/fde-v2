@@ -7,8 +7,7 @@
  * 加应用前端 = 在应用目录写 view.{js,html}（与后端 <应用>.py 同文件夹）。
  *
  * 三项平台行为（业务代码零感知）：
- *  1. 平台公共页自动追加：Agent 按页面授权可见；服务台（console）仅 admin 可见
- *     （其服务调用是动态的、不可派生授权，故不进授权体系）；
+ *  1. 平台公共页自动追加：Agent 按页面授权可见；
  *  2. 菜单按**页面授权**渲染：init 拉 /api/my_pages（角色页面授权集），业务菜单
  *     项按 `<module>:<key>` 过滤；admin 全通。直访无授权路由回落首个授权页。
  *     授权集到达前菜单为空（杜绝短暂暴露）；
@@ -16,14 +15,13 @@
  *     请求头，后端对获授页面隐式放行其派生服务）。
  */
 import { get, dash, fmtTime, tryParse } from "./api.js";
-import { pageConsole } from "../pages/console.js";
 import { agentRail } from "../pages/agent_rail.js";
 import { pageAgentOverview } from "../pages/agent_overview.js";
 import { pageAlerts } from "../pages/alerts.js";
 import { pageAutopilot } from "../pages/autopilot.js";
 import { pageFlowEditor } from "../pages/flow_editor.js";
 
-/* 平台公共页（可按页面授权）；console 单列——仅 admin 可见、不可授权 */
+/* 平台公共页（可按页面授权） */
 export const PLATFORM_PAGES = [
   { key: "agent_overview", name: "智能体", ic: "🤖", title: "智能体总览", crumb: "平台设计的智能体角色 · 运行时团队", platform: true },
   { key: "alerts", name: "告警", ic: "⚠", title: "库存告警", crumb: "巡检发现的库存预警", platform: true },
@@ -31,11 +29,7 @@ export const PLATFORM_PAGES = [
   { key: "flow_editor", name: "流程编排", ic: "🔀", title: "流程编排", crumb: "可视化编辑工作流 · DAG 编排", platform: true },
 ];
 
-const ADMIN_ONLY_PAGES = [
-  { key: "console", name: "服务台", ic: "⌗", title: "通用服务台", crumb: "按服务契约自动建表 · 覆盖全部应用", platform: true },
-];
-
-const PLATFORM_COMPONENTS = { console: pageConsole, agent_overview: pageAgentOverview, alerts: pageAlerts, autopilot: pageAutopilot, flow_editor: pageFlowEditor };
+const PLATFORM_COMPONENTS = { agent_overview: pageAgentOverview, alerts: pageAlerts, autopilot: pageAutopilot, flow_editor: pageFlowEditor };
 
 /* x-html 模板片段中的助手函数经 window 全局解析（Alpine 表达式回落 window） */
 window.dash = dash;
@@ -59,11 +53,8 @@ export function createShell({ module, brand, pages, components }) {
       if (this.granted === null) return [];
       const biz = this.bizPages.filter(
         (p) => this.isAdmin || this.granted.has(this.module + ":" + p.key));
-      const plat = [
-        ...PLATFORM_PAGES.filter(
-          (p) => this.isAdmin || this.granted.has("_platform:" + p.key)),
-        ...(this.isAdmin ? ADMIN_ONLY_PAGES : []),
-      ];
+      const plat = PLATFORM_PAGES.filter(
+        (p) => this.isAdmin || this.granted.has("_platform:" + p.key));
       return [...biz, ...plat];
     },
     get page() {

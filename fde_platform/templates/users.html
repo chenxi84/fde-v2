@@ -98,8 +98,7 @@
               {% endfor %}
             </div>
           {% endfor %}
-          <div class="muted" style="margin-top:6px"><b>平台公共页</b>
-            <span class="subname">（服务台仅管理员可见，不可授权）</span></div>
+          <div class="muted" style="margin-top:6px"><b>平台公共页</b></div>
           <div class="checks">
             {% for p in view_registry.platform_pages %}
               <label><input type="checkbox" name="pages" value="{{ p.id }}"

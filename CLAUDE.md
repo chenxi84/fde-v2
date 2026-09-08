@@ -35,7 +35,7 @@ python app/<组>/tests/verify_view_<组>.py             # 组级壳/菜单/dashb
 ### 前端
 - 每个应用 `app/<组>/<应用>/view.{js,html}`：`view.js` 导出 `PAGE_META`（key/name/ic/title/crumb/order）+ 默认导出工厂；模板经 `new URL("view.html", import.meta.url)` 抓取。落盘即被扫描装配进菜单，**零接线**。
 - 组级聚合页（无后端应用，如 dashboard / 流程总览）放 `app/<组>/<页>.{js,html}`（key = 文件名；松散文件，与组内应用子目录并列）。
-- `view/lib/`（shell.js / api.js / alpine / styles）是**平台公共基座，只 import 不修改**；`view/pages/` 是平台通用页（Agent / 服务台）。
+- `view/lib/`（shell.js / api.js / alpine / styles）是**平台公共基座，只 import 不修改**；`view/pages/` 是平台通用页（Agent）。
 - 前端调服务一律 `svc("应用","服务",...)` **字面量**（不能变量拼名）——后端靠扫描源码里的字面量派生「页→服务」隐式放行边。
 
 ### 构建流水线（九步法）

@@ -12,7 +12,6 @@
    仅给「无后端应用的组级聚合页」用（如 dashboard）；与组内应用子目录并列的松散文件。
 
 平台公共页 = `view/pages/*.js`（元数据取自 `lib/shell.js` 的 `PLATFORM_PAGES`）。
-**console（通用服务台）不进清单**：其服务调用是动态的（不可派生），仅 admin 可见、不可授权。
 
 每页自描述：文件内 `export const PAGE_META = {key,name,ic,title,crumb,order}` 字面量
 （应用页的 key 以目录名为准，PAGE_META.key 仅组级页/缺省时用）。服务派生：扫描页面源码
@@ -33,14 +32,13 @@ ROOT = Path(__file__).resolve().parents[1]
 APP_DIR = ROOT / "app"
 VIEW_DIR = ROOT / "view"
 PLATFORM_MODULE = "_platform"
-CONSOLE_KEY = "console"  # 仅 admin 可见，不进授权清单
 
 # shell.js 的 PLATFORM_PAGES 字面量（平台公共页元数据）：key, name, ic
 _META_RE = re.compile(
     r'\{\s*key:\s*"([^"]+)"\s*,\s*name:\s*"([^"]+)"\s*,\s*ic:\s*"([^"]*)"')
 # 页面自描述块：export const PAGE_META = { ... }（值为字符串/数字，无嵌套大括号）
 _PAGE_META_RE = re.compile(r'export\s+const\s+PAGE_META\s*=\s*\{(.*?)\}', re.S)
-# 页面源码中的服务调用字面量（动态拼名的调用扫不到——那是服务台的特权）
+# 页面源码中的服务调用字面量（动态拼名的调用扫不到）
 _SVC_RE = re.compile(r'svc\(\s*"([A-Za-z_][\w]*)"\s*,\s*"([A-Za-z_][\w]*)"')
 
 _cache: dict = {"token": None, "data": None}
@@ -169,7 +167,7 @@ def _scan() -> dict:
         if pages:
             modules.append({"module": group, "pages": pages})
 
-    # 平台公共页（console 除外：动态调用不可派生，仅 admin 可见）
+    # 平台公共页（view/pages/*.js）
     meta = _parse_meta(VIEW_DIR / "lib" / "shell.js")
     platform_pages = []
     plat_dir = VIEW_DIR / "pages"
@@ -177,8 +175,6 @@ def _scan() -> dict:
         for js in sorted(plat_dir.glob("*.js")):
             scanned.append(js)
             key = js.stem
-            if key == CONSOLE_KEY:
-                continue
             name, ic = meta.get(key, (key, "✦"))
             platform_pages.append(
                 {"id": f"{PLATFORM_MODULE}:{key}", "key": key, "name": name, "ic": ic})
@@ -253,7 +249,7 @@ def boot_manifest(module: str) -> dict | None:
 
 
 def all_page_ids() -> set:
-    """注册表内全部 page_id（含平台页，不含 console）。"""
+    """注册表内全部 page_id（含平台页）。"""
     d = _current()
     ids = {p["id"] for m in d["modules"] for p in m["pages"]}
     ids |= {p["id"] for p in d["platform_pages"]}

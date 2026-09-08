@@ -265,7 +265,7 @@ def app_detail(app_name):
 # 前端视图（view/ 通用同源静态托管）
 #   模块 = view/ 下含 index.html 的目录（如 view/crm/），由 design-plus/
 #   VIEW_CONVENTION.md（技能 fde-view-gen）按统一范式生成；view/lib/ 为跨模块公共基座
-#   （api.js / shell.js / 设计系统），view/pages/ 为平台公共页（Agent / 服务台），
+#   （api.js / shell.js / 设计系统），view/pages/ 为平台公共页（Agent），
 #   二者无 index.html、不进模块清单，但同样按需静态放行。
 #   同源 → 无需 CORS、会话 Cookie 天然携带；/view/ 不在鉴权白名单，
 #   未登录访问页面自动重定向 /login（fetch 则收 401 由前端自处理）。
@@ -430,7 +430,7 @@ def api_view_registry_rescan():
 @app.route("/api/my_pages")
 def api_my_pages():
     """当前用户的前端页面授权集（shell 菜单渲染源）。
-    admin → is_admin=true（shell 全通，含仅 admin 可见的服务台）；否则为角色页面授权。"""
+    admin → is_admin=true（shell 全通）；否则为角色页面授权。"""
     u = users.session_user()
     if not u:
         return jsonify({"status": "error", "message": "未登录"}), 401

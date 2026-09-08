@@ -59,7 +59,7 @@ view/crm/
 
 # 知识图谱（LightRAG）：索引数据 / pyvis 副产物 / 可视化输出（均可重新生成）
 config/kg_storage/
-lib/
+/lib/
 知识图谱.html
 
 # 制度库：README 说明入库，制度文件本身私有不提交

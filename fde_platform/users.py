@@ -11,7 +11,7 @@
   两个效力：① 视图菜单按页面授权渲染（admin 全量）；② **隐式服务放行**——页面源码
   扫描出的 svc() 调用（页→服务派生边）随页面授权一并放行，无需再逐个授服务。
   隐式放行仅对携带 `X-Fde-Page` 请求头（lib/api.js 自动注入）的调用生效；无头
-  请求（MCP/Agent/CLI）仍按显式授权判定。服务台（console）仅 admin 可见、不可授权。
+  请求（MCP/Agent/CLI）仍按显式授权判定。
 
 职责：
 - 用户/角色/授权库 `config/auth.db`（users / roles / service_grants / role_grants 四张表）
