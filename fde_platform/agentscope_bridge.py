@@ -183,6 +183,27 @@ def _platform_tool_defs(user=None) -> list:
             },
             "_meta": {"app": "__platform__", "service": "read_app_doc", "dangerous": False},
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "platform_query_knowledge",
+                "description": (
+                    "查询「非结构化制度/政策文件」的知识图谱（企业规章制度、作业指导书、SOP、行业规范等"
+                    "自由文本），沿图谱语义检索 + 多跳推理回答。仅当问题涉及这类制度文件时用本工具；"
+                    "应用组的业务规则（BR/FUNC/字段）是结构化的，请用 platform_read_app_doc 精确读应用详设，"
+                    "不要用本工具。query 填自然语言问题；group 填知识库名（默认 rules）。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "自然语言问题"},
+                        "group": {"type": "string", "description": "知识库名（默认 rules，对应 config/rules/ 制度库）"},
+                    },
+                    "required": ["query"],
+                },
+            },
+            "_meta": {"app": "__platform__", "service": "query_knowledge", "dangerous": False},
+        },
     ]
     if user is None or user.get("is_admin"):
         defs.extend(_admin_platform_tool_defs())
@@ -380,6 +401,17 @@ def _call_platform_tool(platform, user, service: str, args: dict):
             return {"found": False, "app": args.get("app", ""),
                     "doc": args.get("doc", ""), "message": "未找到该文档（应用/文档类型不存在或文档缺失）"}
         return {"found": True, "app": args.get("app", ""), "doc": args.get("doc", ""), "content": text}
+    if service == "query_knowledge":
+        from fde_platform import knowledge_graph
+
+        if not knowledge_graph.is_available():
+            return {"found": False, "message": "知识图谱未启用（未安装 lightrag 依赖）"}
+        try:
+            answer = knowledge_graph.query_sync(
+                args.get("group", "rules"), args.get("query", ""), mode=args.get("mode", "hybrid"))
+            return {"found": True, "answer": answer}
+        except Exception as e:
+            return {"found": False, "message": f"知识图谱查询失败：{e}"}
     # 集成 / 定时任务配置：仅管理员（user=None 视为无鉴权全通，与平台 _is_admin_user 一致）
     if user is not None and not user.get("is_admin"):
         raise FdeError("无权调用平台配置工具（仅管理员）")

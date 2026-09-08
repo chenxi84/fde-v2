@@ -56,3 +56,8 @@ config/agent_workspaces/
 *~
 app/crm/
 view/crm/
+
+# 知识图谱（LightRAG）：索引数据 / pyvis 副产物 / 可视化输出（均可重新生成）
+config/kg_storage/
+lib/
+知识图谱.html

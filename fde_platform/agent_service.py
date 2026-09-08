@@ -217,15 +217,16 @@ async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str):
                 if t["_meta"]["app"] == "__platform__"
                 or t["_meta"]["app"].startswith(group + "/")]
 
-    # leader：propose_skill 进 basic，业务工具按领域分组（懒加载，含查询/写/文件/导入）
+    # leader：知识查询类平台工具（propose_skill / 读单文档 / 查知识图谱）进 basic，
+    # 其余平台工具（集成/定时配置等）不给 leader（走 worker 或 admin）；业务工具按领域分组懒加载。
+    _LEADER_BASIC_SERVICES = {"propose_skill", "read_app_doc", "query_knowledge"}
     basic = []
     groups: dict[str, list] = {}
     group_apps: dict[str, set] = {}
     for t in defs:
         app = t["_meta"]["app"]
-        name = t["function"]["name"]
         if app == "__platform__":
-            if name.endswith("propose_skill"):
+            if t["_meta"].get("service") in _LEADER_BASIC_SERVICES:
                 basic.append(_mk_ft(t))
             continue
         role = _APP_ROLE.get(app, "other")
@@ -272,6 +273,22 @@ async def _fde_middleware_factory(
     except Exception:
         pass  # 查 session 失败不阻断组装（默认不额外禁）
     return [agent_tool_filter.LeaderToolFilterMiddleware(extra_deny=extra_deny)]
+
+
+# 提高 AgentScope 工具 offload 阈值（默认 10s）：知识图谱查询 platform_query_knowledge
+# 耗时 30~70s（LightRAG 检索 + LLM 生成），10s 必被 offload 到后台异步执行，而 wakeup
+# 触发的下一轮 reply 不通过原 SSE stream 推送，导致前端收不到最终答案。提高到 180s 让查询
+# 同步完成、答案随本轮流返回（与 web.py 的 read timeout 协调一致）。
+from agentscope.app.middleware import ToolOffloadMiddleware as _ToolOffloadMiddleware
+
+_orig_offload_init = _ToolOffloadMiddleware.__init__
+
+
+def _patched_offload_init(self, bg_manager, message_bus, user_id, agent_id, timeout_secs=10.0):
+    return _orig_offload_init(self, bg_manager, message_bus, user_id, agent_id, timeout_secs=180.0)
+
+
+_ToolOffloadMiddleware.__init__ = _patched_offload_init
 
 
 app = create_app(
