@@ -162,11 +162,28 @@ def _get_embed_model():
     return _embed_model
 
 
-async def _embed_func(texts: list[str]):
-    """LightRAG 期望的异步 embedding_func：bge encode（CPU，归一化）。
+async def _embed_remote(texts: list[str]) -> list[list[float]]:
+    """经 HTTP 调独立 embed 服务（FDE_EMBED_URL），本进程不 import torch。"""
+    import httpx
 
-    返回 numpy 数组（NanoVectorDB flush 时对其调 .size，list 无此属性会报错）。
+    url = os.environ.get("FDE_EMBED_URL", "http://127.0.0.1:9800").rstrip("/")
+    async with httpx.AsyncClient(timeout=120) as client:
+        r = await client.post(f"{url}/embed", json={"texts": texts})
+        r.raise_for_status()
+        return r.json()["vectors"]
+
+
+async def _embed_func(texts: list[str]):
+    """LightRAG 期望的异步 embedding_func。
+
+    FDE_EMBED_MODE=remote 时经 HTTP 调独立 embed 服务（本进程不 import torch）；
+    否则（local）进程内 bge encode（CPU，归一化）。返回 numpy 数组
+    （NanoVectorDB flush 时对其调 .size，list 无此属性会报错）。
     """
+    if os.environ.get("FDE_EMBED_MODE", "local") == "remote":
+        import numpy as np
+
+        return np.asarray(await _embed_remote(texts), dtype="float32")
     model = _get_embed_model()
     return await asyncio.to_thread(model.encode, texts, normalize_embeddings=True)
 

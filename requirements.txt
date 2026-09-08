@@ -20,9 +20,8 @@ statsforecast==2.0.3
 # 可选：PostgreSQL 驱动（仅 Docker/PostgreSQL 部署需要，默认 SQLite 无需）
 psycopg2-binary>=2.9
 
-# 可选：知识图谱（LightRAG 语义问答 + 本地 BGE embedding + 可视化）
-# 未安装则 Agent 的「图谱问答」工具自动降级（平台其余功能不受影响）；不需要可删除这三行。
-# 注意：sentence-transformers 依赖 torch，体积较大（约数 GB）。
+# 可选：知识图谱（LightRAG 语义问答 + 可视化）
+# 未安装则 Agent 的「图谱问答」工具自动降级（平台其余功能不受影响）；不需要可删除。
+# embedding 走独立服务（见 requirements-embed.txt），主进程不装 torch。
 lightrag-hku>=1.5
-sentence-transformers>=3.0
 pyvis>=0.3

@@ -5,12 +5,15 @@ services:
       - PLATFORM_HOST=0.0.0.0
       - DATABASE_URL=postgresql://fde:fde@postgres:5432/fdev2
       - AGENT_SERVICE_URL=http://agent-service:4100
+      - FDE_EMBED_MODE=remote
+      - FDE_EMBED_URL=http://embed:9800
     volumes:
       - ./config:/app/config
       - ./app:/app/app
     depends_on:
       - postgres
       - agent-service
+      - embed
     restart: always
     healthcheck:
       test: ["CMD", "python", "-c", "import http.client; c = http.client.HTTPConnection('127.0.0.1', 4000); c.request('GET', '/'); c.getresponse()"]
@@ -23,12 +26,27 @@ services:
     command: python -m fde_platform.agent_service
     environment:
       - AGENT_HOST=0.0.0.0
+      - FDE_EMBED_MODE=remote
+      - FDE_EMBED_URL=http://embed:9800
     volumes:
       - ./config:/app/config
       - ./app:/app/app
     restart: always
     healthcheck:
       test: ["CMD", "python", "-c", "import http.client; c = http.client.HTTPConnection('127.0.0.1', 4100); c.request('GET', '/'); c.getresponse()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  embed:
+    build:
+      context: .
+      dockerfile: Dockerfile.embed
+    environment:
+      - HF_ENDPOINT=https://hf-mirror.com
+    restart: always
+    healthcheck:
+      test: ["CMD", "python", "-c", "import http.client; c = http.client.HTTPConnection('127.0.0.1', 9800); c.request('GET', '/'); c.getresponse()"]
       interval: 30s
       timeout: 5s
       retries: 3

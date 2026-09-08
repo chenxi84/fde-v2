@@ -1,0 +1,7 @@
+# FDE v2 — 独立 embedding 服务依赖（文本→向量）
+# 安装：pip install -r requirements-embed.txt
+# 供 fde_platform.embed_service 用（主进程走 FDE_EMBED_MODE=remote 调它，自身不装 torch）。
+# 注意：sentence-transformers 依赖 torch，体积较大（约数 GB）——只在 embed 服务/容器装。
+sentence-transformers>=3.0
+fastapi>=0.100
+uvicorn>=0.23

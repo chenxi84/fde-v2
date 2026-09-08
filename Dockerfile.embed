@@ -1,0 +1,17 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# 只装 embedding 服务依赖（sentence-transformers + torch + fastapi/uvicorn）
+COPY requirements-embed.txt .
+RUN pip install --no-cache-dir -r requirements-embed.txt -i https://pypi.tuna.tsinghua.edu.cn/simple/ --trusted-host pypi.tuna.tsinghua.edu.cn
+
+COPY . .
+
+EXPOSE 9800
+
+ENV PYTHONUNBUFFERED=1
+# 国内下载 bge 走镜像
+ENV HF_ENDPOINT=https://hf-mirror.com
+
+CMD ["python", "-m", "fde_platform.embed_service"]
