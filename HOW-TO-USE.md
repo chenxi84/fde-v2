@@ -174,6 +174,19 @@ bash scripts/deploy.sh <服务器IP> [SSH用户名]
 | MCP 服务 | `python -m fde_platform.mcp_server` | 供外部 AI 工具通过 MCP 协议调用应用 |
 | REST API | `http://127.0.0.1:4000/api/<应用>/<服务>` | 程序化调用 |
 
+**页面路由约定**（不是 `/psc`、`/apps`）：
+- 应用组详情：`/group/<组>`（如 `/group/psc`）
+- 应用详情：`/app/<应用路径>`（如 `/app/psc/sales_forecast`）
+- 前端视图（SPA）：`/view/<组>/`
+
+---
+
+## 附：部署/测试常见坑（Workbuddy 踩过的）
+
+1. **路由**：见上——组详情 `/group/<组>`、应用详情 `/app/<路径>`、前端视图 `/view/<组>/`，不是 `/psc`、`/apps`。
+2. **本机 curl 要加 `--noproxy '*'`**：Windows 本机 curl 默认走系统代理，会返回假 502。测试用 `curl --noproxy '*' http://127.0.0.1:4000/...`。
+3. **后台起服务用后台任务方式**：`main.py` / `agent_service` / `embed_service` 要以后台任务方式起（nohup / systemd / 进程管理器），普通 `cmd &` 会随命令返回被回收。
+
 ---
 
 ## 附：目录结构速览
