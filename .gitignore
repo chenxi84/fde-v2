@@ -61,3 +61,7 @@ view/crm/
 config/kg_storage/
 lib/
 知识图谱.html
+
+# 制度库：README 说明入库，制度文件本身私有不提交
+config/rules/*
+!config/rules/README.md
