@@ -784,9 +784,13 @@ class SalesForecast:
             try:
                 model = pickle.loads(base64.b64decode(model_blob))
                 if model is not None and hasattr(model, "predict"):
-                    return round(float(model.predict(horizon)["mean"][0]), 4)
-            except Exception:
-                pass
+                    # ["mean"] 是 ndarray，[-1] 取第 horizon 步（N+horizon），
+                    # 与回退路径 fc.iloc[-1]（最后一步）对齐——不能用 [0]（那是 N+1）。
+                    return round(float(model.predict(horizon)["mean"][-1]), 4)
+            except Exception as e:
+                import logging
+                logging.getLogger("psc.sales_forecast").warning(
+                    "基线预测 model_blob 路径失败（%s）：%s", method, e)
 
         # 2) 回退：重新 fit（Auto 模型内部自动选参）
         season_length = self._int_param(params, "season_length", 12)
@@ -806,7 +810,10 @@ class SalesForecast:
             sf.fit(df)
             fc = sf.predict(h=horizon)
             return round(float(fc.iloc[-1][str(model)]), 4)
-        except Exception:
+        except Exception as e:
+            import logging
+            logging.getLogger("psc.sales_forecast").warning(
+                "基线预测回退路径失败（%s）：%s", method, e)
             return None
 
     def _es_forecast(self, params, history, horizon):
