@@ -3,7 +3,7 @@
   <div class="card">
     <div class="hd">
       <h3>自主运行定时任务</h3>
-      <span class="hint" x-text="'共 ' + schedules.length + ' 个 · 定时唤醒 leader 按任务描述 / 已沉淀 skill 自主执行'"></span>
+      <span class="hint" x-text="'共 ' + schedules.length + ' 个 · 定时唤醒 leader 按执行体（自主 / 工作流 / 技能）执行'"></span>
     </div>
     <div class="bd">
       <template x-if="!schedules.length">
@@ -36,8 +36,44 @@
         <input x-model="form.name" placeholder="任务名（如 库存水位巡检）" style="flex:1; min-width:160px">
         <input x-model="form.cron" placeholder="cron 表达式（分 时 日 月 周，如 */5 * * * *）" style="flex:1; min-width:200px">
       </div>
-      <textarea x-model="form.description" rows="3" style="width:100%; margin-top:10px"
-        placeholder="任务目标与执行步骤（写全：要执行什么、结果写入哪个 export-file 文件）"></textarea>
+      <div class="tagline" style="margin-top:10px">
+        <label>执行体</label>
+        <select x-model="form.mode">
+          <option value="agent">自主执行（leader + 任务描述）</option>
+          <option value="flow">执行工作流（确定性 DAG）</option>
+          <option value="skill">执行技能（确定性步骤）</option>
+        </select>
+      </div>
+
+      <template x-if="form.mode === 'agent'">
+        <textarea x-model="form.description" rows="3" style="width:100%; margin-top:10px"
+          placeholder="任务目标与执行步骤（写全：要执行什么、结果写入哪个 export-file 文件）"></textarea>
+      </template>
+
+      <template x-if="form.mode === 'flow'">
+        <div style="margin-top:10px">
+          <select x-model="form.flow_name" style="width:100%">
+            <option value="">选择工作流…</option>
+            <template x-for="f in flows" :key="f.name">
+              <option :value="f.name" x-text="f.name + '（' + f.group + '）'"></option>
+            </template>
+          </select>
+          <div class="muted" style="margin-top:4px" x-show="!flows.length">暂无已声明的 flow（app/&lt;组&gt;/_flow_*.yaml）</div>
+        </div>
+      </template>
+
+      <template x-if="form.mode === 'skill'">
+        <div style="margin-top:10px">
+          <select x-model="form.skill_name" style="width:100%">
+            <option value="">选择技能…</option>
+            <template x-for="s in skills" :key="s.name">
+              <option :value="s.name" x-text="s.name"></option>
+            </template>
+          </select>
+          <div class="muted" style="margin-top:4px" x-show="!skills.length">暂无已发布的 skill</div>
+        </div>
+      </template>
+
       <div class="tagline" style="margin-top:10px">
         <select x-model="form.permission_mode">
           <option value="dont_ask">安全模式（危险操作自动拒绝，推荐）</option>

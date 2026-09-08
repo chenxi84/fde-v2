@@ -687,6 +687,10 @@ def _leader_prompt(group: str = "") -> str:
         "遇到需要多领域协作的复杂任务时必须组建团队：先 TeamCreate 建团队，再用 AgentCreate "
         f"按 subagent_type 创建成员（可选：{roles}），"
         "用 TeamSay 给成员派活并汇总回报。简单查询可直接调用业务工具回答。"
+        "遇到「业务规则/公式/字段口径」类问题，先用 platform_read_app_doc 精确读对应应用的「应用详设」"
+        "（架构文档已写明哪个应用管什么，规则按 BR 编号、字段按数据字典定位），不要凭常驻架构文档猜测回答。"
+        "platform_query_knowledge 仅用于查询「非结构化制度/政策文件」（企业规章制度、SOP、行业规范等自由文本），"
+        "应用组的结构化业务规则不要用它。"
         "你也有定时任务工具（ScheduleCreate/ScheduleList/ScheduleDelete）：用户要求「定时/每天/每周/"
         "每隔」执行某任务时，用 ScheduleCreate 配置 cron 定时任务；description 要写全任务目标、"
         "要执行什么、结果写入哪个 export-file 文件（供用户后续查看）。"
@@ -834,12 +838,15 @@ def api_agent2_chat_stream():
             if r.status_code >= 400:
                 yield "data: " + json.dumps({"event": "error", "data": f"HTTP {r.status_code}"}, ensure_ascii=False) + "\n\n"
                 return
-            # 订阅 stream 并翻译；read timeout 10s = 静默超时（leader 收敛后无新事件）。
+            # 订阅 stream 并翻译；read timeout = 静默超时（leader 收敛后无新事件）。
             # 多智能体 leader 收到 worker 回报会开启新一轮 reply，故 REPLY_END 不 break，
             # 持续读直到静默超时，把多轮文本合并成最终 done。
+            # 知识图谱查询（platform_query_knowledge）耗时 30~70s，会被 AgentScope offload 到
+            # 后台异步执行，完成后 wakeup 开启新一轮 reply；故 read timeout 须大于该耗时，
+            # 否则前端在后台完成前提前 done，收不到最终答案。
             with httpx.stream("GET", f"{AGENT2_BASE}/sessions/{sid}/stream",
                               params={"agent_id": agent_id}, headers=headers,
-                              timeout=(None, 30, None, None)) as up:
+                              timeout=(None, 180, None, None)) as up:
                 for line in up.iter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -1065,7 +1072,13 @@ def api_agent_schedules():
 
 @app.route("/api/agent-schedules", methods=["POST"])
 def api_agent_schedule_create():
-    """创建自主运行定时任务（按 cron 唤醒对应组 leader，按 description / 已沉淀 skill 执行）。"""
+    """创建自主运行定时任务（按 cron 唤醒对应组 leader，按 mode 执行）。
+
+    mode：
+    - agent：leader 按 description 自由执行（现状，开放式任务）
+    - flow ：leader 只调 platform_run_flow 触发确定性 DAG
+    - skill：leader 按已沉淀 skill 的固定步骤执行
+    """
     agent_id = _ensure_agent2(_agent2_group())
     if not agent_id:
         return jsonify({"status": "error", "message": "agent_service 不可用"})
@@ -1074,10 +1087,30 @@ def api_agent_schedule_create():
     cron = (data.get("cron") or "").strip()
     if not name or not cron:
         return jsonify({"status": "error", "message": "任务名和 cron 不能为空"})
+    mode = (data.get("mode") or "agent").strip()
+    # 按 mode 组装 description：flow/skill 写死执行指令，避免 leader 自由发挥
+    if mode == "flow":
+        flow_name = (data.get("flow_name") or "").strip()
+        if not flow_name:
+            return jsonify({"status": "error", "message": "flow 模式需要指定工作流"})
+        description = (
+            f"执行工作流「{flow_name}」。你的唯一任务是调用平台工具 "
+            f"platform_run_flow(name=\"{flow_name}\") 并回报结果，不要自由发挥或做其他操作。"
+        )
+    elif mode == "skill":
+        skill_name = (data.get("skill_name") or "").strip()
+        if not skill_name:
+            return jsonify({"status": "error", "message": "skill 模式需要指定技能"})
+        description = (
+            f"执行已沉淀技能「{skill_name}」。按技能库中该技能的固定步骤调用工具完成，"
+            f"不要自由发挥或偏离步骤。"
+        )
+    else:  # agent
+        description = (data.get("description") or "").strip()
     headers = _agent2_headers()
     payload = {
         "name": name,
-        "description": (data.get("description") or "").strip(),
+        "description": description,
         "cron_expression": cron,
         "agent_id": agent_id,
         "chat_model_config": {
@@ -1120,6 +1153,16 @@ def api_agent_schedule_delete(sid):
     except Exception:
         pass
     return jsonify({"status": "ok", "message": "已删除"})
+
+
+@app.route("/api/skills")
+def api_skills():
+    """列出已发布（approved）skill（供自主运行 skill 模式下拉）。"""
+    from fde_platform import skills
+    return jsonify({"status": "ok", "data": [
+        {"name": s["name"], "description": s.get("description", "")}
+        for s in skills.published_skills()
+    ]})
 
 
 @app.route("/api/flows", methods=["GET"])

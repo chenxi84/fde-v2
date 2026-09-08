@@ -74,7 +74,11 @@ def _row_to_skill(r: sqlite3.Row) -> dict:
 
 
 def _validate_steps(steps) -> list:
-    """校验 steps 并归一为 [{tool, args, note}]；非法即抛 FdeError。"""
+    """校验 steps 并归一为 [{tool, args, output, note}]；非法即抛 FdeError。
+
+    output 可选：该步结果写入的 state 键，供后续步骤的 args 占位符 {{key}} 填充
+    （run_skill 确定性执行时用）。
+    """
     if not isinstance(steps, list):
         raise FdeError("steps 必须是数组")
     out = []
@@ -87,7 +91,12 @@ def _validate_steps(steps) -> list:
         args = st.get("args") or {}
         if not isinstance(args, dict):
             raise FdeError(f"steps[{i}].args 必须是对象")
-        out.append({"tool": tool, "args": args, "note": (st.get("note") or "").strip()})
+        out.append({
+            "tool": tool,
+            "args": args,
+            "output": (st.get("output") or "").strip(),
+            "note": (st.get("note") or "").strip(),
+        })
     if not out:
         raise FdeError("steps 不能为空")
     return out
@@ -252,6 +261,41 @@ def published_skills() -> list:
         return [_row_to_skill(r) for r in rows]
     finally:
         conn.close()
+
+
+def run_skill(name: str, platform, user) -> dict:
+    """确定性执行一个已发布 skill：按 steps 顺序调 tool，占位符从 state 填充。
+
+    与「注入 prompt 让 leader 自由执行」不同，这里是**确定性**的：不经过 LLM，
+    直接按固定步骤顺序调工具，前一步的 output 结果填后一步 args 里的 {{key}} 占位符。
+    供 scheduler 的 skill 模式（定时任务）调用。
+    """
+    from fde import FdeError
+    from fde_platform import agentscope_bridge as bridge
+
+    skill = get_skill_by_name(name)
+    if not skill:
+        raise FdeError(f"skill 不存在：{name}")
+    if skill.get("status") != "approved":
+        raise FdeError(f"skill 未发布（当前 {skill.get('status')}）：{name}")
+    state: dict = {}
+    for st in skill["steps"]:
+        args = {}
+        for k, v in (st.get("args") or {}).items():
+            if isinstance(v, str):
+                for key, val in state.items():
+                    v = v.replace("{{" + key + "}}", str(val))
+            args[k] = v
+        raw = bridge.execute(platform, user, st["tool"], args)
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (ValueError, TypeError):
+            data = raw
+        if isinstance(data, dict) and data.get("error"):
+            raise FdeError(f"步骤 {st['tool']} 失败：{data['error']}")
+        if st.get("output"):
+            state[st["output"]] = data
+    return state
 
 
 PROPOSE_INSTRUCTION = (
