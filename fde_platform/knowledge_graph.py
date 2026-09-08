@@ -4,21 +4,23 @@
 供智能体跨文档问答（"毛需求怎么算""σ_L 哪来的"），替代逐文件读。
 
 - **可插拔**：`is_available()` 返回 False（未装 lightrag）时，上层工具自动降级；
-  本模块对 lightrag / sentence-transformers 均为**延迟 import**，平台启动不加载它们。
+  本模块对 lightrag 为**延迟 import**，平台启动不加载。
 - **复用 LLM**：抽取/查询用 `fde_platform.llm.get_provider("operator")`（DeepSeek 等）。
-- **本地 embedding**：默认 `BAAI/bge-small-zh-v1.5`（sentence-transformers 加载，CPU 推理；资源充足可换 bge-m3）。
+- **embedding 独立服务**：经 `FDE_EMBED_URL` 调独立 embed 进程
+  （`fde_platform.embed_service`），本进程不 import torch。
 - **存储**：本地模式（`config/kg_storage/<组>/`），生产可切 PG。
 
-用法：
-    python -m fde_platform.knowledge_graph index psc                # 建/重建索引
-    python -m fde_platform.knowledge_graph query psc "毛需求怎么算"   # 问答
-    python -m fde_platform.knowledge_graph viz psc [-o out.html]     # 出知识图谱 HTML
+用法（先起 embedding 服务，再跑索引/问答/可视化）：
+    python -m fde_platform.embed_service                             # :9800，唯一 import torch
+    python -m fde_platform.knowledge_graph index psc                 # 建/重建索引
+    python -m fde_platform.knowledge_graph query psc "毛需求怎么算"    # 问答
+    python -m fde_platform.knowledge_graph viz psc [-o out.html]      # 出知识图谱 HTML
 
 环境变量（可选）：
-    FDE_KG_EMBED_MODEL   bge 模型名（默认 BAAI/bge-small-zh-v1.5；资源充足可换 bge-m3）
-    FDE_KG_EMBED_DIM     向量维度（默认 512，须与模型一致；bge-m3 为 1024）
-    HF_ENDPOINT          国内下载 bge 用 https://hf-mirror.com
-    HF_HOME              HF 缓存目录（默认 ~/.cache/huggingface；C 盘紧张可指到数据盘）
+    FDE_EMBED_URL          embedding 服务地址（默认 http://127.0.0.1:9800）
+    FDE_KG_EMBED_MODEL     bge 模型名（默认 BAAI/bge-small-zh-v1.5，embed 服务侧加载）
+    FDE_KG_EMBED_DIM       向量维度（默认 512，须与模型一致）
+    HF_ENDPOINT            国内下载 bge 用 https://hf-mirror.com（embed 服务侧）
 """
 from __future__ import annotations
 
@@ -141,51 +143,21 @@ async def _llm_model_func(prompt, system_prompt=None, history_messages=None,
     )
 
 
-_embed_model = None
-_embed_lock = None
+async def _embed_func(texts: list[str]):
+    """LightRAG 期望的异步 embedding_func：经 HTTP 调独立 embed 服务（FDE_EMBED_URL）。
 
-
-def _get_embed_model():
-    """惰性加载 bge 模型（线程安全：并发 worker 只加载一份）。"""
-    global _embed_model, _embed_lock
-    if _embed_model is not None:
-        return _embed_model
-    import threading
-
-    if _embed_lock is None:
-        _embed_lock = threading.Lock()
-    with _embed_lock:
-        if _embed_model is None:
-            from sentence_transformers import SentenceTransformer
-
-            _embed_model = SentenceTransformer(EMBED_MODEL)
-    return _embed_model
-
-
-async def _embed_remote(texts: list[str]) -> list[list[float]]:
-    """经 HTTP 调独立 embed 服务（FDE_EMBED_URL），本进程不 import torch。"""
+    本进程不 import torch——embedding 由独立进程 embed_service 提供
+    （见 fde_platform/embed_service.py）。返回 numpy 数组
+    （NanoVectorDB flush 时对其调 .size，list 无此属性会报错）。
+    """
     import httpx
+    import numpy as np
 
     url = os.environ.get("FDE_EMBED_URL", "http://127.0.0.1:9800").rstrip("/")
     async with httpx.AsyncClient(timeout=120) as client:
         r = await client.post(f"{url}/embed", json={"texts": texts})
         r.raise_for_status()
-        return r.json()["vectors"]
-
-
-async def _embed_func(texts: list[str]):
-    """LightRAG 期望的异步 embedding_func。
-
-    FDE_EMBED_MODE=remote 时经 HTTP 调独立 embed 服务（本进程不 import torch）；
-    否则（local）进程内 bge encode（CPU，归一化）。返回 numpy 数组
-    （NanoVectorDB flush 时对其调 .size，list 无此属性会报错）。
-    """
-    if os.environ.get("FDE_EMBED_MODE", "local") == "remote":
-        import numpy as np
-
-        return np.asarray(await _embed_remote(texts), dtype="float32")
-    model = _get_embed_model()
-    return await asyncio.to_thread(model.encode, texts, normalize_embeddings=True)
+        return np.asarray(r.json()["vectors"], dtype="float32")
 
 
 # ────────────────────────────────────────────────────────────

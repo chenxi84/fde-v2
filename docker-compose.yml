@@ -5,7 +5,6 @@ services:
       - PLATFORM_HOST=0.0.0.0
       - DATABASE_URL=postgresql://fde:fde@postgres:5432/fdev2
       - AGENT_SERVICE_URL=http://agent-service:4100
-      - FDE_EMBED_MODE=remote
       - FDE_EMBED_URL=http://embed:9800
     volumes:
       - ./config:/app/config
@@ -26,7 +25,6 @@ services:
     command: python -m fde_platform.agent_service
     environment:
       - AGENT_HOST=0.0.0.0
-      - FDE_EMBED_MODE=remote
       - FDE_EMBED_URL=http://embed:9800
     volumes:
       - ./config:/app/config
