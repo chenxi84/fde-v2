@@ -6,7 +6,7 @@
 - **可插拔**：`is_available()` 返回 False（未装 lightrag）时，上层工具自动降级；
   本模块对 lightrag / sentence-transformers 均为**延迟 import**，平台启动不加载它们。
 - **复用 LLM**：抽取/查询用 `fde_platform.llm.get_provider("operator")`（DeepSeek 等）。
-- **本地 embedding**：默认 `BAAI/bge-m3`（sentence-transformers 加载，CPU 推理）。
+- **本地 embedding**：默认 `BAAI/bge-small-zh-v1.5`（sentence-transformers 加载，CPU 推理；资源充足可换 bge-m3）。
 - **存储**：本地模式（`config/kg_storage/<组>/`），生产可切 PG。
 
 用法：
