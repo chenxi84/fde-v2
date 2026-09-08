@@ -24,6 +24,8 @@
            class="{{ 'on' if request.path.startswith('/agent-admin') else '' }}">Agent</a>
         <a href="/integration"
            class="{{ 'on' if request.path.startswith('/integration') else '' }}">集成</a>
+        <a href="/rules-admin"
+           class="{{ 'on' if request.path.startswith('/rules-admin') else '' }}">制度库</a>
         {% if auth_user and auth_user.is_admin %}<a href="/auth/users"
            class="{{ 'on' if request.path.startswith('/auth/') else '' }}">用户权限</a>{% endif %}
       </nav>

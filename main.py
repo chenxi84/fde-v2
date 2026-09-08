@@ -64,6 +64,15 @@ try:
 except ImportError:
     AGENT_ADMIN_ON = False
 
+# 制度库管理（可插拔）：删除 fde_platform/rules_admin.py 后此处 import 失败即回落无此页
+try:
+    from fde_platform import rules_admin
+
+    rules_admin.register(app)
+    RULES_ADMIN_ON = True
+except ImportError:
+    RULES_ADMIN_ON = False
+
 def main():
     names = platform.app_names()
     bar = "=" * 54

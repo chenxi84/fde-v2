@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}制度库 · FDE 平台{% endblock %}
+{% block content %}
+  <p><a href="/">← 应用清单</a></p>
+  <div class="section-title">制度库管理</div>
+  <p class="muted">存放<b>非结构化制度/政策文件</b>（规章制度、SOP、行业规范等自由文本，<code>.md</code>/<code>.txt</code>），
+     经知识图谱（LightRAG）索引后，Agent 用 <code>platform_query_knowledge</code> 做语义检索。
+     应用组（app/）里的结构化业务规则走 <code>read_app_doc</code>，<b>不要</b>放这里。</p>
+
+  <div class="card">
+    <h3>上传制度文件</h3>
+    <form method="post" action="/rules-admin/upload" enctype="multipart/form-data">
+      <input type="file" name="file" accept=".md,.txt" required>
+      <button type="submit" class="save-btn">上传（自动增量索引）</button>
+    </form>
+    <div class="muted" style="margin-top:6px">上传后自动走增量索引（只抽取这一份）；已存在的同名文件会覆盖。</div>
+  </div>
+
+  <div class="card">
+    <h3>制度文件清单 <span class="muted">共 {{ files|length }} 份</span></h3>
+    {% if not files %}
+      <div class="muted">目录 <code>config/rules/</code> 暂无制度文件。上传上面的文件即可开始。</div>
+    {% else %}
+      <table class="kv">
+        <tr><th>文件</th><th>大小</th><th style="width:80px"></th></tr>
+        {% for f in files %}
+        <tr>
+          <td><code>{{ f.name }}</code></td>
+          <td>{{ '%.1f'|format(f.size / 1024) }} KB</td>
+          <td>
+            <form method="post" action="/rules-admin/delete" style="display:inline"
+                  onsubmit="return confirm('删除文件「{{ f.name }}」并从知识图谱移除？')">
+              <input type="hidden" name="name" value="{{ f.name }}">
+              <button type="submit" class="ghost">删除</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h3>索引状态</h3>
+    {% if status.running %}
+      <p class="ok"><b>索引进行中…</b> 文档已入库，正在抽取实体关系（此阶段图尚未生成，节点/边数暂为 0）。</p>
+    {% elif status.error %}
+      <p class="err"><b>索引失败</b>：{{ status.error }}</p>
+    {% elif status.built and status.nodes > 0 %}
+      <p class="ok"><b>索引完成，可查询。</b></p>
+    {% else %}
+      <p class="muted">尚未建索引——上传文件（自动增量索引）或点下方「全量重建索引」。</p>
+    {% endif %}
+    <table class="kv">
+      <tr><td>入库文档</td><td>{% if status.done %}{{ status.docs }} 份{% else %}—{% endif %}</td></tr>
+      <tr><td>知识图谱规模</td><td><b>{{ status.nodes }}</b> 节点 / <b>{{ status.edges }}</b> 边</td></tr>
+    </table>
+    <form method="post" action="/rules-admin/index" style="margin-top:8px"
+          onsubmit="return confirm('全量重建索引会重新抽取所有文件，耗时较长，确定？')">
+      <button type="submit" class="ghost">全量重建索引（换模型/修复时用）</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3>手动查询（验证索引效果）</h3>
+    <div class="inline" style="margin-bottom:8px">
+      <input type="text" id="q" placeholder="如：退货运费谁承担" style="flex:1">
+      <button type="button" class="save-btn" onclick="doQuery()">查询</button>
+    </div>
+    <div id="result" class="muted" style="white-space:pre-wrap"></div>
+  </div>
+
+  <script>
+    async function doQuery() {
+      const q = document.getElementById('q').value.trim();
+      const box = document.getElementById('result');
+      if (!q) { box.textContent = '请输入问题'; return; }
+      box.textContent = '查询中（知识图谱检索 + 生成答案，约 30~60 秒）…';
+      try {
+        const fd = new FormData();
+        fd.append('q', q);
+        const r = await fetch('/rules-admin/query', { method: 'POST', body: fd });
+        const data = await r.json();
+        box.textContent = data.status === 'ok' ? data.answer : ('查询失败：' + data.message);
+      } catch (e) {
+        box.textContent = '查询失败：' + e;
+      }
+    }
+  </script>
+{% endblock %}
