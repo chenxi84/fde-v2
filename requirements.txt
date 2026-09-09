@@ -15,7 +15,7 @@ xlrd>=2.0
 apscheduler>=3.10
 markdown>=3.0
 sqlglot>=25.0
-statsforecast==2.0.3
+statsforecast==2.1.1
 
 # 可选：PostgreSQL 驱动（仅 Docker/PostgreSQL 部署需要，默认 SQLite 无需）
 psycopg2-binary>=2.9
