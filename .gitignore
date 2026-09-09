@@ -68,3 +68,6 @@ config/kg_storage/
 # 制度库：README 说明入库，制度文件本身私有不提交
 config/rules/*
 !config/rules/README.md
+
+# 流程编排（Flow）：运行时经前端页面动态创建/编辑，属用户数据，不入库
+_flow_*.yaml
