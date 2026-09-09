@@ -43,15 +43,23 @@ AI 代理会按九步法自动推进（架构设计 → 应用详设 → 编码 
 
 > **部署验收 ≠ 开发验收**：部署只需「装依赖 → 打 FDE-PATCH → 启动 → 冒烟（可选）」，**不需要**跑 `scanner` / `verify_chain` / `verify_view` —— 那些是【开发阶段】的验收（见 `AGENTS.md`「先判断场景」）。
 
-> 一句话：**本机（含 Windows / Mac）用 pip 直接跑；Linux 服务器默认用容器化。**
+> 一句话：**本机（含 Windows / Mac）用 uv 或 pip 直接跑（uv 更快，推荐）；Linux 服务器默认用容器化。**
 
 ## 二、运行（本机开发 · Windows / Mac / Linux）
 
 > **本机开发一律用这种方式**（直接 pip + Python 启动，无需 Docker）。容器化部署仅用于 Linux 服务器，见「三」。
 
-**1. 安装依赖（必须遵守 requirements.txt）**：
+**1. 安装依赖**：
 
-> 务必 `pip install -r requirements.txt` 一次性装全——**不要自行判断/逐个 pip install**（会漏装 agentscope 的 `service`/`storage-sql` extras 与 `aiosqlite`），也**不要装成别的版本**（`agentscope` 锁 `==2.0.6`，环境里已装 2.0.7 必须重装对齐，否则 Agent 对话报 `finished_reason: error`）。
+> 两种方式效果等价，**uv 更快**（依赖解析快 + 缓存，反复部署热缓存可秒级）。务必一次性装全——**不要自行判断/逐个装**（会漏装 agentscope 的 `service`/`storage-sql` extras 与 `aiosqlite`），也**不要装成别的版本**（`agentscope` 锁 `==2.0.6`，环境里已装 2.0.7 必须重装对齐，否则 Agent 对话报 `finished_reason: error`）。
+
+方式一（推荐 · uv，依赖版本由 `uv.lock` 锁定）：
+
+```bash
+pip install uv && uv sync --frozen --no-dev
+```
+
+方式二（pip）：
 
 ```bash
 pip install -r requirements.txt
@@ -77,7 +85,7 @@ python -m fde_platform.agent_service        # Agent 编排进程 → http://127.
 > **Windows 平台注意**：若用 venv 虚拟环境，其可执行文件在 `venv\Scripts\`（`venv\Scripts\pip.exe`、`venv\Scripts\python.exe`），**不是** Linux 的 `venv/bin/`。完整步骤：
 > ```bash
 > python -m venv venv
-> venv\Scripts\pip install -r requirements.txt
+> venv\Scripts\pip install uv && uv sync --frozen --no-dev   # 或 venv\Scripts\pip install -r requirements.txt
 > venv\Scripts\python main.py
 > ```
 

@@ -1,0 +1,36 @@
+[project]
+name = "fde-v2"
+version = "2.1.0"
+description = "FDE 领域驱动 + 约定优于配置业务平台"
+requires-python = ">=3.11"
+
+dependencies = [
+    # 核心（必须，缺一平台无法正常运行）
+    "flask>=2.0",
+    "waitress>=2.0",
+    "cryptography>=3.0",
+    "python-dotenv>=1.0",
+    "agentscope[service,storage-sql]==2.0.6",
+    "aiosqlite>=0.19",
+    "tzlocal>=5.0",
+    "openai>=1.0",
+    "openpyxl>=3.0",
+    "xlrd>=2.0",
+    "apscheduler>=3.10",
+    "markdown>=3.0",
+    "sqlglot>=25.0",
+    "statsforecast==2.1.1",
+    # 可选：PostgreSQL 驱动（仅 Docker/PostgreSQL 部署需要，默认 SQLite 无需）
+    "psycopg2-binary>=2.9",
+    # 可选：知识图谱（LightRAG 语义问答 + 可视化）
+    "lightrag-hku>=1.5",
+    "pyvis>=0.3",
+]
+
+[project.optional-dependencies]
+embed = [
+    # 独立 embedding 服务依赖（文本→向量），主进程不装
+    "sentence-transformers>=3.0",
+    "fastapi>=0.100",
+    "uvicorn>=0.23",
+]

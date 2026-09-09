@@ -110,11 +110,11 @@ fde-v2/
 
 ## 快速开始
 
-**环境**：Python 3.10+。前端验收另需 `pip install playwright && python -m playwright install chromium`。
+**环境**：Python 3.11+。前端验收另需 `pip install playwright && python -m playwright install chromium`。
 
 ```bash
-# 1. 安装依赖（必须用 requirements.txt 一次性装全，勿自行逐个装/改版本；agentscope 锁 ==2.0.6）
-pip install -r requirements.txt
+# 1. 安装依赖（uv 更快，推荐；或 pip install -r requirements.txt，效果等价）
+pip install uv && uv sync --frozen --no-dev
 
 # 2. 打 FDE-PATCH（Docker 构建自动执行；本机开发必须手动跑，否则 Agent 对话报错）
 python scripts/patch_agentscope.py
