@@ -6,7 +6,7 @@
       <div class="card">
         <div class="hd"><h3>工作流</h3></div>
         <div class="bd">
-          <button class="b-pri b-sm" style="width:100%; margin-bottom:8px" @click="newFlow()">＋ 新建流程</button>
+          <button class="b-pri b-sm" style="width:100%; margin-bottom:8px" x-show="isAdmin" @click="newFlow()">＋ 新建流程</button>
           <template x-if="!flows.length">
             <div class="empty">暂无流程</div>
           </template>
@@ -14,7 +14,7 @@
             <div class="nav-item" @click="edit(f)" :class="{ on: editing && editing.key === f.key }"
               style="display:flex; align-items:center; justify-content:space-between">
               <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap" x-text="f.name"></span>
-              <button class="b-dng b-sm" style="padding:1px 7px" title="删除流程" @click.stop="remove(f)">×</button>
+              <button class="b-dng b-sm" style="padding:1px 7px" title="删除流程" x-show="isAdmin" @click.stop="remove(f)">×</button>
             </div>
           </template>
         </div>
