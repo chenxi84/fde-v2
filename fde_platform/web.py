@@ -1088,6 +1088,18 @@ def api_agent_schedules():
         return jsonify({"status": "error", "message": str(e)})
 
 
+def _local_timezone() -> str:
+    """本地 IANA 时区名（定时任务 cron 触发时区）。FDE_TIMEZONE 可显式指定。"""
+    tz = os.environ.get("FDE_TIMEZONE", "").strip()
+    if tz:
+        return tz
+    try:
+        from tzlocal import get_localzone
+        return get_localzone().key
+    except Exception:
+        return "Asia/Shanghai"
+
+
 @app.route("/api/agent-schedules", methods=["POST"])
 def api_agent_schedule_create():
     """创建自主运行定时任务（按 cron 唤醒对应组 leader，按 mode 执行）。
@@ -1130,6 +1142,7 @@ def api_agent_schedule_create():
         "name": name,
         "description": description,
         "cron_expression": cron,
+        "timezone": _local_timezone(),
         "agent_id": agent_id,
         "chat_model_config": {
             "type": "deepseek_credential", "credential_id": _AGENT2_CRED,
