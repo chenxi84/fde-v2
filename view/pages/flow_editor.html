@@ -106,6 +106,11 @@
                     </div>
                     <div class="tagline" style="margin-top:10px">
                       <input x-model="editing.nodes[sel].id" placeholder="节点 id" style="flex:1">
+                      <select x-model="editing.nodes[sel].type" style="width:150px">
+                        <template x-for="t in nodeTypes" :key="t.value">
+                          <option :value="t.value" x-text="t.label"></option>
+                        </template>
+                      </select>
                       <select x-model="editing.nodes[sel].role">
                         <option value="">（无角色）</option>
                         <template x-for="r in roles" :key="r.type">
@@ -113,7 +118,15 @@
                         </template>
                       </select>
                     </div>
-                    <textarea x-model="editing.nodes[sel].task" rows="3" placeholder="任务文本（可用 {上游结果键} 占位）" style="width:100%; margin-top:6px"></textarea>
+                    <textarea x-show="editing.nodes[sel].type === 'agent'" x-model="editing.nodes[sel].task" rows="3" placeholder="任务文本（可用 {上游结果键} 占位）" style="width:100%; margin-top:6px"></textarea>
+                    <div x-show="editing.nodes[sel].type === 'call'" style="margin-top:6px">
+                      <input x-model="editing.nodes[sel].call.service" placeholder="服务名（app.service）" style="width:100%">
+                      <textarea x-model="editing.nodes[sel].call.args" rows="3" placeholder='args（JSON，可用 {上游结果键} 占位）' style="width:100%; margin-top:6px"></textarea>
+                    </div>
+                    <div x-show="editing.nodes[sel].type === 'skill'" style="margin-top:6px">
+                      <input x-model="editing.nodes[sel].skill.name" placeholder="已发布技能名" style="width:100%">
+                      <textarea x-model="editing.nodes[sel].skill.args" rows="3" placeholder='args（JSON，可用 {上游结果键} 占位）' style="width:100%; margin-top:6px"></textarea>
+                    </div>
                     <div class="tagline" style="margin-top:6px">
                       <input x-model="editing.nodes[sel].output" placeholder="结果键 output" style="flex:1">
                       <input x-model="editing.nodes[sel].input" placeholder="输入键（逗号分隔）" style="flex:1">
@@ -156,6 +169,11 @@
                   <div style="border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:10px">
                     <div class="tagline">
                       <input x-model="n.id" placeholder="节点 id（如 forecast）" style="flex:1">
+                      <select x-model="n.type" style="width:150px">
+                        <template x-for="t in nodeTypes" :key="t.value">
+                          <option :value="t.value" x-text="t.label"></option>
+                        </template>
+                      </select>
                       <select x-model="n.role">
                         <option value="">（无角色）</option>
                         <template x-for="r in roles" :key="r.type">
@@ -164,7 +182,15 @@
                       </select>
                       <button class="b-dng b-sm" @click="removeNode(i)">删除</button>
                     </div>
-                    <textarea x-model="n.task" rows="2" placeholder="任务文本（可用 {上游结果键} 占位）" style="width:100%; margin-top:6px"></textarea>
+                    <textarea x-show="n.type === 'agent'" x-model="n.task" rows="2" placeholder="任务文本（可用 {上游结果键} 占位）" style="width:100%; margin-top:6px"></textarea>
+                    <div x-show="n.type === 'call'" style="margin-top:6px">
+                      <input x-model="n.call.service" placeholder="服务名（app.service）" style="width:100%">
+                      <textarea x-model="n.call.args" rows="2" placeholder='args（JSON，可用 {上游结果键} 占位）' style="width:100%; margin-top:6px"></textarea>
+                    </div>
+                    <div x-show="n.type === 'skill'" style="margin-top:6px">
+                      <input x-model="n.skill.name" placeholder="已发布技能名" style="width:100%">
+                      <textarea x-model="n.skill.args" rows="2" placeholder='args（JSON，可用 {上游结果键} 占位）' style="width:100%; margin-top:6px"></textarea>
+                    </div>
                     <div class="tagline" style="margin-top:6px">
                       <input x-model="n.output" placeholder="结果键 output" style="flex:1">
                       <input x-model="n.input" placeholder="输入键（逗号分隔）" style="flex:1">

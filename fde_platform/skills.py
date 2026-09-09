@@ -263,12 +263,13 @@ def published_skills() -> list:
         conn.close()
 
 
-def run_skill(name: str, platform, user) -> dict:
+def run_skill(name: str, platform, user, init_state: dict = None) -> dict:
     """确定性执行一个已发布 skill：按 steps 顺序调 tool，占位符从 state 填充。
 
     与「注入 prompt 让 leader 自由执行」不同，这里是**确定性**的：不经过 LLM，
     直接按固定步骤顺序调工具，前一步的 output 结果填后一步 args 里的 {{key}} 占位符。
-    供 scheduler 的 skill 模式（定时任务）调用。
+    init_state 作为初始 state（供第一步 args 的 {{key}} 占位符填充外部输入）。
+    供 Flow 编排的 skill 节点调用。
     """
     from fde import FdeError
     from fde_platform import agentscope_bridge as bridge
@@ -278,7 +279,7 @@ def run_skill(name: str, platform, user) -> dict:
         raise FdeError(f"skill 不存在：{name}")
     if skill.get("status") != "approved":
         raise FdeError(f"skill 未发布（当前 {skill.get('status')}）：{name}")
-    state: dict = {}
+    state: dict = dict(init_state or {})
     for st in skill["steps"]:
         args = {}
         for k, v in (st.get("args") or {}).items():

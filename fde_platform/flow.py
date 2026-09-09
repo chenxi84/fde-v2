@@ -14,9 +14,15 @@
 条件表达式 ``{key, op, value}``，op 支持 contains / equals / not_empty / empty /
 gt / lt / gte / lte（value 可选，缺省视 op 而定）。判断对象是 state 里的值。
 
-节点执行 = 轻量 ReAct 循环（``llm.chat`` + ``bridge.execute``），工具按角色过滤
-（``agent_roles.allowed_tools_for_role``）。每步 ``output`` 结果键写入共享 state，
-``input`` 依赖的上游结果键用于填充 ``{key}`` 占位符。
+节点执行按 ``type`` 分流（缺省 agent，向后兼容）：
+- ``agent``：轻量 ReAct 循环（``llm.chat`` + ``bridge.execute``），工具按角色过滤
+  （``agent_roles.allowed_tools_for_role``）。
+- ``call``：确定性直调应用服务（``bridge.execute``），``call.service``（app.service）
+  转 tool 名、``call.args`` 经 ``{key}`` 占位符填充，无 LLM。
+- ``skill``：确定性跑已发布技能（``skills.run_skill``），``skill.name`` + ``skill.args``
+  作初始 state，无 LLM。
+
+每步 ``output`` 结果键写入共享 state，``input`` 依赖的上游结果键用于填充 ``{key}`` 占位符。
 
 进度上报：写入 config/flow_runs.db（只保留最近一次），供 platform_flow_progress /
 前端「编排执行」区读取。
@@ -29,6 +35,7 @@ from pathlib import Path
 
 import yaml
 
+from fde import FdeError
 from fde_platform import agent_roles
 from fde_platform import agentscope_bridge as bridge
 from fde_platform import llm
@@ -84,7 +91,7 @@ def list_flows() -> list[dict]:
     return [
         {"name": n, "key": f.get("key", ""), "group": f.get("group", ""),
          "description": f.get("description", ""),
-         "nodes": f.get("nodes") or _normalize_nodes(f)}
+         "nodes": _normalize_nodes(f)}
         for n, f in sorted(_load_flows().items())
     ]
 
@@ -164,14 +171,22 @@ def get_progress() -> dict | None:
 # ── 声明归一化 + 条件判断 + 执行 ─────────────────────────
 
 def _normalize_nodes(flow: dict) -> list[dict]:
-    """steps（顺序）或 nodes（DAG）统一成 nodes（含 id + depends_on）。"""
+    """steps（顺序）或 nodes（DAG）统一成 nodes（含 id + depends_on + type）。
+
+    type 缺省为 agent（智能体 ReAct）；可显式 call（直调服务）/ skill（跑已发布技能）。
+    """
+    def _with_defaults(n: dict) -> dict:
+        node = dict(n)
+        node.setdefault("type", "agent")
+        return node
+
     if "nodes" in flow:
-        return [dict(n) for n in flow["nodes"] if isinstance(n, dict)]
+        return [_with_defaults(n) for n in flow["nodes"] if isinstance(n, dict)]
     nodes = []
     for i, step in enumerate(flow.get("steps", [])):
         if not isinstance(step, dict):
             continue
-        node = dict(step)
+        node = _with_defaults(step)
         node.setdefault("id", f"step{i + 1}")
         node.setdefault("depends_on", [] if i == 0 else [f"step{i}"])
         nodes.append(node)
@@ -259,16 +274,66 @@ def _run_node(platform, user, role: str, task: str) -> str:
     return "（节点未产出结论）"
 
 
-def _execute_node(node: dict, state: dict, platform, user):
-    """执行单节点：when 不满足返回 None（跳过）；否则执行，until 不满足则循环。"""
+def _fill_args(args: dict, state: dict, inputs: list) -> dict:
+    """用 state 填充 args 里各字符串值的 {key} 占位符（非字符串值原样保留）。"""
+    out = {}
+    for k, v in (args or {}).items():
+        out[k] = _fill(v, state, inputs) if isinstance(v, str) else v
+    return out
+
+
+def _execute_call_node(node: dict, state: dict, platform, user, group: str = ""):
+    """type=call：确定性直调应用服务（bridge.execute），无 LLM。"""
+    call = node.get("call") or {}
+    service = str(call.get("service", "")).strip()
+    if not service:
+        raise FdeError("call 节点缺 service（形如 app.service）")
+    # app.service → group__app__service（bridge 索引 key；group 由 flow 归属补全）
+    tool_name = service.replace(".", "__")
+    if group:
+        tool_name = f"{group}__{tool_name}"
+    args = _fill_args(call.get("args") or {}, state, node.get("input"))
+    raw = bridge.execute(platform, user, tool_name, args)
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        data = raw
+    if isinstance(data, dict) and data.get("error"):
+        raise FdeError(f"call {service} 失败：{data['error']}")
+    return data
+
+
+def _execute_skill_node(node: dict, state: dict, platform, user):
+    """type=skill：确定性跑一个已发布技能（skills.run_skill），无 LLM。"""
+    from fde_platform import skills
+
+    skill = node.get("skill") or {}
+    name = str(skill.get("name", "")).strip()
+    if not name:
+        raise FdeError("skill 节点缺 name（已发布技能名）")
+    init_state = _fill_args(skill.get("args") or {}, state, node.get("input"))
+    return skills.run_skill(name, platform, user, init_state=init_state)
+
+
+def _execute_node(node: dict, state: dict, platform, user, group: str = ""):
+    """执行单节点：when 不满足返回 None（跳过）；否则按 type 执行，until 不满足则循环。
+
+    type：call（直调服务）/ skill（跑技能）/ agent（智能体 ReAct，默认）。
+    """
     if not _check_condition(node.get("when"), state):
         return None
     output_key = node.get("output")
     max_loop = max(1, int(node.get("max_loop", 1)))
+    ntype = node.get("type", "agent")
     result = ""
     for _ in range(max_loop):
-        task = _fill(str(node.get("task", "")), state, node.get("input"))
-        result = _run_node(platform, user, node.get("role", ""), task)
+        if ntype == "call":
+            result = _execute_call_node(node, state, platform, user, group)
+        elif ntype == "skill":
+            result = _execute_skill_node(node, state, platform, user)
+        else:  # agent（默认，向后兼容旧 YAML 无 type）
+            task = _fill(str(node.get("task", "")), state, node.get("input"))
+            result = _run_node(platform, user, node.get("role", ""), task)
         if output_key:
             state[output_key] = result  # 先写 output，供 until 判断
         until = node.get("until")
@@ -277,14 +342,14 @@ def _execute_node(node: dict, state: dict, platform, user):
     return result
 
 
-def _run_ready(nids: list[str], node_by_id: dict, state: dict, platform, user) -> dict:
+def _run_ready(nids: list[str], node_by_id: dict, state: dict, platform, user, group: str = "") -> dict:
     """并行执行一批就绪节点，返回 {node_id: result}（result 为 None 表示跳过）。"""
     results: dict = {}
     if not nids:
         return results
     with ThreadPoolExecutor(max_workers=len(nids)) as ex:
         futures = {
-            ex.submit(_execute_node, node_by_id[nid], state, platform, user): nid
+            ex.submit(_execute_node, node_by_id[nid], state, platform, user, group): nid
             for nid in nids
         }
         for fut in as_completed(futures):
@@ -302,6 +367,7 @@ def run_flow(name: str, platform, user) -> dict:
     if flow is None:
         return {"error": f"flow 不存在：{name}"}
     nodes = _normalize_nodes(flow)
+    group = flow.get("group", "")
     node_by_id = {n.get("id"): n for n in nodes if n.get("id")}
     deps = {nid: set(node_by_id[nid].get("depends_on") or []) for nid in node_by_id}
     total = len(node_by_id)
@@ -312,7 +378,7 @@ def run_flow(name: str, platform, user) -> dict:
         ready = [nid for nid in deps if nid not in done and deps[nid] <= done]
         if not ready:
             break  # 循环依赖或缺失上游：终止，避免死循环
-        for nid, result in _run_ready(ready, node_by_id, state, platform, user).items():
+        for nid, result in _run_ready(ready, node_by_id, state, platform, user, group).items():
             node = node_by_id[nid]
             if result is None:
                 continue  # when 跳过：output 不写 state

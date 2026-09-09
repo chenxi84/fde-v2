@@ -16,6 +16,74 @@ function _esc(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
 }
 
+/* call/skill 节点的 args 编辑为 JSON 文本，保存/导出时解析；非法/空 → {} */
+function _parseArgs(text) {
+  if (!text || !String(text).trim()) return {};
+  try {
+    const v = JSON.parse(text);
+    return v && typeof v === "object" ? v : {};
+  } catch {
+    return {};
+  }
+}
+
+/* 节点类型（call=直调服务 / skill=跑技能 / agent=智能体，缺省 agent） */
+const NODE_TYPES = [
+  { value: "agent", label: "智能体（自然语言）" },
+  { value: "call", label: "调用服务（确定性）" },
+  { value: "skill", label: "执行技能（确定性）" },
+];
+
+function _jsonText(obj) {
+  if (!obj || typeof obj !== "object" || Object.keys(obj).length === 0) return "";
+  return JSON.stringify(obj, null, 2);
+}
+
+/* raw 节点（后端/YAML）→ 编辑态（args 转 JSON 文本，input/depends_on 转逗号串） */
+function _nodeToEditing(n) {
+  return {
+    id: n.id || "", role: n.role || "", task: n.task || "", output: n.output || "",
+    input: (n.input || []).join(", "), depends_on: (n.depends_on || []).join(", "),
+    type: n.type || "agent",
+    call: { service: (n.call && n.call.service) || "", args: _jsonText(n.call && n.call.args) },
+    skill: { name: (n.skill && n.skill.name) || "", args: _jsonText(n.skill && n.skill.args) },
+    x: n.x ?? null, y: n.y ?? null,
+    when: n.when || { key: "", op: "", value: "" },
+    until: n.until || { key: "", op: "", value: "" },
+    max_loop: n.max_loop || "",
+  };
+}
+
+/* 新建节点的默认字段（type 缺省 agent） */
+function _emptyNode(over = {}) {
+  return {
+    id: "", role: "", task: "", output: "", input: "", depends_on: "",
+    type: "agent", call: { service: "", args: "" }, skill: { name: "", args: "" },
+    x: null, y: null,
+    when: { key: "", op: "", value: "" },
+    until: { key: "", op: "", value: "" },
+    max_loop: "",
+    ...over,
+  };
+}
+
+/* 编辑态 → raw 节点（args JSON 文本解析成对象；agent 省略 type 字段） */
+function _nodeFromEditing(n) {
+  const node = {
+    id: n.id.trim(), role: n.role, task: n.task, output: n.output,
+    input: _split(n.input), depends_on: _split(n.depends_on),
+    x: n.x ?? undefined, y: n.y ?? undefined,
+    when: n.when && n.when.key ? n.when : null,
+    until: n.until && n.until.key ? n.until : null,
+    max_loop: n.max_loop ? Number(n.max_loop) : undefined,
+  };
+  const type = n.type || "agent";
+  if (type !== "agent") node.type = type;
+  if (type === "call") node.call = { service: (n.call.service || "").trim(), args: _parseArgs(n.call.args) };
+  if (type === "skill") node.skill = { name: (n.skill.name || "").trim(), args: _parseArgs(n.skill.args) };
+  return node;
+}
+
 export function pageFlowEditor() {
   const self = Alpine.reactive({
     tpl: "",
@@ -25,6 +93,7 @@ export function pageFlowEditor() {
     showNew: false,
     form: { group: "", key: "", name: "", description: "" },
     ops: OPS,
+    nodeTypes: NODE_TYPES,   // 节点类型下拉（agent/call/skill）
     tab: "canvas",    // canvas = 画布；form = 表单；yaml = YAML 源码
     yamlText: "",
 
@@ -58,17 +127,10 @@ export function pageFlowEditor() {
     },
 
     edit(f) {
-      // 深拷贝 + input/depends_on 数组转逗号串（便于编辑），保留画布坐标 x/y。
+      // 深拷贝 + input/depends_on 数组转逗号串（便于编辑），保留画布坐标 x/y 与节点 type。
       self.editing = {
         group: f.group, key: f.key, name: f.name, description: f.description,
-        nodes: (f.nodes || []).map((n) => ({
-          id: n.id || "", role: n.role || "", task: n.task || "", output: n.output || "",
-          input: (n.input || []).join(", "), depends_on: (n.depends_on || []).join(", "),
-          x: n.x ?? null, y: n.y ?? null,
-          when: n.when || { key: "", op: "", value: "" },
-          until: n.until || { key: "", op: "", value: "" },
-          max_loop: n.max_loop || "",
-        })),
+        nodes: (f.nodes || []).map(_nodeToEditing),
       };
       self.showNew = false;
       self.sel = null;
@@ -90,13 +152,7 @@ export function pageFlowEditor() {
     showYaml() { self.yamlText = self.toYaml(self.editing); self.tab = "yaml"; },
 
     addNode() {
-      self.editing.nodes.push({
-        id: "", role: "", task: "", output: "", input: "", depends_on: "",
-        x: null, y: null,
-        when: { key: "", op: "", value: "" },
-        until: { key: "", op: "", value: "" },
-        max_loop: "",
-      });
+      self.editing.nodes.push(_emptyNode());
       self.sel = self.editing.nodes.length - 1;
     },
 
@@ -107,13 +163,7 @@ export function pageFlowEditor() {
       nodes.forEach((n) => { if ((n.y ?? 0) > maxY) maxY = n.y; });
       let id = "node" + (nodes.length + 1), k = 2;
       while (nodes.some((m) => m.id === id)) id = "node" + (nodes.length + 1) + "_" + k++;
-      nodes.push({
-        id, role: role || "", task: "", output: "", input: "", depends_on: "",
-        x: 40, y: maxY + NODE_H + 24,
-        when: { key: "", op: "", value: "" },
-        until: { key: "", op: "", value: "" },
-        max_loop: "",
-      });
+      nodes.push(_emptyNode({ id, role: role || "", x: 40, y: maxY + NODE_H + 24 }));
       self.sel = nodes.length - 1;
     },
 
@@ -149,14 +199,7 @@ export function pageFlowEditor() {
     async saveEdit() {
       const nodes = self.editing.nodes
         .filter((n) => n.id && n.id.trim())
-        .map((n) => ({
-          id: n.id.trim(), role: n.role, task: n.task, output: n.output,
-          input: _split(n.input), depends_on: _split(n.depends_on),
-          x: n.x ?? undefined, y: n.y ?? undefined,   // 保留画布坐标（undefined 会被 JSON 丢弃）
-          when: n.when && n.when.key ? n.when : null,
-          until: n.until && n.until.key ? n.until : null,
-          max_loop: n.max_loop ? Number(n.max_loop) : undefined,
-        }));
+        .map(_nodeFromEditing);
       await post("/api/flows", {
         group: self.editing.group, key: self.editing.key,
         name: self.editing.name, description: self.editing.description, nodes,
@@ -180,6 +223,17 @@ export function pageFlowEditor() {
       L.push("nodes:");
       for (const n of e.nodes) {
         L.push(`  - id: ${n.id}`);
+        const type = n.type || "agent";
+        if (type !== "agent") L.push(`    type: ${type}`);
+        if (type === "call") {
+          L.push(`    call:`);
+          L.push(`      service: ${n.call.service}`);
+          L.push(`      args: ${JSON.stringify(_parseArgs(n.call.args))}`);
+        } else if (type === "skill") {
+          L.push(`    skill:`);
+          L.push(`      name: ${n.skill.name}`);
+          L.push(`      args: ${JSON.stringify(_parseArgs(n.skill.args))}`);
+        }
         if (n.role) L.push(`    role: ${n.role}`);
         if (n.task) L.push(`    task: ${n.task}`);
         if (n.output) L.push(`    output: ${n.output}`);
