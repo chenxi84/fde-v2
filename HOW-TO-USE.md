@@ -38,16 +38,17 @@ AI 代理会按九步法自动推进（架构设计 → 应用详设 → 编码 
 
 | 场景 | 部署方式 |
 |---|---|
-| **Windows / Mac 本机开发** | pip + Python 直接跑（双进程）→ 见「二、运行」 |
+| **Windows / Mac 本机开发** | uv/pip + Python 直接跑（双进程）→ 见「二、运行」 |
 | **Linux 服务器部署** | **默认容器化**（Docker Compose，含 nginx / postgres / agent-service）→ 见「三、Docker 部署」 |
+| **Windows 服务器生产部署** | **默认直接跑**（uv/pip + 进程管理器常驻，不走 Docker）；除非特别强调才 WSL2 + Docker → 见「三」末「Windows 服务器」 |
 
 > **部署验收 ≠ 开发验收**：部署只需「装依赖 → 打 FDE-PATCH → 启动 → 冒烟（可选）」，**不需要**跑 `scanner` / `verify_chain` / `verify_view` —— 那些是【开发阶段】的验收（见 `AGENTS.md`「先判断场景」）。
 
-> 一句话：**本机（含 Windows / Mac）用 uv 或 pip 直接跑（uv 更快，推荐）；Linux 服务器默认用容器化。**
+> 一句话：**本机（含 Windows / Mac）用 uv 或 pip 直接跑（uv 更快，推荐）；Linux 服务器默认容器化；Windows 服务器生产也默认直接跑（不走 Docker），见「三」末「Windows 服务器」小节。**
 
 ## 二、运行（本机开发 · Windows / Mac / Linux）
 
-> **本机开发一律用这种方式**（直接 pip + Python 启动，无需 Docker）。容器化部署仅用于 Linux 服务器，见「三」。
+> **本机开发一律用这种方式**（直接 pip + Python 启动，无需 Docker）。容器化部署用于 Linux 服务器（见「三」）；Windows 服务器生产部署见「三」末「Windows 服务器」小节。
 
 **1. 安装依赖**：
 
@@ -170,6 +171,23 @@ bash scripts/deploy.sh <服务器IP> [SSH用户名]
 脚本流程：`git push origin master` → 服务器 `git pull` → `docker-compose down` → `docker-compose build --no-cache` → `docker-compose up -d` → curl 健康检查 → 本地跑冒烟测试。
 
 > 冒烟测试也可单独运行：`python scripts/smoke_test.py <服务器IP>`，验证登录与核心服务是否正常。
+
+### Windows 服务器生产部署
+
+Windows 当**生产服务器对外服务**时，**默认不走 Docker**——直接跑 + 进程管理器常驻即可（与「二、运行」一致）；**除非特别强调要容器化**，才走 WSL2 + Docker。
+
+**默认方式：直接跑 + 进程管理器常驻（不走 Docker）**
+
+照「二、运行」装依赖 + 起两个进程，但**必须用进程管理器保证常驻**（否则注销/重启进程就停）：
+
+- **NSSM**（推荐）：把 `python main.py` 和 `python -m fde_platform.agent_service` 分别注册为 Windows 服务，开机自启、崩溃自动拉起。
+- **任务计划程序**：建「启动时 / 登录时」任务分别跑两个进程。
+
+> 注意：此方式不含 nginx / postgres 容器。默认 SQLite 已够用；若需 PostgreSQL 要单独装，对外 HTTPS 需自行用 IIS / Nginx for Windows 反向代理到 `:4000`。
+
+**（仅特别强调容器化时）WSL2 + Docker Compose**
+
+在 Windows Server 上装 WSL2（Linux 发行版）+ Docker，然后照本节「三」操作——`docker compose up -d` 拉起 nginx / fde-v2 / postgres / agent-service，与 Linux 部署一致、可复现。不用 Docker Desktop 跑 Linux 容器对外（那是开发工具）。
 
 ---
 
