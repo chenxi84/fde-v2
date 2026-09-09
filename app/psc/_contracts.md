@@ -129,7 +129,7 @@ scan_alert(material_no*, version_no=None:string)
 ```json
 {
  "material_no": "M9-BEAM",
- "biz_date": "2026-09-06",
+ "biz_date": "2026-09-09",
  "inbound_qty": 0.0,
  "outbound_qty": 0.0,
  "balance": 0.0,
@@ -324,6 +324,8 @@ get(version_no*)
 get_active()
 list(version_no=None:string, lock_status=None:string, page=None:integer, size=None:integer)
 publish(version_no*)
+unfreeze(version_no*)
+    — 冻结版本回退到草稿（解冻）：供计划员修正误冻结的版本后重新编辑。
 ```
 
 ### get/list 示例
@@ -332,10 +334,10 @@ publish(version_no*)
 ### list 返回项示例
 ```json
 {
- "version_no": "202610",
- "anchor_period": "2026-10",
- "opening_date": "2026-10-01",
- "lock_status": "冻结"
+ "version_no": "202612",
+ "anchor_period": "2026-12",
+ "opening_date": "2026-12-01",
+ "lock_status": "草稿"
 }
 ```
 
@@ -600,6 +602,6 @@ run_batch(fit_version=None:string)
  "inv_days": 38.73,
  "changeover_cnt": 4,
  "abnormal_flag": false,
- "status": "已生效"
+ "status": "待复核"
 }
 ```

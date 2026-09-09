@@ -1,6 +1,6 @@
 /* app/psc/md_monthly_version/view.js —— 月度版本主数据页工厂（与 md_monthly_version.py 同文件夹）
-   主数据：独立创建（版本号 YYYYMM）；状态机 草稿 --publish--> 发布（锁定） --freeze--> 冻结（单向不可逆）。
-   契约无 update / delete / import_batch → 无编辑入口、无删除；单据变更仅经 publish / freeze。 */
+   主数据：独立创建（版本号 YYYYMM）；状态机 草稿 --publish--> 发布（锁定） --freeze--> 冻结 --unfreeze--> 草稿（可回退）。
+   契约无 update / delete / import_batch → 无编辑入口、无删除；单据变更仅经 publish / freeze / unfreeze。 */
 import { svc, hue, toast } from "/view/lib/api.js";
 import { pageable } from "/view/lib/shell.js";
 
@@ -55,7 +55,7 @@ export default function pageMdMonthlyVersion() {
     },
     closeX() { self.modalX.open = false; },
 
-    /* ---- 状态机动作：行内操作列与模态页脚共用（草稿→发布；发布（锁定）→冻结；冻结终态无按钮）
+    /* ---- 状态机动作：行内操作列与模态页脚共用（草稿→发布；发布（锁定）→冻结；冻结→草稿回退）
            字面量逐项书写，勿变量拼名 ---- */
     async act(d, kind) {
       const no = d.version_no;
@@ -63,11 +63,13 @@ export default function pageMdMonthlyVersion() {
         let r = null;
         if (kind === "publish") r = await svc("md_monthly_version", "publish", { version_no: no });
         else if (kind === "freeze") r = await svc("md_monthly_version", "freeze", { version_no: no });
+        else if (kind === "unfreeze") r = await svc("md_monthly_version", "unfreeze", { version_no: no });
         else return;
-        toast(`${kind === "publish" ? "版本发布成功，预测已锁定" : "版本冻结成功"} · ${no}`);
+        const msg = { publish: "版本发布成功，预测已锁定", freeze: "版本冻结成功", unfreeze: "版本已回退到草稿" }[kind];
+        toast(`${msg} · ${no}`);
         if (self.modalX.open && r) self.modalX.d = r;   // 已开模态原地刷新
         await self.list.load(self.list.page);           // 列表刷新当前页
-      } catch { /* 非法流转（仅草稿可发布/仅发布（锁定）可冻结/冻结不可逆）等由 api.js 统一 toast */ }
+      } catch { /* 非法流转（仅草稿可发布/仅发布（锁定）可冻结/仅冻结可回退）等由 api.js 统一 toast */ }
     },
 
     /* ---- 创建表单 ---- */

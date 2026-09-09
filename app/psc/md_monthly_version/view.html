@@ -2,7 +2,7 @@
   <!-- ══ 过滤区：标题 + 版本号精确匹配 + 状态 chips（与 list(version_no, lock_status, page, size) 一一对应；契约无 keyword，不设搜索框） ══ -->
   <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
     <b>月度版本台账</b>
-    <span class="muted" style="font-size:12px">状态机 · 草稿 → 发布（锁定） → 冻结（冻结不可逆）</span>
+    <span class="muted" style="font-size:12px">状态机 · 草稿 → 发布（锁定） → 冻结 → 回退草稿</span>
     <div class="right tagline" style="gap:8px; flex-wrap:wrap">
       <div class="chips">
         <template x-for="s in ['', '草稿', '发布（锁定）', '冻结']" :key="s || '全部'">
@@ -32,6 +32,7 @@
           <td class="right rowact">
             <button class="b-pri b-sm" x-show="d.lock_status === '草稿'" @click="act(d, 'publish')">发布</button>
             <button class="b-pri b-sm" x-show="d.lock_status === '发布（锁定）'" @click="act(d, 'freeze')">冻结</button>
+            <button class="b-ghost b-sm" x-show="d.lock_status === '冻结'" @click="act(d, 'unfreeze')">回退</button>
           </td>
         </tr>
       </template>
@@ -79,7 +80,7 @@
           <div class="sec">状态信息</div>
           <div class="kv">
             <div style="grid-column: span 2"><div class="k">流转规则</div><div class="v">
-              单向流转：草稿 --publish--&gt; 发布（锁定） --freeze--&gt; 冻结，冻结不可逆</div></div>
+              草稿 --publish--&gt; 发布（锁定） --freeze--&gt; 冻结 --unfreeze--&gt; 草稿（可回退）</div></div>
           </div>
 
           <details class="raw"><summary>原始数据</summary>
@@ -90,9 +91,9 @@
     <div class="modal-ft" x-show="modalX.d">
       <template x-if="modalX.d">
         <div class="tagline" style="gap:8px">
-          <span class="muted" x-show="modalX.d.lock_status === '冻结'">已冻结 · 终态，无可用操作</span>
           <button class="b-pri" x-show="modalX.d.lock_status === '草稿'" @click="act(modalX.d, 'publish')">发布</button>
           <button class="b-pri" x-show="modalX.d.lock_status === '发布（锁定）'" @click="act(modalX.d, 'freeze')">冻结</button>
+          <button class="b-ghost" x-show="modalX.d.lock_status === '冻结'" @click="act(modalX.d, 'unfreeze')">回退到草稿</button>
         </div>
       </template>
     </div>

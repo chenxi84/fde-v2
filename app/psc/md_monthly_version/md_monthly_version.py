@@ -129,11 +129,41 @@ class MdMonthlyVersion:
         if status == "草稿":
             raise FdeError("仅发布（锁定）状态可冻结")
         if status == "冻结":
-            raise FdeError("版本已冻结，不可逆")
+            raise FdeError("版本已冻结")
 
         self.db.execute(
             "UPDATE md_monthly_version SET lock_status = ? WHERE version_no = ?",
             ("冻结", version_no),
+        )
+        return self.get(version_no)
+
+    def unfreeze(self, version_no: str):
+        """冻结版本回退到草稿（解冻）：供计划员修正误冻结的版本后重新编辑。
+
+        约束：仅「冻结」状态可回退；回退后该版本变回活跃（草稿），
+        故须维持 BR-06「同一时刻仅一个活跃版本」——若已存在其他活跃版本则拒绝。
+        """
+        version_no = self._clean(version_no)
+        if not version_no:
+            raise FdeError("版本号不能为空")
+
+        row = self._row(version_no)
+        if row is None:
+            raise FdeError("版本记录不存在")
+
+        if row["lock_status"] != "冻结":
+            raise FdeError("仅冻结状态可回退")
+
+        active = self._get_active_row()
+        if active is not None:
+            raise FdeError(
+                f"已存在活跃版本 {active['version_no']}（{active['lock_status']}）。"
+                f"请先冻结该版本后再回退。"
+            )
+
+        self.db.execute(
+            "UPDATE md_monthly_version SET lock_status = ? WHERE version_no = ?",
+            ("草稿", version_no),
         )
         return self.get(version_no)
 

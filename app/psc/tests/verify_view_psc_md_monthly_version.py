@@ -1,5 +1,5 @@
 """e2e 前端验收 - psc:md_monthly_version（月度版本）
-断言：路由渲染防粘滞 → 造数后列表有数据 → 模态全字段 → 状态机（草稿→发布（锁定）→冻结）
+断言：路由渲染防粘滞 → 造数后列表有数据 → 模态全字段 → 状态机（草稿→发布（锁定）→冻结→回退草稿）
 + 创建表单落库/校验 → 全程 0 console error / 0 pageerror / 0 HTTP≥400。
 运行：python app/psc/tests/verify_view_psc_md_monthly_version.py
 """
@@ -69,7 +69,7 @@ def wait_up(port, timeout=30):
 
 # §0 自足造数：V202607（冻结态：create→publish→freeze）+ V202608（草稿·当前唯一活跃版本）。
 # version_no 纯 YYYYMM；anchor_period 须 YYYY-MM（与历史台账期间一致）；opening_date 为 YYYY-MM-DD。
-# 契约无 update / delete → 变更仅经 publish / freeze。
+# 契约无 update / delete → 变更仅经 publish / freeze / unfreeze。
 SEED_JS = r"""async () => {
   const call = async (svc, params) => {
     const r = await fetch(`/api/apps/psc/md_monthly_version/call/${svc}`, {
@@ -87,7 +87,7 @@ SEED_JS = r"""async () => {
     return data;
   };
 
-  // V202607：先建 → publish → freeze（冻结为终态、非活跃）
+  // V202607：先建 → publish → freeze（冻结为归档态、非活跃）
   await call("create", {version_no: "202607", anchor_period: "2026-07", opening_date: "2026-07-01"});
   await call("publish", {version_no: "202607"});
   await call("freeze", {version_no: "202607"});
@@ -292,16 +292,16 @@ def main():
             assert ft.locator('button:has-text("删除")').count() == 0, "草稿态页脚不应有删除按钮（无 delete 服务）"
             close_modal(page, modal)
 
-            step("§3 冻结态详情模态无动作按钮（202607）")
+            step("§3 冻结态详情模态含回退按钮（202607）")
             page.locator('table.tbl tr.data .b-link:has-text("202607")').first.click()
             modal = wait_modal(page)
             txt = modal.inner_text()
             assert "冻结" in txt, "冻结态模态缺状态回显"
-            assert "已冻结" in txt, "冻结态页脚缺终态提示（已冻结 · 终态）"
             ft = modal.locator(".modal-ft")
             for forbidden in ["发布", "冻结"]:
                 assert ft.locator(f'button:visible:has-text("{forbidden}")').count() == 0, \
-                    f"冻结态页脚不应出现 {forbidden} 按钮（冻结不可逆）"
+                    f"冻结态页脚不应出现 {forbidden} 按钮"
+            assert ft.locator('button:visible:has-text("回退")').count() == 1, "冻结态页脚应有回退按钮"
             close_modal(page, modal)
 
             # ===================== §4.1 状态机（草稿→发布（锁定）→冻结，按 lock_status x-show）=====================
@@ -335,11 +335,35 @@ def main():
             row_608 = page.locator('table.tbl tr.data:has-text("202608")').first
             assert "冻结" in row_608.inner_text(), "冻结后行状态应变为 冻结"
 
-            step("§4.1 冻结终态行内无按钮（202607 / 202608 均冻结）")
+            step("§4.1 冻结行内仅回退按钮（202607 / 202608 均冻结）")
             for no in ["202607", "202608"]:
                 r = page.locator(f'table.tbl tr.data:has-text("{no}")').first
-                assert r.locator('button:visible:has-text("发布")').count() == 0, f"{no} 冻结终态不应有发布按钮"
-                assert r.locator('button:visible:has-text("冻结")').count() == 0, f"{no} 冻结终态不应有冻结按钮"
+                assert r.locator('button:visible:has-text("发布")').count() == 0, f"{no} 冻结态不应有发布按钮"
+                assert r.locator('button:visible:has-text("冻结")').count() == 0, f"{no} 冻结态不应有冻结按钮"
+                assert r.locator('button:visible:has-text("回退")').count() == 1, f"{no} 冻结态应有回退按钮"
+
+            step("§4.1 冻结 → 草稿（回退）：行内【回退】202608")
+            row_608 = page.locator('table.tbl tr.data:has-text("202608")').first
+            assert row_608.locator('button:visible:has-text("回退")').count() == 1, "冻结行内应有回退按钮"
+            row_608.locator('button:visible:has-text("回退")').first.click()
+            expect_toast(page, "版本已回退到草稿")
+            page.wait_for_timeout(700)
+            row_608 = page.locator('table.tbl tr.data:has-text("202608")').first
+            assert "草稿" in row_608.inner_text(), "回退后行状态应变为 草稿"
+            assert row_608.locator('button:visible:has-text("发布")').count() == 1, "回退后行内发布按钮应出现"
+            assert row_608.locator('button:visible:has-text("回退")').count() == 0, "回退后行内回退按钮应隐藏"
+
+            # 恢复：回退后 202608 重新成为活跃版本，重新 publish→freeze 归位，
+            # 以维持 §4.2「创建 202609」所需的「全库无活跃版本」前提。
+            step("§4.1 回退后重新冻结 202608（恢复无活跃，供 §4.2 创建 202609）")
+            row_608 = page.locator('table.tbl tr.data:has-text("202608")').first
+            row_608.locator('button:visible:has-text("发布")').first.click()
+            expect_toast(page, "版本发布成功，预测已锁定")
+            page.wait_for_timeout(700)
+            row_608 = page.locator('table.tbl tr.data:has-text("202608")').first
+            row_608.locator('button:visible:has-text("冻结")').first.click()
+            expect_toast(page, "版本冻结成功")
+            page.wait_for_timeout(700)
 
             # ===================== §4.2 创建表单落库与校验 =====================
             step("§4.2 空必填被拒（纯前端校验，模态保持打开）")
