@@ -172,7 +172,7 @@ bash scripts/deploy.sh <服务器IP> [SSH用户名]
 | Web 控制台 | `http://127.0.0.1:4000` | 应用清单、手工调用服务、管理用户/角色、定时任务 |
 | AI Agent | 右侧常驻 Agent 栏（各页面右下侧）+ 「智能体总览」平台页 | 对话式操作应用（需配置 LLM） |
 | MCP 服务 | `python -m fde_platform.mcp_server` | 供外部 AI 工具通过 MCP 协议调用应用 |
-| REST API | `http://127.0.0.1:4000/api/<应用>/<服务>` | 程序化调用 |
+| REST API | `POST http://127.0.0.1:4000/api/apps/<应用>/call/<服务>` | 程序化调用（body = 参数 JSON） |
 
 **页面路由约定**（不是 `/psc`、`/apps`）：
 - 应用组详情：`/group/<组>`（如 `/group/psc`）
