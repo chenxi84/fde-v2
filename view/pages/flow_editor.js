@@ -70,7 +70,8 @@ function _emptyNode(over = {}) {
 /* 编辑态 → raw 节点（args JSON 文本解析成对象；agent 省略 type 字段） */
 function _nodeFromEditing(n) {
   const node = {
-    id: n.id.trim(), role: n.role, task: n.task, output: n.output,
+    id: n.id.trim(), role: n.role, task: n.task,
+    output: (n.output || "").trim() || n.id.trim(),   // output 缺省 = 节点 id（结果默认落 state）
     input: _split(n.input), depends_on: _split(n.depends_on),
     x: n.x ?? undefined, y: n.y ?? undefined,
     when: n.when && n.when.key ? n.when : null,
@@ -89,6 +90,8 @@ export function pageFlowEditor() {
     tpl: "",
     flows: [],
     roles: [],        // 角色下拉 {type, label}
+    services: [],     // call 节点服务下拉 {service, description}
+    skills: [],       // skill 节点技能下拉 {name, description}
     editing: null,    // 当前编辑的 flow {group, key, name, description, nodes}
     showNew: false,
     form: { group: "", key: "", name: "", description: "" },
@@ -108,7 +111,7 @@ export function pageFlowEditor() {
       window.addEventListener("pointermove", self._onMove);
       window.addEventListener("pointerup", self._onUp);
       self.tpl = await fetch(new URL("flow_editor.html", import.meta.url)).then((r) => r.text());
-      await Promise.all([self.load(), self.loadRoles()]);
+      await Promise.all([self.load(), self.loadRoles(), self.loadServices(), self.loadSkills()]);
     },
 
     destroy() {
@@ -124,6 +127,33 @@ export function pageFlowEditor() {
     async loadRoles() {
       const d = await get("/api/agent-overview", { quiet: true }).catch(() => null);
       self.roles = (d && d.roles) ? d.roles.map((r) => ({ type: r.type, label: r.label })) : [];
+    },
+
+    async loadServices() {
+      const d = await get("/api/flow-service-options", { quiet: true }).catch(() => null);
+      self.services = (d && Array.isArray(d)) ? d : [];
+    },
+
+    async loadSkills() {
+      const d = await get("/api/skills", { quiet: true }).catch(() => null);
+      self.skills = (d && Array.isArray(d)) ? d : [];
+    },
+
+    /* 某 skill 的所需入参：从其 steps 的 args 里提取 {{key}} 占位符（去重） */
+    skillInputs(name) {
+      const s = self.skills.find((x) => x.name === name);
+      if (!s) return [];
+      const keys = [];
+      for (const st of (s.steps || [])) {
+        for (const v of Object.values(st.args || {})) {
+          if (typeof v === "string") {
+            for (const m of v.matchAll(/\{\{(\w+)\}\}/g)) {
+              if (!keys.includes(m[1])) keys.push(m[1]);
+            }
+          }
+        }
+      }
+      return keys;
     },
 
     edit(f) {

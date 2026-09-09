@@ -543,6 +543,24 @@ def api_mcp_tools():
     return jsonify({"status": "ok", "data": tools})
 
 
+@app.route("/api/flow-service-options")
+def api_flow_service_options():
+    """流程编排 call 节点的服务下拉：返回「app.service」列表（短名.服务名 + 描述，排除平台工具）。"""
+    options = []
+    for t in platform.all_mcp_tools():
+        meta = t.get("_meta") or {}
+        app_name = meta.get("app_name") or ""
+        svc = meta.get("service") or ""
+        if not app_name or not svc or svc.startswith("platform_"):
+            continue  # 平台工具（__platform__，无 app_name）与内置文件工具（platform_*）排除，只留业务服务
+        options.append({
+            "service": f"{app_name}.{svc}",
+            "description": t.get("description") or "",
+        })
+    options.sort(key=lambda o: o["service"])
+    return jsonify({"status": "ok", "data": options})
+
+
 @app.route("/api/scan")
 def api_scan():
     """静态调用扫描报告（校验 self.fde.call 目标，CONVENTION §10.8）。同步刷新首页缓存。"""
@@ -1157,10 +1175,13 @@ def api_agent_schedule_delete(sid):
 
 @app.route("/api/skills")
 def api_skills():
-    """列出已发布（approved）skill（供自主运行 skill 模式下拉）。"""
+    """列出已发布（approved）skill（供自主运行 skill 模式下拉 + 流程编排 skill 节点入参提示）。"""
     from fde_platform import skills
     return jsonify({"status": "ok", "data": [
-        {"name": s["name"], "description": s.get("description", "")}
+        {"name": s["name"], "description": s.get("description", ""),
+         "steps": [{"tool": st.get("tool", ""), "args": st.get("args", {}),
+                    "output": st.get("output", "")}
+                   for st in s.get("steps", [])]}
         for s in skills.published_skills()
     ]})
 

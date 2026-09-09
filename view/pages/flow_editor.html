@@ -111,7 +111,7 @@
                           <option :value="t.value" x-text="t.label"></option>
                         </template>
                       </select>
-                      <select x-model="editing.nodes[sel].role">
+                      <select x-show="editing.nodes[sel].type === 'agent'" x-model="editing.nodes[sel].role">
                         <option value="">（无角色）</option>
                         <template x-for="r in roles" :key="r.type">
                           <option :value="r.type" x-text="r.label"></option>
@@ -120,15 +120,26 @@
                     </div>
                     <textarea x-show="editing.nodes[sel].type === 'agent'" x-model="editing.nodes[sel].task" rows="3" placeholder="任务文本（可用 {上游结果键} 占位）" style="width:100%; margin-top:6px"></textarea>
                     <div x-show="editing.nodes[sel].type === 'call'" style="margin-top:6px">
-                      <input x-model="editing.nodes[sel].call.service" placeholder="服务名（app.service）" style="width:100%">
+                      <select x-model="editing.nodes[sel].call.service" style="width:100%">
+                        <option value="">（选择服务）</option>
+                        <template x-for="s in services" :key="s.service">
+                          <option :value="s.service" x-text="s.service"></option>
+                        </template>
+                      </select>
                       <textarea x-model="editing.nodes[sel].call.args" rows="3" placeholder='args（JSON，可用 {上游结果键} 占位）' style="width:100%; margin-top:6px"></textarea>
                     </div>
                     <div x-show="editing.nodes[sel].type === 'skill'" style="margin-top:6px">
-                      <input x-model="editing.nodes[sel].skill.name" placeholder="已发布技能名" style="width:100%">
+                      <select x-model="editing.nodes[sel].skill.name" style="width:100%">
+                        <option value="">（选择技能）</option>
+                        <template x-for="s in skills" :key="s.name">
+                          <option :value="s.name" x-text="s.name"></option>
+                        </template>
+                      </select>
+                      <div x-show="skillInputs(editing.nodes[sel].skill.name).length" class="muted" style="font-size:11px; margin-top:4px">所需入参：<span x-text="skillInputs(editing.nodes[sel].skill.name).join('、')"></span></div>
                       <textarea x-model="editing.nodes[sel].skill.args" rows="3" placeholder='args（JSON，可用 {上游结果键} 占位）' style="width:100%; margin-top:6px"></textarea>
                     </div>
                     <div class="tagline" style="margin-top:6px">
-                      <input x-model="editing.nodes[sel].output" placeholder="结果键 output" style="flex:1">
+                      <input x-model="editing.nodes[sel].output" placeholder="结果键（默认 = 节点 id）" style="flex:1">
                       <input x-model="editing.nodes[sel].input" placeholder="输入键（逗号分隔）" style="flex:1">
                     </div>
                     <div class="tagline" style="margin-top:6px">
@@ -174,7 +185,7 @@
                           <option :value="t.value" x-text="t.label"></option>
                         </template>
                       </select>
-                      <select x-model="n.role">
+                      <select x-show="n.type === 'agent'" x-model="n.role">
                         <option value="">（无角色）</option>
                         <template x-for="r in roles" :key="r.type">
                           <option :value="r.type" x-text="r.label"></option>
@@ -184,15 +195,26 @@
                     </div>
                     <textarea x-show="n.type === 'agent'" x-model="n.task" rows="2" placeholder="任务文本（可用 {上游结果键} 占位）" style="width:100%; margin-top:6px"></textarea>
                     <div x-show="n.type === 'call'" style="margin-top:6px">
-                      <input x-model="n.call.service" placeholder="服务名（app.service）" style="width:100%">
+                      <select x-model="n.call.service" style="width:100%">
+                        <option value="">（选择服务）</option>
+                        <template x-for="s in services" :key="s.service">
+                          <option :value="s.service" x-text="s.service"></option>
+                        </template>
+                      </select>
                       <textarea x-model="n.call.args" rows="2" placeholder='args（JSON，可用 {上游结果键} 占位）' style="width:100%; margin-top:6px"></textarea>
                     </div>
                     <div x-show="n.type === 'skill'" style="margin-top:6px">
-                      <input x-model="n.skill.name" placeholder="已发布技能名" style="width:100%">
+                      <select x-model="n.skill.name" style="width:100%">
+                        <option value="">（选择技能）</option>
+                        <template x-for="s in skills" :key="s.name">
+                          <option :value="s.name" x-text="s.name"></option>
+                        </template>
+                      </select>
+                      <div x-show="skillInputs(n.skill.name).length" class="muted" style="font-size:11px; margin-top:4px">所需入参：<span x-text="skillInputs(n.skill.name).join('、')"></span></div>
                       <textarea x-model="n.skill.args" rows="2" placeholder='args（JSON，可用 {上游结果键} 占位）' style="width:100%; margin-top:6px"></textarea>
                     </div>
                     <div class="tagline" style="margin-top:6px">
-                      <input x-model="n.output" placeholder="结果键 output" style="flex:1">
+                      <input x-model="n.output" placeholder="结果键（默认 = 节点 id）" style="flex:1">
                       <input x-model="n.input" placeholder="输入键（逗号分隔）" style="flex:1">
                       <input x-model="n.depends_on" placeholder="依赖节点 id（逗号分隔）" style="flex:1">
                     </div>

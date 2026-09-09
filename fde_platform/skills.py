@@ -15,6 +15,7 @@
 可插拔：删除本模块 + agent_admin 里的引用即无 skill 能力，Agent 照常工作。
 """
 import json
+import re
 import os
 import sqlite3
 from datetime import datetime
@@ -287,6 +288,12 @@ def run_skill(name: str, platform, user, init_state: dict = None) -> dict:
                 for key, val in state.items():
                     v = v.replace("{{" + key + "}}", str(val))
             args[k] = v
+        # 未填充的占位符（state 无对应 key）→ 显式报错，避免把 {{key}} 当字面量传给服务
+        for k, v in args.items():
+            if isinstance(v, str):
+                unfilled = re.findall(r"\{\{(\w+)\}\}", v)
+                if unfilled:
+                    raise FdeError(f"步骤 {st['tool']} 缺少输入参数：{', '.join(unfilled)}")
         raw = bridge.execute(platform, user, st["tool"], args)
         try:
             data = json.loads(raw) if isinstance(raw, str) else raw
