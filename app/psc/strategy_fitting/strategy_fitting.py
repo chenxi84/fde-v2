@@ -11,7 +11,6 @@ class StrategyFitting:
     结果先落表（待复核），人工复核通过后回填物料主数据（已生效）。"""
 
     VALID_STATUSES = ("待复核", "已生效", "已否决")
-    VALID_PRED_METHODS = ("移动平均", "指数平滑", "阶跃检测", "借用参考")
 
     def run(self, material_no: str, fit_version: str):
         """对指定物料发起一次策略拟合（预测拟合 + 库存拟合），结果落表（待复核）。"""
@@ -49,7 +48,7 @@ class StrategyFitting:
         import json
         detail_json = json.dumps(r["detail"], ensure_ascii=False)
 
-        # 自动标记异常：候选为空（数据不足/拟合失败，兜底「指数平滑」）或 winner MASE >= 1（不比季节朴素强）
+        # 自动标记异常：候选为空（数据不足/拟合失败，预测方法留空）或 winner MASE >= 1（不比季节朴素强）
         _detail = r.get("detail") or {}
         _candidates = _detail.get("candidates") or []
         _mase = float(r.get("mase") or 0.0)
@@ -245,9 +244,9 @@ class StrategyFitting:
         if row["status"] != "待复核":
             raise FdeError("仅待复核状态可生效")
 
-        # BR-14 参数跳变过大强制人工二次确认
+        # BR-14 拟合异常（数据不足或 MASE≥1）强制人工二次确认
         if row["abnormal_flag"] and not confirm:
-            raise FdeError("参数跳变过大，需人工确认")
+            raise FdeError("拟合异常（数据不足或 MASE≥1 不可预测），需人工二次确认")
 
         # BR-13/BR-15 复核通过才回填物料主数据（带版本记录，支持回滚）
         import json as _json
@@ -260,17 +259,20 @@ class StrategyFitting:
         except Exception:
             model_blob = None
 
-        self.fde.call(
-            "md_material", "set_fit_params",
-            material_no=clean_material,
-            base_method=row["pred_method"],
-            base_params=row["pred_params"],
-            batch_window=row["batch_window"],
-            service_level=row["fulfill_rate"],
-            fit_version=clean_version,
-            model_blob=model_blob,
-            sigma_l=row["sigma_l"] if "sigma_l" in row.keys() else None,
-        )
+        # 数据不足/拟合失败（pred_method 为空）时无方法可回填：跳过回填，仅登记复核结论，
+        # 物料 base_method 保持为空，销售预测走「预测留空、以人工为准」路径。
+        if row["pred_method"]:
+            self.fde.call(
+                "md_material", "set_fit_params",
+                material_no=clean_material,
+                base_method=row["pred_method"],
+                base_params=row["pred_params"],
+                batch_window=row["batch_window"],
+                service_level=row["fulfill_rate"],
+                fit_version=clean_version,
+                model_blob=model_blob,
+                sigma_l=row["sigma_l"] if "sigma_l" in row.keys() else None,
+            )
 
         self.db.execute(
             "UPDATE strategy_fitting SET status = '已生效' WHERE fit_version = ? AND material_no = ?",
@@ -357,14 +359,16 @@ class StrategyFitting:
 
     # ---- 预测拟合（statsforecast 统计模型池 + cross_validation 回测 + MASE 选 winner + predict）----
 
-    _K_MIN = 12          # 最小训练窗口
-    _RECENT_WINDOW = 6   # 近期窗口（趋势对比，用户自己判断）
+    _K_MIN = 12                # 常规模型最小训练窗口（Auto 模型 + MASE 季节性基线需 ≥12 期）
+    _INTERMITTENT_K_MIN = 4    # 间歇模型最小训练窗口（Croston/TSB 不需季节性，可容忍更少历史）
+    _RECENT_WINDOW = 6         # 近期窗口（趋势对比，用户自己判断）
 
     def _predict_fit(self, history, lead_days=0.0, periods=None):
         """预测拟合：statsforecast 统计模型池 + cross_validation 回测 + MASE 选 winner + predict。
 
-        按历史非零占比分流（常规 AutoTheta/AutoARIMA/AutoETS，间歇 Croston/TSB），
-        SeasonalNaive 始终作 MASE 标尺。lead_days>0 时顺带算响应窗口预测误差 σ_L。
+        按历史非零占比分流（常规 AutoTheta/AutoARIMA/AutoETS，间歇 Croston/TSB）。
+        常规需 ≥12 期，间歇需 ≥4 期；MASE 基线由库函数按 seasonality 从训练集计算
+        （常规/长序列 = 季节性朴素 12，短间歇序列 = naive 1）。lead_days>0 时顺带算 σ_L。
         periods 为真实历史期间（YYYY-MM），用于回测横轴；缺失则回退"今天往前推"。
         返回 dict（pred_method/pred_params/mase/smape/pred_qty/pred_lo/pred_hi/sigma_l/detail）。"""
         import json
@@ -374,7 +378,24 @@ class StrategyFitting:
                                           SeasonalNaive, CrostonOptimized, TSB)
 
         n = len(history)
-        if n < self._K_MIN:
+        if n == 0:
+            return self._default_result()
+
+        # 分流先于门槛：间歇需求（非零占比 < 0.3）可容忍更少历史（Croston/TSB 不需季节性）
+        nonzero_ratio = sum(1 for v in history if v > 0) / n
+        intermittent = nonzero_ratio < 0.3
+        if intermittent:
+            k_min = self._INTERMITTENT_K_MIN
+            # 短间歇序列（<12 期）无法算季节性朴素基线，退化为 naive（y[t−1]）作 MASE 标尺
+            mase_seasonality = 12 if n >= 12 else 1
+            models = [CrostonOptimized(), TSB(alpha_d=0.1, alpha_p=0.1)]
+        else:
+            k_min = self._K_MIN
+            mase_seasonality = 12
+            models = [AutoTheta(season_length=12), AutoARIMA(season_length=12),
+                      AutoETS(season_length=12)]
+
+        if n < k_min:
             return self._default_result()
 
         if periods and len(periods) == n:
@@ -383,34 +404,43 @@ class StrategyFitting:
             ds = pd.date_range(end=pd.Timestamp.today().normalize(), periods=n, freq="MS")
         df = pd.DataFrame({"unique_id": "M", "ds": ds, "y": history})
 
-        nonzero_ratio = sum(1 for v in history if v > 0) / n
-        if nonzero_ratio < 0.3:
-            models = [CrostonOptimized(), TSB(alpha_d=0.1, alpha_p=0.1),
-                      SeasonalNaive(season_length=12)]
-        else:
-            models = [AutoTheta(season_length=12), AutoARIMA(season_length=12),
-                      AutoETS(season_length=12), SeasonalNaive(season_length=12)]
-
+        # 回测窗口数自适应：短序列减少留出窗口，保证每个窗口有足够训练数据
+        n_windows = max(1, min(3, n - k_min))
         sf = StatsForecast(models=models, freq="MS", n_jobs=1)
         try:
-            cv = sf.cross_validation(h=1, df=df, n_windows=3)
+            cv = sf.cross_validation(h=1, df=df, n_windows=n_windows)
         except Exception:
             return self._default_result()
         if cv is None or cv.empty:
             return self._default_result()
 
-        base = float((cv["SeasonalNaive"] - cv["y"]).abs().mean())
+        # MASE 用库版 utilsforecast.losses.mase：分母 = 训练集内 seasonal naive（或 naive）误差，
+        # 教科书定义，比手写「MAE ÷ SeasonalNaive 的 CV 误差」口径更标准。逐模型取跨 cutoff 均值。
+        from utilsforecast.losses import mase as _mase_loss
+        import numpy as np
+        model_names = [str(m) for m in models]
+        mase_map = {}
+        try:
+            mase_df = _mase_loss(cv, models=model_names, seasonality=mase_seasonality, train_df=df)
+            for name in model_names:
+                if name not in mase_df.columns:
+                    continue
+                val = float(mase_df[name].mean())
+                mase_map[name] = round(val, 4) if np.isfinite(val) else 0.0
+        except Exception:
+            mase_map = {}
+
+        # MASE 基线（训练集内 seasonal naive / naive 误差），供详情展示/复核参考
+        _scale = (df["y"].shift(mase_seasonality) - df["y"]).abs().dropna()
+        base = float(_scale.mean()) if len(_scale) else 0.0
+
         candidates = []
         for m in models:
             name = str(m)
-            if name == "SeasonalNaive":
-                continue
             if name not in cv.columns:
                 continue
             preds = cv[name]
             actuals = cv["y"]
-            mae = float((preds - actuals).abs().mean())
-            mase = round(mae / base, 4) if base > 0 else 0.0
             smape_vals = []
             for p, a in zip(preds, actuals):
                 if a <= 0:
@@ -423,8 +453,8 @@ class StrategyFitting:
             steps = [{"period": str(row["ds"].date())[:7],
                       "pred": round(float(row[name]), 2), "actual": row["y"]}
                      for _, row in cv.iterrows()]
-            _p = {"season_length": 12} if name in ("AutoTheta", "AutoARIMA", "AutoETS", "SeasonalNaive") else {}
-            candidates.append({"method": name, "params": _p, "mase": mase,
+            _p = {"season_length": 12} if name in ("AutoTheta", "AutoARIMA", "AutoETS") else {}
+            candidates.append({"method": name, "params": _p, "mase": mase_map.get(name, 0.0),
                                "smape": smape, "steps": steps})
 
         if not candidates:
@@ -553,7 +583,9 @@ class StrategyFitting:
         return round((var ** 0.5) * scale, 4)
 
     def _default_result(self):
-        return {"pred_method": "指数平滑", "pred_params": '{"alpha": 0.3, "trend": false}',
+        # 数据不足/拟合失败：不产出方法（pred_method 留空），仅登记异常待复核，
+        # 避免用「指数平滑」等占位名误导。强行通过时不回填 base_method（见 approve）。
+        return {"pred_method": None, "pred_params": None,
                 "mase": 0.0, "smape": 0.0,
                 "pred_qty": None, "pred_lo": None, "pred_hi": None, "sigma_l": None,
                 "detail": {"candidates": [], "k_min": self._K_MIN,

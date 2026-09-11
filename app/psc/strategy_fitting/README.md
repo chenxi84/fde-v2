@@ -11,7 +11,7 @@
   - `run` 跨应用调用 `md_material.get`（校验物料存在）。
   - `run_batch` 跨应用调用 `md_material.list`（取正常状态物料）。
   - `approve` / `rollback` 跨应用调用 `md_material.set_fit_params`（回填参数，带版本）。
-  - `_load_sales_history` 为 ERP 外部适配器（当前 stub 返回空列表）。
+  - `_load_sales_history` 为历史台账适配器（经 `md_material.history_chain` 取前序链，再 `sales_history.history_series` 取近 24 期干净需求；无台账返回空 → 数据不足兜底）。
 - **引用关系**：`strategy_fitting.material_no` 是对 `md_material.material_no` 的**弱引用**，不建物理外键；拟合结果与回填分离，先落表、人工复核通过（已生效）才回填物料主数据。
 
 ---
@@ -88,8 +88,9 @@
    - `rollback` 回填同物料更早 `fit_version` 且 `status=已生效` 的参数；无上一版则拒绝。
 
 8. **简化实现说明**
-   - 预测拟合取默认方法「指数平滑」+ 默认参数，sMAPE 用历史均值差近似；库存拟合取默认组合（服务系数 1.65、组批窗口 28 天）。真实网格回测/约束优化待接入后替换 `_predict_fit` / `_inventory_fit`。
-   - `_load_sales_history` 为 stub 返回空列表，真实 ERP 接入时只替换该适配器实现。
+   - 预测拟合已接入 statsforecast（常规 AutoTheta/AutoARIMA/AutoETS 需 ≥12 期，间歇 Croston/TSB 需 ≥4 期），cross_validation 回测以 MASE 选 winner 并出 pred_qty/pred_lo/pred_hi；数据不足（常规 <12 期 / 间歇 <4 期）pred_method 留空、abnormal_flag=true。
+   - 库存拟合仍为简化默认组合（服务系数 1.65、组批窗口 28 天），约束优化网格待接入后替换 `_inventory_fit`。
+   - `_load_sales_history` 已接入历史台账适配器（md_material.history_chain + sales_history.history_series），无真实台账时返回空 → 数据不足兜底。
 
 9. **权限由平台控制**：应用不做鉴权；approve/reject/rollback 仅拟合复核人可调用。
 
@@ -106,7 +107,7 @@
 | `物料列表获取失败` | `run_batch` 时 `md_material.list` 调用失败。 | 核对 md_material 应用状态，稍后重试 `run_batch`。 |
 | `拟合结果不存在` | 传入的 `fit_version + material_no` 查不到拟合结果。 | 先调用 `psc__strategy_fitting__list` 核对编号；确认记录存在后再操作。 |
 | `仅待复核状态可生效` | 对非 `待复核` 记录调用了 `approve`。 | 先 `get` 查看当前状态；若已否决则不可生效，若已生效则无需重复通过。 |
-| `参数跳变过大，需人工确认` | 记录 `abnormal_flag=true` 且 `approve` 未传 `confirm=true`。 | 向用户说明参数跳变风险，确认后再以 `confirm=true` 重新 `approve`。 |
+| `拟合异常（数据不足或 MASE≥1 不可预测），需人工二次确认` | 记录 `abnormal_flag=true` 且 `approve` 未传 `confirm=true`。 | 向用户说明拟合异常（数据不足或 MASE≥1），确认后再以 `confirm=true` 重新 `approve`。 |
 | `仅待复核状态可否决` | 对非 `待复核` 记录调用了 `reject`。 | 先 `get` 查看当前状态；已否决/已生效均不可再否决。 |
 | `仅已生效状态可回滚` | 对非 `已生效` 记录调用了 `rollback`。 | 先 `get` 查看当前状态；仅 `已生效` 可回滚。 |
 | `无上一版参数可回滚` | 记录已生效但同物料无更早的已生效拟合记录。 | 无上一版可退回，向用户说明无法回滚。 |

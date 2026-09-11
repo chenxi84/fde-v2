@@ -347,6 +347,21 @@ def run_part(call, step, expect_err, record):
     except Exception as e:
         record(False, f"{e}")
 
+    step("TC-MC-16b 策略拟合前置：补足 M1 历史至 18 期（常规趋势，供 statsforecast 出正常拟合）")
+    try:
+        # 在 2026-01~06 之前补 12 期（2025-01~12）递增趋势：移动平均取末 6 期不变（仍 950），
+        # 但 strategy_fitting 拿到 18 期 → 常规赛道 → Auto 模型拟合 → abnormal_flag=false。
+        rows = []
+        for i in range(12):
+            y = 2025 + i // 12
+            m = (i % 12) + 1
+            rows.append({"material_no": M1, "customer_no": C001,
+                         "period": f"{y}-{m:02d}", "qty": 780 + i * 10})
+        call("sales_history", "import_batch", rows=rows)
+        record(True)
+    except Exception as e:
+        record(False, f"{e}")
+
     step("TC-MC-17 策略拟合（预测拟合 + 库存拟合）")
     try:
         call("strategy_fitting", "run", material_no=M1, fit_version=FIT_202608)

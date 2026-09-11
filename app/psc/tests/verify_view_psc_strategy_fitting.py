@@ -102,6 +102,22 @@ SEED_JS = r"""async () => {
     material_no: "M2", material_name: "移动平均物料B", status: "正常", base_method: "移动平均"
   });
 
+  // 客户 + 历史台账（24 期常规趋势+季节，供 statsforecast 出真实拟合、abnormal_flag=false）
+  await call("md_customer", "create", { customer_no: "C001", customer_name: "客户A" });
+  const seedHist = async (matNo, base) => {
+    const rows = [];
+    for (let i = 0; i < 24; i++) {
+      const yy = 2024 + Math.floor(i / 12);
+      const mm = (i % 12) + 1;
+      const period = `${yy}-${String(mm).padStart(2, "0")}`;
+      const qty = Math.round(base + i * 2 + 18 * Math.sin(i * 2 * Math.PI / 12));
+      rows.push({ material_no: matNo, customer_no: "C001", period, qty });
+    }
+    await call("sales_history", "import_batch", { rows });
+  };
+  await seedHist("M1", 100);
+  await seedHist("M2", 120);
+
   // SF1 M1@202608 待复核（§2/§3 目标）
   await call("strategy_fitting", "run", { material_no: "M1", fit_version: "202608" });
   // SF2 M1@202607 已生效
@@ -362,8 +378,8 @@ def main():
             assert "共 7 条" in page.locator("main").inner_text(), "分页条未显示共 7 条"
             sf1 = find_row(page, "M1", "202608").first
             t1 = sf1.inner_text()
-            assert "M1" in t1 and "202608" in t1 and "指数平滑" in t1 and "待复核" in t1, \
-                f"SF1 行字段缺失：{t1[:120]}"
+            assert "M1" in t1 and "202608" in t1 and "Auto" in t1 and "待复核" in t1, \
+                f"SF1 行字段缺失（期望真实预测方法 Auto*）：{t1[:120]}"
             assert "已生效" in find_row(page, "M1", "202607").first.inner_text(), "SF2 未显示已生效"
             assert "已否决" in find_row(page, "M1", "202606").first.inner_text(), "SF3 未显示已否决"
 
@@ -419,8 +435,8 @@ def main():
                        "预测参数（pred_params）", "服务系数", "安全水位", "组批窗口",
                        "满足率", "库存天数", "切线次数", "异常标记", "状态"]:
                 assert lb in txt, f"详情模态缺字段标签：{lb}"
-            for v in ["M1", "202608", "移动平均物料A", "指数平滑", "0%", "1.65", "28", "95%",
-                      "正常", "待复核", "alpha", "0.3", "trend", "false", "原始数据"]:
+            for v in ["M1", "202608", "移动平均物料A", "Auto", "season_length", "1.65", "28", "95%",
+                      "正常", "待复核", "原始数据"]:
                 assert v in txt, f"详情模态缺值：{v}"
             ft = modal.locator(".modal-ft").first.inner_text()
             assert "复核通过" in ft and "否决" in ft, "待复核页脚缺 复核通过/否决"
