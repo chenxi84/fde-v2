@@ -49,12 +49,18 @@ class StrategyFitting:
         import json
         detail_json = json.dumps(r["detail"], ensure_ascii=False)
 
+        # 自动标记异常：候选为空（数据不足/拟合失败，兜底「指数平滑」）或 winner MASE >= 1（不比季节朴素强）
+        _detail = r.get("detail") or {}
+        _candidates = _detail.get("candidates") or []
+        _mase = float(r.get("mase") or 0.0)
+        abnormal_flag = 1 if (not _candidates or _mase >= 1.0) else 0
+
         # BR-13 拟合结果先落表 status=待复核，人工复核通过才回填
         values = (
             r["pred_method"], r["pred_params"], r["mase"], r["smape"],
             r["pred_qty"], r["pred_lo"], r["pred_hi"], r["sigma_l"], detail_json,
             service_factor, safety_level, batch_window,
-            fulfill_rate, inv_days, changeover_cnt,
+            fulfill_rate, inv_days, changeover_cnt, abnormal_flag,
         )
 
         existing = self.db.execute(
@@ -71,7 +77,7 @@ class StrategyFitting:
                         service_factor, safety_level, batch_window,
                         fulfill_rate, inv_days, changeover_cnt, abnormal_flag, status
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '待复核')
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '待复核')
                 """,
                 (clean_material, clean_version) + values,
             )
@@ -84,7 +90,7 @@ class StrategyFitting:
                         pred_qty = ?, pred_lo = ?, pred_hi = ?, sigma_l = ?, detail_json = ?,
                         service_factor = ?, safety_level = ?, batch_window = ?,
                         fulfill_rate = ?, inv_days = ?, changeover_cnt = ?,
-                        abnormal_flag = 0, status = '待复核'
+                        abnormal_flag = ?, status = '待复核'
                     WHERE fit_version = ? AND material_no = ?
                 """,
                 values + (clean_version, clean_material),

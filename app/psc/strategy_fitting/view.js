@@ -170,7 +170,7 @@ export default function pageStrategyFitting() {
         let r = null;
         if (kind === "approve") {
           const abnormal = !!d.abnormal_flag;
-          if (abnormal && !confirm("参数跳变过大，确认生效？")) return;   // BR-14 二次确认
+          if (abnormal && !confirm("该物料拟合异常（数据不足或 MASE≥1 不可预测），确认仍生效？")) return;   // 异常二次确认
           r = await svc("strategy_fitting", "approve", { ...key, confirm: abnormal });
         } else if (kind === "reject") {
           r = await svc("strategy_fitting", "reject", { ...key });

@@ -200,10 +200,8 @@ class SalesForecast:
             raise FdeError("物料不存在")
 
         base_method = material.get("base_method")
-        if not base_method:
-            raise FdeError("物料未配置基线方法")
         base_params_raw = material.get("base_params")
-        base_params = self._parse_json(base_params_raw)
+        base_params = self._parse_json(base_params_raw) if base_params_raw else {}
         model_blob = material.get("model_blob")
 
         bp_material_no = None
@@ -221,8 +219,11 @@ class SalesForecast:
 
         history = self._load_sales_history(material_no=material_no)
         horizon = {"N+1": 1, "N+2": 2, "N+3": 3}.get(rolling_month, 1)
-        base_qty = self._calc_base_qty(base_method, base_params, history, horizon=horizon,
-                                       model_blob=model_blob)
+        # 未配置基线方法：不报错，基线预测留空，最终值以人工/调整后值为准
+        base_qty = None
+        if base_method:
+            base_qty = self._calc_base_qty(base_method, base_params, history, horizon=horizon,
+                                           model_blob=model_blob)
 
         event_adj = line.get("event_adj") or 0
         base_event_qty = (base_qty + event_adj) if base_qty is not None else None

@@ -176,10 +176,16 @@
           </template>
           <div x-show="!fitCandidates().length" class="muted" style="font-size:12px; margin-bottom:8px">无拟合过程数据</div>
 
+          <div class="sec">复核依据</div>
+          <div class="muted" style="font-size:12px; line-height:1.6; margin-bottom:10px">
+            通过依据：<b>MASE &lt; 1</b>（模型优于「季节朴素」基线）且<b>候选非空</b>（历史 ≥ 12 期、真拟合出模型）。
+            MASE ≥ 1 表示不比直接用去年同期值强（不可预测）；候选为空表示数据不足、兜底成「指数平滑」——这两种都建议否决或人工拍数。
+          </div>
+
           <div class="sec">复核状态</div>
           <div class="kv">
             <div><div class="k">异常标记</div><div class="v"><span class="st" :class="'st-' + abnHue(modalX.d.abnormal_flag)" x-text="abnText(modalX.d.abnormal_flag)"></span></div>
-              <div class="muted" x-show="modalX.d.abnormal_flag === true" style="font-size:11px;color:var(--red, #b91c1c)">参数跳变过大，复核通过须二次确认（BR-14）</div></div>
+              <div class="muted" x-show="modalX.d.abnormal_flag === true" style="font-size:11px;color:var(--red, #b91c1c)">数据不足或 MASE ≥ 1（不可预测），复核通过须二次确认</div></div>
             <div><div class="k">状态</div><div class="v"><span class="st" :class="'st-' + hue(modalX.d.status)" x-text="dash(modalX.d.status)"></span></div></div>
           </div>
 
