@@ -1,0 +1,251 @@
+<!-- 协同总览（组级运转仪表盘）：员工（平台/应用分区）+ 工作流 + 工具 + 定时任务 + 时间线，全部图标化 -->
+<div class="bd">
+
+  <!-- ① KPI 带 -->
+  <div class="card">
+    <div class="hd">
+      <h3>运转概览</h3>
+      <span class="hint">本组智能体 · 技能 · 工作流 · 定时任务</span>
+      <button class="b-ghost b-sm" style="margin-left:auto" @click="refresh()">↻ 刷新</button>
+    </div>
+    <div class="bd">
+      <div class="runtime-stats">
+        <span class="stat"><b x-text="roles.length"></b> 员工</span>
+        <span class="stat"><b x-text="skills.length"></b> 工具</span>
+        <span class="stat"><b x-text="flows.length"></b> 工作流</span>
+        <span class="stat"><b x-text="schedules.length"></b> 定时任务</span>
+        <span class="stat"><b x-text="runtime.teams.length"></b> 活跃团队</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ② 员工（平台 / 应用 分区） -->
+  <div class="card">
+    <div class="hd"><h3>员工（智能体）</h3><span class="hint" x-text="'平台 ' + roles.filter(r => r.kind === '平台').length + ' 人 · 应用 ' + roles.filter(r => r.kind === '业务').length + ' 人'"></span></div>
+    <div class="bd">
+      <!-- 编排器（leader） -->
+      <div style="border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; background:#f8f9fb">
+        <div style="display:flex; align-items:center; gap:8px">
+          <span style="font-size:26px">👑</span>
+          <b x-text="leader ? leader.label : '编排器'"></b>
+          <span class="tag t-amber">编排器</span>
+        </div>
+        <div class="muted" style="font-size:12px; margin-top:6px" x-text="leader ? leader.description : ''"></div>
+      </div>
+
+      <div class="muted" style="font-size:12px; margin:4px 0 8px">👔 平台员工</div>
+      <template x-if="!roles.filter(r => r.kind === '平台').length"><div class="empty">暂无平台员工</div></template>
+      <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(110px,1fr)); gap:10px">
+        <template x-for="r in roles.filter(r => r.kind === '平台')" :key="r.type">
+          <div style="border:1px solid var(--line); border-radius:10px; padding:12px; text-align:center; cursor:pointer; background:#fff; display:flex; flex-direction:column; align-items:center; gap:4px" @click="openModal('employee', r)">
+            <span style="font-size:26px">👔</span>
+            <span style="font-weight:600; font-size:13px" x-text="r.label"></span>
+            <span class="tag t-amber" x-text="r.type"></span>
+            <span class="tag t-teal" x-show="isActive(r)" style="font-size:10px">● 运行中</span>
+          </div>
+        </template>
+      </div>
+
+      <div class="muted" style="font-size:12px; margin:16px 0 8px">👤 应用员工</div>
+      <template x-if="!roles.filter(r => r.kind === '业务').length"><div class="empty">暂无应用员工</div></template>
+      <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(110px,1fr)); gap:10px">
+        <template x-for="r in roles.filter(r => r.kind === '业务')" :key="r.type">
+          <div style="border:1px solid var(--line); border-radius:10px; padding:12px; text-align:center; cursor:pointer; background:#fff; display:flex; flex-direction:column; align-items:center; gap:4px" @click="openModal('employee', r)">
+            <span style="font-size:26px">👤</span>
+            <span style="font-weight:600; font-size:13px" x-text="r.label"></span>
+            <span class="tag t-teal" x-text="r.type"></span>
+            <span class="tag t-teal" x-show="isActive(r)" style="font-size:10px">● 运行中</span>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- ③ 工作流（图标网格） -->
+  <div class="card">
+    <div class="hd"><h3>工作流（流程）</h3><button class="b-ghost b-sm" style="margin-left:auto" @click="gotoFlow()">编排 ↗</button></div>
+    <div class="bd">
+      <template x-if="!flows.length"><div class="empty">暂无工作流</div></template>
+      <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(110px,1fr)); gap:10px">
+        <template x-for="f in flows" :key="f.group + '/' + f.key">
+          <div style="border:1px solid var(--line); border-radius:10px; padding:12px; text-align:center; cursor:pointer; background:#fff; display:flex; flex-direction:column; align-items:center; gap:4px" @click="openModal('flow', f)">
+            <span style="font-size:26px">🔀</span>
+            <span style="font-weight:600; font-size:13px" x-text="f.name"></span>
+            <span class="tag t-slate" x-text="f.nodes.length + ' 节点'"></span>
+            <template x-if="lastRunStatus(f.name)">
+              <span class="tag" :class="runStatusClass(lastRunStatus(f.name))" x-text="runStatus(lastRunStatus(f.name))"></span>
+            </template>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- ④ 工具（skill 图标网格 · 全状态 + admin 操作） -->
+  <div class="card">
+    <div class="hd"><h3>工具（skill）</h3><span class="hint" x-text="'共 ' + skills.length + ' 个'"></span></div>
+    <div class="bd">
+      <template x-if="!skills.length"><div class="empty">暂无技能</div></template>
+      <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(130px,1fr)); gap:10px">
+        <template x-for="s in skills" :key="s.id || s.name">
+          <div style="border:1px solid var(--line); border-radius:10px; padding:12px; text-align:center; background:#fff; display:flex; flex-direction:column; align-items:center; gap:4px">
+            <div style="cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:4px" @click="openModal('skill', s)">
+              <span style="font-size:26px">🔧</span>
+              <span style="font-weight:600; font-size:13px" x-text="s.name"></span>
+              <span class="tag" :class="skillStatusClass(s.status)" x-text="skillStatusLabel(s.status)"></span>
+              <span class="tag t-slate" x-text="s.steps.length + ' 步'"></span>
+              <span class="muted" style="font-size:11px" x-text="s.rating_count ? '★ ' + s.score.toFixed(1) + '（' + s.rating_count + '人）' : '未评分'"></span>
+            </div>
+            <div x-show="isAdmin" style="display:flex; gap:4px; margin-top:4px; flex-wrap:wrap; justify-content:center">
+              <button class="b-pri b-sm" x-show="s.status === 'draft'" @click.stop="skillAction(s.id, 'approve')">审批</button>
+              <button class="b-ghost b-sm" x-show="s.status === 'approved'" @click.stop="skillAction(s.id, 'deprecate')">弃用</button>
+              <button class="b-ghost b-sm" x-show="s.status === 'approved'" @click.stop="skillAction(s.id, 'rate', 5)">评分 5★</button>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- ⑤ 定时任务（图标网格） -->
+  <div class="card">
+    <div class="hd"><h3>定时任务（自主运行）</h3><button class="b-ghost b-sm" style="margin-left:auto" @click="gotoAutopilot()">配置 ↗</button></div>
+    <div class="bd">
+      <template x-if="!schedules.length"><div class="empty">暂无定时任务</div></template>
+      <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(140px,1fr)); gap:10px">
+        <template x-for="s in schedules" :key="s.schedule_id">
+          <div style="border:1px solid var(--line); border-radius:10px; padding:12px; text-align:center; cursor:pointer; background:#fff; display:flex; flex-direction:column; align-items:center; gap:4px" @click="openModal('schedule', s)">
+            <span style="font-size:26px">⏱</span>
+            <span style="font-weight:600; font-size:13px" x-text="s.name"></span>
+            <span class="tag" :class="s.mode === 'flow' ? 't-teal' : s.mode === 'skill' ? 't-amber' : 't-slate'" x-text="scheduleModeLabel(s.mode)"></span>
+            <span class="muted" style="font-size:11px" x-text="scheduleTargetText(s)"></span>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- ⑥ 告警 -->
+  <div class="card">
+    <div class="hd"><h3>告警</h3><span class="hint" x-text="'共 ' + alerts.length + ' 条'"></span><button class="b-ghost b-sm" style="margin-left:auto" @click="gotoAlerts()">详情 ↗</button></div>
+    <div class="bd">
+      <template x-if="!alerts.length"><div class="empty">暂无告警</div></template>
+      <template x-for="a in alerts.slice(0, 10)" :key="a.time + a.title">
+        <div style="display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--line)">
+          <span x-text="alertIcon(a.level)"></span>
+          <span class="tag t-slate" x-text="a.source"></span>
+          <b style="font-size:13px" x-text="a.title"></b>
+          <span class="tag" :class="alertClass(a.level)" x-text="a.level === 'red' ? '严重' : '警告'"></span>
+          <span class="muted mono" style="font-size:11px; margin-left:auto" x-text="a.time"></span>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- ⑦ 运转动态时间线 -->
+  <div class="card">
+    <div class="hd"><h3>运转动态</h3><span class="hint" x-text="'最近 ' + runs.length + ' 次运行'"></span></div>
+    <div class="bd">
+      <template x-if="!runs.length"><div class="empty">暂无运行记录</div></template>
+      <template x-for="r in runs" :key="r.updated_at + r.flow_name">
+        <div style="display:flex; align-items:center; gap:8px; padding:7px 0; border-bottom:1px solid var(--line)">
+          <span class="muted mono" style="font-size:12px" x-text="r.updated_at"></span>
+          <b x-text="r.flow_name"></b>
+          <span class="tag" :class="runStatusClass(r.status)" x-text="runStatus(r.status)"></span>
+          <span class="muted" style="font-size:12px" x-text="'共 ' + r.step_total + ' 步'"></span>
+        </div>
+      </template>
+    </div>
+  </div>
+
+</div>
+
+<!-- 详情模态 -->
+<div class="modal-mask" x-show="modal" @click.self="closeModal()" @keydown.escape.window="closeModal()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div><div class="docno" x-text="modal ? modalTitle(modal) : ''"></div>
+        <div class="sub">协同总览 · 详情</div></div>
+      <button class="x" @click="closeModal()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <!-- 员工详情 -->
+      <template x-if="modal && modal.kind === 'employee'">
+        <div>
+          <div class="sec">基本信息</div>
+          <div class="kv">
+            <div><div class="k">名称</div><div class="v" x-text="modal.data.label"></div></div>
+            <div><div class="k">类型</div><div class="v" x-text="modal.data.kind"></div></div>
+            <div><div class="k">角色标识</div><div class="v mono" x-text="modal.data.type"></div></div>
+            <div><div class="k">归属组</div><div class="v" x-text="modal.data.group ? modal.data.group + ' 组' : '跨组'"></div></div>
+          </div>
+          <div class="sec">职责</div>
+          <div class="muted" x-text="modal.data.description"></div>
+          <template x-if="modal.data.apps.length">
+            <div class="muted" style="margin-top:6px; font-size:12px" x-text="'绑定应用：' + modal.data.apps.map(appShort).join('、')"></div>
+          </template>
+          <template x-if="modal.data.tools.length">
+            <div class="muted" style="font-size:12px" x-text="'绑定工具：' + modal.data.tools.map(toolShort).join('、')"></div>
+          </template>
+          <div class="sec">功能概述</div>
+          <pre style="padding:10px; background:#f8f9fb; border:1px solid var(--line); border-radius:6px; font-size:12px; white-space:pre-wrap" x-text="modal.data.system_prompt"></pre>
+        </div>
+      </template>
+
+      <!-- 技能详情 -->
+      <template x-if="modal && modal.kind === 'skill'">
+        <div>
+          <div class="sec">基本信息</div>
+          <div class="kv">
+            <div><div class="k">名称</div><div class="v" x-text="modal.data.name"></div></div>
+            <div><div class="k">步骤数</div><div class="v" x-text="modal.data.steps.length"></div></div>
+          </div>
+          <div class="sec">触发条件</div>
+          <div class="muted" x-text="modal.data.trigger || '（无）'"></div>
+          <div class="sec">执行步骤</div>
+          <template x-for="(st, i) in modal.data.steps" :key="i">
+            <div class="muted" style="font-size:12px; padding:3px 0" x-text="(i + 1) + '. ' + stepShort(st.tool) + (st.note ? ' — ' + st.note : '')"></div>
+          </template>
+        </div>
+      </template>
+
+      <!-- 工作流详情 -->
+      <template x-if="modal && modal.kind === 'flow'">
+        <div>
+          <div class="sec">基本信息</div>
+          <div class="kv">
+            <div><div class="k">名称</div><div class="v" x-text="modal.data.name"></div></div>
+            <div><div class="k">key</div><div class="v mono" x-text="modal.data.key"></div></div>
+            <div><div class="k">节点数</div><div class="v" x-text="modal.data.nodes.length"></div></div>
+          </div>
+          <div class="sec">描述</div>
+          <div class="muted" x-text="modal.data.description || '（无）'"></div>
+          <div class="sec">节点清单</div>
+          <template x-for="n in modal.data.nodes" :key="n.id">
+            <div style="display:flex; align-items:center; gap:6px; padding:4px 0; border-bottom:1px dashed var(--line)">
+              <span x-text="nodeIcon(n.type)"></span>
+              <b x-text="n.id"></b>
+              <span class="tag t-slate" x-text="nodeTypeLabel(n.type)"></span>
+              <span class="muted" style="font-size:12px" x-text="n.task || (n.call && n.call.service) || (n.skill && n.skill.name) || ''"></span>
+            </div>
+          </template>
+        </div>
+      </template>
+
+      <!-- 定时任务详情 -->
+      <template x-if="modal && modal.kind === 'schedule'">
+        <div>
+          <div class="sec">基本信息</div>
+          <div class="kv">
+            <div><div class="k">名称</div><div class="v" x-text="modal.data.name"></div></div>
+            <div><div class="k">cron</div><div class="v mono" x-text="modal.data.cron"></div></div>
+            <div><div class="k">模式</div><div class="v" x-text="scheduleModeLabel(modal.data.mode)"></div></div>
+            <div><div class="k">指向</div><div class="v" x-text="scheduleTargetText(modal.data)"></div></div>
+          </div>
+          <div class="sec">任务说明</div>
+          <div class="muted" x-text="modal.data.description || '（无）'"></div>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>

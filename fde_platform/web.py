@@ -19,6 +19,7 @@
 """
 import json
 import os
+import re
 import time
 import traceback
 from pathlib import Path
@@ -1062,6 +1063,18 @@ def api_agent2_confirm():
     return Response(gen(), mimetype="text/event-stream")
 
 
+def _parse_schedule_mode(description: str):
+    """从 schedule 的 description 解析 mode + target（flow/skill 模式的固定文案，本模块组装）。"""
+    desc = description or ""
+    m = re.search(r"工作流「(.+?)」", desc)
+    if m:
+        return "flow", m.group(1)
+    m = re.search(r"技能「(.+?)」", desc)
+    if m:
+        return "skill", m.group(1)
+    return "agent", ""
+
+
 @app.route("/api/agent-schedules", methods=["GET"])
 def api_agent_schedules():
     """自主运行定时任务列表（agent_service schedule，唤醒 leader 自主执行）。"""
@@ -1075,11 +1088,15 @@ def api_agent_schedules():
         out = []
         for rec in schedules:
             data = rec.get("data") or {}
+            description = data.get("description") or ""
+            mode, target = _parse_schedule_mode(description)
             out.append({
                 "schedule_id": rec.get("id"),
                 "name": data.get("name") or "",
                 "cron": data.get("cron_expression") or "",
-                "description": data.get("description") or "",
+                "description": description,
+                "mode": mode,
+                "target": target,
                 "permission_mode": data.get("permission_mode") or "dont_ask",
                 "enabled": bool(data.get("enabled", True)),
             })
@@ -1188,15 +1205,66 @@ def api_agent_schedule_delete(sid):
 
 @app.route("/api/skills")
 def api_skills():
-    """列出已发布（approved）skill（供自主运行 skill 模式下拉 + 流程编排 skill 节点入参提示）。"""
+    """skill 列表。默认已发布（approved，供下拉）；?all=1 返回全部（含状态，供协同总览工具区）。"""
     from fde_platform import skills
-    return jsonify({"status": "ok", "data": [
-        {"name": s["name"], "description": s.get("description", ""),
-         "steps": [{"tool": st.get("tool", ""), "args": st.get("args", {}),
-                    "output": st.get("output", "")}
-                   for st in s.get("steps", [])]}
-        for s in skills.published_skills()
-    ]})
+    all_skills = request.args.get("all") == "1"
+    src = skills.list_skills() if all_skills else skills.published_skills()
+
+    def _fmt(s):
+        item = {
+            "id": s.get("id"),
+            "name": s["name"],
+            "description": s.get("description", ""),
+            "trigger": s.get("trigger", ""),
+            "steps": [{"tool": st.get("tool", ""), "args": st.get("args", {}),
+                       "output": st.get("output", "")}
+                      for st in s.get("steps", [])],
+        }
+        if all_skills:
+            item.update({
+                "status": s.get("status"),
+                "version": s.get("version"),
+                "score": s.get("score"),
+                "rating_count": s.get("rating_count"),
+                "usage_count": s.get("usage_count"),
+            })
+        return item
+
+    return jsonify({"status": "ok", "data": [_fmt(s) for s in src]})
+
+
+@app.route("/api/skills/<int:skill_id>/approve", methods=["POST"])
+def api_skill_approve(skill_id):
+    """审批发布 skill（仅 admin）。"""
+    u = users.session_user()
+    if not (u and u.get("is_admin")):
+        return jsonify({"status": "error", "message": "仅管理员可操作"}), 403
+    from fde_platform import skills
+    return jsonify({"status": "ok", "data": skills.approve(skill_id)})
+
+
+@app.route("/api/skills/<int:skill_id>/deprecate", methods=["POST"])
+def api_skill_deprecate(skill_id):
+    """弃用 skill（仅 admin）。"""
+    u = users.session_user()
+    if not (u and u.get("is_admin")):
+        return jsonify({"status": "error", "message": "仅管理员可操作"}), 403
+    from fde_platform import skills
+    return jsonify({"status": "ok", "data": skills.deprecate(skill_id)})
+
+
+@app.route("/api/skills/<int:skill_id>/rate", methods=["POST"])
+def api_skill_rate(skill_id):
+    """给 skill 评分（仅 admin，0~5 累计平均）。"""
+    u = users.session_user()
+    if not (u and u.get("is_admin")):
+        return jsonify({"status": "error", "message": "仅管理员可操作"}), 403
+    from fde_platform import skills
+    body = request.get_json(silent=True) or {}
+    try:
+        return jsonify({"status": "ok", "data": skills.rate(skill_id, body.get("score"))})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
 
 
 @app.route("/api/flows", methods=["GET"])
@@ -1254,6 +1322,18 @@ def api_flow_delete(group, key):
     if "error" in result:
         return jsonify({"status": "error", "message": result["error"]})
     return jsonify({"status": "ok", "data": result})
+
+
+@app.route("/api/flow-runs")
+def api_flow_runs():
+    """最近 N 条 flow 运行历史（协同总览时间线用），?limit= 控制条数。"""
+    from fde_platform import flow
+    limit = request.args.get("limit", "20")
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 20
+    return jsonify({"status": "ok", "data": flow.list_runs(limit)})
 
 
 @app.route("/api/agent-overview")

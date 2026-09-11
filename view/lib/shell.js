@@ -16,20 +16,20 @@
  */
 import { get, dash, fmtTime, tryParse } from "./api.js";
 import { agentRail } from "../pages/agent_rail.js";
-import { pageAgentOverview } from "../pages/agent_overview.js";
 import { pageAlerts } from "../pages/alerts.js";
 import { pageAutopilot } from "../pages/autopilot.js";
 import { pageFlowEditor } from "../pages/flow_editor.js";
+import { pageWorkbench } from "../pages/workbench.js";
 
 /* 平台公共页（可按页面授权） */
 export const PLATFORM_PAGES = [
-  { key: "agent_overview", name: "智能体", ic: "🤖", title: "智能体总览", crumb: "平台设计的智能体角色 · 运行时团队", platform: true },
-  { key: "alerts", name: "告警", ic: "⚠", title: "库存告警", crumb: "巡检发现的库存预警", platform: true },
-  { key: "autopilot", name: "自主运行", ic: "⏱", title: "自主运行", crumb: "定时任务 · 智能体自动执行", platform: true },
-  { key: "flow_editor", name: "流程编排", ic: "🔀", title: "流程编排", crumb: "可视化编辑工作流 · DAG 编排", platform: true },
+  { key: "workbench", name: "AI管家", ic: "🧭", title: "AI管家", crumb: "智能体 · 技能 · 工作流 · 运转全貌", platform: true, top: true },
+  { key: "alerts", name: "告警", ic: "⚠", title: "库存告警", crumb: "巡检发现的库存预警", platform: true, hidden: true },
+  { key: "autopilot", name: "自主运行", ic: "⏱", title: "自主运行", crumb: "定时任务 · 智能体自动执行", platform: true, hidden: true },
+  { key: "flow_editor", name: "流程编排", ic: "🔀", title: "流程编排", crumb: "可视化编辑工作流 · DAG 编排", platform: true, hidden: true },
 ];
 
-const PLATFORM_COMPONENTS = { agent_overview: pageAgentOverview, alerts: pageAlerts, autopilot: pageAutopilot, flow_editor: pageFlowEditor };
+const PLATFORM_COMPONENTS = { workbench: pageWorkbench, alerts: pageAlerts, autopilot: pageAutopilot, flow_editor: pageFlowEditor };
 
 /* x-html 模板片段中的助手函数经 window 全局解析（Alpine 表达式回落 window） */
 window.dash = dash;
@@ -54,11 +54,14 @@ export function createShell({ module, brand, pages, components }) {
       const biz = this.bizPages.filter(
         (p) => this.isAdmin || this.granted.has(this.module + ":" + p.key));
       const plat = PLATFORM_PAGES.filter(
-        (p) => this.isAdmin || this.granted.has("_platform:" + p.key));
-      return [...biz, ...plat];
+        (p) => !p.hidden && (this.isAdmin || this.granted.has("_platform:" + p.key)));
+      const top = plat.filter((p) => p.top);
+      const rest = plat.filter((p) => !p.top);
+      return [...top, ...biz, ...rest];
     },
     get page() {
       return this.menu.find((p) => p.key === this.route)
+        || PLATFORM_PAGES.find((p) => p.key === this.route)
         || this.menu[0] || { title: "", crumb: "" };
     },
 
@@ -86,7 +89,9 @@ export function createShell({ module, brand, pages, components }) {
     syncRoute() {
       const key = (location.hash || "#/dashboard").replace(/^#\//, "") || "dashboard";
       const fallback = this.menu[0] ? this.menu[0].key : "dashboard";
-      this.route = this.menu.some((p) => p.key === key) ? key : fallback;
+      // 可路由 = 菜单里的项，或平台组件注册表里的隐藏页（菜单不显示但从协同总览跳转可达）
+      const routable = this.menu.some((p) => p.key === key) || (key in PLATFORM_COMPONENTS);
+      this.route = routable ? key : fallback;
       /* 页面上下文：业务页 → <module>:<key>；平台页 → _platform:<key>。
          api.js 的 svc() 据此注入 X-Fde-Page（页面授权隐式放行的依据）。 */
       const inBiz = this.bizPages.some((p) => p.key === this.route);

@@ -46,6 +46,8 @@ _PROGRESS_DB = _ROOT / "config" / "flow_runs.db"
 
 _MAX_ROUNDS = 10  # 单节点 ReAct 最大轮次（防失控）
 
+_MAX_RUNS = 50  # 运行历史最多保留条数（协同总览时间线用）
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS flow_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,6 +56,15 @@ CREATE TABLE IF NOT EXISTS flow_runs (
     step_index INTEGER NOT NULL DEFAULT 0,
     step_total INTEGER NOT NULL DEFAULT 0,
     current_role TEXT DEFAULT '',
+    result TEXT DEFAULT '',
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS flow_run_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    flow_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    step_total INTEGER NOT NULL DEFAULT 0,
     result TEXT DEFAULT '',
     updated_at TEXT NOT NULL
 );
@@ -143,14 +154,26 @@ def _report_progress(flow_name: str, status: str, step_index: int,
                      step_total: int, current_role: str, result: str = "") -> None:
     conn = sqlite3.connect(str(_PROGRESS_DB))
     try:
-        conn.execute(_SCHEMA)
-        conn.execute("DELETE FROM flow_runs")  # 只保留最近一次执行
+        conn.executescript(_SCHEMA)
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn.execute("DELETE FROM flow_runs")  # 当前进度只留最近一次
         conn.execute(
             "INSERT INTO flow_runs (flow_name, status, step_index, step_total, "
             "current_role, result, updated_at) VALUES (?,?,?,?,?,?,?)",
-            (flow_name, status, step_index, step_total, current_role, result,
-             datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            (flow_name, status, step_index, step_total, current_role, result, now),
         )
+        if status == "done":
+            # 运行结束：追加一条历史（裁剪到 _MAX_RUNS 条，供协同总览时间线）
+            conn.execute(
+                "INSERT INTO flow_run_history (flow_name, status, step_total, result, updated_at) "
+                "VALUES (?,?,?,?,?)",
+                (flow_name, status, step_total, result, now),
+            )
+            conn.execute(
+                "DELETE FROM flow_run_history WHERE id NOT IN "
+                "(SELECT id FROM flow_run_history ORDER BY id DESC LIMIT ?)",
+                (_MAX_RUNS,),
+            )
         conn.commit()
     finally:
         conn.close()
@@ -161,9 +184,25 @@ def get_progress() -> dict | None:
     conn = sqlite3.connect(str(_PROGRESS_DB))
     conn.row_factory = sqlite3.Row
     try:
-        conn.execute(_SCHEMA)
+        conn.executescript(_SCHEMA)
         row = conn.execute("SELECT * FROM flow_runs ORDER BY id DESC LIMIT 1").fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_runs(limit: int = 20) -> list[dict]:
+    """读最近 N 条 flow 运行历史（时间线，最新在前）。"""
+    conn = sqlite3.connect(str(_PROGRESS_DB))
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.executescript(_SCHEMA)
+        rows = conn.execute(
+            "SELECT flow_name, status, step_total, result, updated_at "
+            "FROM flow_run_history ORDER BY id DESC LIMIT ?",
+            (max(1, min(int(limit), _MAX_RUNS)),),
+        ).fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()
 
