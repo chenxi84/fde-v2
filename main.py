@@ -90,6 +90,17 @@ _web.COMPONENTS = [
      "desc": "SQLite（默认）或 PostgreSQL（设置 DATABASE_URL 即切换，建表/方言自动翻译）。"},
 ]
 
+
+def _port_open(port: int) -> bool:
+    """检测本机端口是否监听（用于判断独立进程是否部署）。"""
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
+            return True
+    except Exception:
+        return False
+
+
 def main():
     names = platform.app_names()
     bar = "=" * 54
@@ -99,6 +110,46 @@ def main():
     from fde_platform.db import db_mode
     print(f"浏览器端 : http://{HOST}:{PORT}")
     print(f"数据库   : {db_mode()}")
+    # 部署信息收集（供首页「平台运行情况」监控区展示）
+    try:
+        import waitress  # noqa: F401
+        _web.WSGI_SERVER = "waitress"
+    except ImportError:
+        _web.WSGI_SERVER = "flask"
+    _db_mode = db_mode()
+    # 更新数据库组件说明：本次实际部署方式
+    for _c in _web.COMPONENTS:
+        if _c["key"] == "db":
+            _c["desc"] = f"本次使用：{_db_mode}。SQLite（默认）或 PostgreSQL（设置 DATABASE_URL 即切换）。"
+            break
+    _web.COMPONENTS.append({
+        "key": "wsgi", "name": "WSGI 服务器", "icon": "🚀",
+        "loaded": _web.WSGI_SERVER == "waitress",
+        "desc": f"本次使用：{'waitress 多线程生产服务器' if _web.WSGI_SERVER == 'waitress' else 'Flask 内置开发服务器（仅开发用）'}。",
+    })
+    _web.RUNTIME_INFO = {
+        "version": VERSION, "url": f"http://{HOST}:{PORT}",
+        "db": _db_mode, "apps": len(names),
+    }
+    # 部署组件（完整部署方案：主进程 / Agent 编排 / Embedding / 反向代理，说明本次是否部署）
+    _agent_on = _port_open(4100)
+    _embed_on = _port_open(9800)
+    _web.COMPONENTS.append({
+        "key": "platform", "name": "平台主进程", "icon": "🖥️", "loaded": True,
+        "desc": "本次已部署：main.py（fde-v2 进程/容器），平台核心服务。",
+    })
+    _web.COMPONENTS.append({
+        "key": "agent_service", "name": "Agent 编排", "icon": "🤖", "loaded": _agent_on,
+        "desc": f"agent-service 独立编排进程（端口 4100）。{'本次已部署（AI 对话可用）。' if _agent_on else '本次未部署（AI 对话不可用）。'}",
+    })
+    _web.COMPONENTS.append({
+        "key": "embed", "name": "Embedding 服务", "icon": "🧬", "loaded": _embed_on,
+        "desc": f"embed 独立服务（端口 9800，BGE 向量化）。{'本次已部署（知识图谱语义检索可用）。' if _embed_on else '本次未部署（知识图谱语义检索不可用）。'}",
+    })
+    _web.COMPONENTS.append({
+        "key": "nginx", "name": "反向代理", "icon": "🌐", "loaded": False,
+        "desc": "nginx 反向代理（HTTPS，docker 部署）。本次未部署（本地直连 4000 端口）。",
+    })
     print(f"鉴权     : {'开启（首次登录 admin/admin，请尽快改密）' if AUTH_ON else '关闭（无认证模式）'}")
     print(f"定时任务 : {'开启（/scheduler）' if SCHED_ON else '关闭'}")
     print(f"大模型配置: {'开启（/llm）' if LLM_ADMIN_ON else '关闭'}")

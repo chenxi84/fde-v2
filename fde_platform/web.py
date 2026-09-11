@@ -52,6 +52,8 @@ PORT = int(os.environ.get("PLATFORM_PORT", 4000))
 
 # 平台组件状态（main.py 启动时收集写入；首页「平台运行情况」监控区读取）
 COMPONENTS = []
+# 运行环境信息（版本/地址/数据库/应用数，main() 启动时写入）
+RUNTIME_INFO = {}
 
 # ── 平台实例（加载一次并缓存）──────────────────────────────
 platform = FdePlatform()
@@ -208,6 +210,7 @@ def index():
         scan=scan,
         app_names=_app_display_names(),
         components=COMPONENTS,
+        runtime_info=RUNTIME_INFO,
     )
 
 
@@ -771,8 +774,20 @@ def _ensure_agent2(group: str = "") -> str | None:
             return None
     if group not in _AGENT2_AGENTS:
         headers = _agent2_headers()
+        name = f"leader_{group}" if group else "leader"
+        # 优先复用已有 leader（按 name 查），避免进程重启后 agent_id 变化导致历史会话查不到
         try:
-            name = f"leader_{group}" if group else "leader"
+            r = httpx.get(f"{AGENT2_BASE}/agent/", headers=headers, timeout=30)
+            r.raise_for_status()
+            for a in r.json().get("agents") or []:
+                data = a.get("data") or {}
+                if data.get("name") == name and a.get("id"):
+                    _AGENT2_AGENTS[group] = a["id"]
+                    return _AGENT2_AGENTS[group]
+        except Exception:
+            pass
+        # 没找到：新建
+        try:
             r = httpx.post(f"{AGENT2_BASE}/agent/", json={
                 "name": name, "system_prompt": _leader_prompt(group),
             }, headers=headers, timeout=30)

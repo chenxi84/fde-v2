@@ -3,19 +3,17 @@
 {% block bodyclass %}home-bleed{% endblock %}
 {% block content %}
   <div class="col">
-    <!-- ── KPI 指标带 ── -->
-    <div class="kpis reveal" style="margin-top:26px">
-      <div class="kpi"><div class="v">{{ groups|length }}</div><div class="k">应用组</div></div>
-      <div class="kpi"><div class="v">{{ total_apps }}</div><div class="k">应用</div></div>
-      {% if scan is defined and scan %}
-        <div class="kpi"><div class="v">{{ scan.total_calls }}</div><div class="k">跨应用调用</div></div>
-        <div class="kpi"><div class="v">{{ scan.apps_scanned }}</div><div class="k">已扫描应用</div></div>
-      {% endif %}
-    </div>
-
     <!-- ── 平台运行情况（本次启动已加载的组件）── -->
     <div class="section-title">平台运行情况 <span class="muted">本次启动已加载的组件 · 点击查看详情</span></div>
     <div x-data="homeComponents()">
+      <div class="muted reveal" style="margin:6px 0 12px; font-size:13px; display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+        <b x-text="'FDE ' + runtime.version"></b>
+        <span class="mono" x-text="runtime.url"></span>
+        <span>· 数据库</span>
+        <span x-text="runtime.db"></span>
+        <span>·</span>
+        <span x-text="runtime.apps + ' 个应用'"></span>
+      </div>
       <div class="reveal" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(140px,1fr)); gap:10px; margin:12px 0">
         <template x-for="(c, i) in components" :key="c.key">
           <div style="border:1px solid var(--line); border-radius:12px; padding:16px 12px; text-align:center; cursor:pointer; background:#fff; display:flex; flex-direction:column; align-items:center; gap:7px" @click="idx = i">
@@ -39,25 +37,39 @@
       </div>
     </div>
 
-    <!-- ── 应用组卡片（主入口：进入应用组 + 应用快速直达）── -->
+    <!-- ── 应用组（图标卡 + 点击进 dashboard + 详情模态）── -->
     <div class="section-title">应用组 · 选择进入</div>
-    <div class="group-grid reveal">
-      {% for g in groups %}
-        <div class="card group-card">
-          <h3>{{ g.name }} <span class="muted">· {{ g.app_count }} 个应用</span></h3>
-          <div class="wl-chips" style="margin-top:10px">
-            {% for a in g.apps %}
-              {% set short = a.split('/')|last %}
-              <span class="wl-chip">
-                <a class="chip" href="/view/{{ g.key }}/#/{{ short }}"
-                   title="进入应用 {{ app_names.get(short, a) }}">{{ app_names.get(short, a) }}</a>
-                <a class="chip-det" href="/app/{{ a }}" title="应用详情 · README / 服务调试 / MCP">详情</a>
-              </span>
-            {% endfor %}
+    <div x-data="homeGroups()">
+      <div class="reveal" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(150px,1fr)); gap:10px; margin:12px 0">
+        <template x-for="(g, gi) in groups" :key="g.key">
+          <div style="border:1px solid var(--line); border-radius:12px; padding:16px 12px; text-align:center; cursor:pointer; background:#fff; display:flex; flex-direction:column; align-items:center; gap:7px" @click="openDetail(gi)">
+            <span style="font-size:30px">📱</span>
+            <span style="font-weight:600; font-size:14px" x-text="g.name"></span>
+            <span class="muted" style="font-size:12px" x-text="g.app_count + ' 个应用'"></span>
+            <button class="b-pri b-sm" @click.stop="enterGroup(g)">进入应用</button>
           </div>
-          <a class="enter-btn" href="/view/{{ g.key }}/">进入 {{ g.name }} 应用组 →</a>
+        </template>
+      </div>
+      <div class="modal-mask" style="align-items:center; padding:24px" x-show="idx !== null" @click.self="idx = null" @keydown.escape.window="idx = null" x-cloak>
+        <div class="modal">
+          <div class="modal-hd">
+            <div><div class="docno" x-text="idx !== null ? groups[idx].name : ''"></div>
+              <div class="sub" x-text="idx !== null ? groups[idx].app_count + ' 个应用' : ''"></div></div>
+            <button class="x" @click="idx = null">✕</button>
+          </div>
+          <div class="modal-bd">
+            <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(96px,1fr)); gap:8px">
+              <template x-for="a in (idx !== null ? groups[idx].apps : [])" :key="a">
+                <a :href="'/app/' + a" style="border:1px solid var(--line); border-radius:10px; padding:10px 6px; text-align:center; text-decoration:none; color:inherit; background:#fff; display:flex; flex-direction:column; align-items:center; gap:5px">
+                  <span style="font-size:22px">📦</span>
+                  <span style="font-size:12px" x-text="a.split('/').pop()"></span>
+                </a>
+              </template>
+            </div>
+          </div>
         </div>
-      {% endfor %}
+      </div>
+    </div>
     </div>
 
     <!-- ── 平台级 Agent（右侧固定栏，复用 agent_rail 组件，默认展开、可收起，状态持久化）── -->
@@ -83,32 +95,16 @@
       }));
       Alpine.data("homeComponents", () => ({
         components: {{ components|tojson }},
+        runtime: {{ runtime_info|tojson }},
         idx: null,
+      }));
+      Alpine.data("homeGroups", () => ({
+        groups: {{ groups|tojson }},
+        idx: null,
+        enterGroup(g) { location.href = "/view/" + g.key + "/"; },
+        openDetail(i) { this.idx = i; },
       }));
       Alpine.start();
     </script>
-
-    {% if scan is defined and scan and scan.sites %}
-    <details class="scan-detail">
-      <summary>静态调用扫描明细 · 跨应用 self.fde.call（§10.8 · {{ scan.total_calls }} 处）</summary>
-      <div class="card">
-        <table class="tbl">
-          <tr><th>调用方</th><th>位置</th><th>目标（应用.服务）</th><th>状态</th></tr>
-          {% for s in scan.sites %}
-          <tr>
-            <td>{{ s.app }}</td>
-            <td class="mono">{{ s.file }}:{{ s.line }}</td>
-            <td class="mono">{{ s.target_app }}.{{ s.target_service }}</td>
-            <td>
-              {% if s.status == 'ok' %}<span class="ok">✓ 正常</span>
-              {% elif s.status == 'dynamic' %}<span class="muted">△ 动态 · 需人工确认</span>
-              {% else %}<span class="err">✗ {{ s.message }}</span>{% endif %}
-            </td>
-          </tr>
-          {% endfor %}
-        </table>
-      </div>
-    </details>
-    {% endif %}
   </div>
 {% endblock %}
