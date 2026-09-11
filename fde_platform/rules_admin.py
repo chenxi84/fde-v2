@@ -1,6 +1,6 @@
-"""FDE v2 平台 — 制度库管理页（可插拔 Blueprint）。
+"""FDE v2 平台 — 知识库管理页（可插拔 Blueprint）。
 
-非结构化制度/政策文件的入口：上传（增量索引）→ 删除（增量删索引）→ 查询。
+非结构化知识文件的入口：上传（增量索引）→ 删除（增量删索引）→ 查询。
 底层复用 knowledge_graph 的 add_doc / remove_doc / build_index / query_sync。
 
 仅 admin 可访问（无鉴权模式全通，与 llm_admin / scheduler 同口径）。

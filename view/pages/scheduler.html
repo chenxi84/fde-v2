@@ -1,0 +1,80 @@
+<!-- 定时任务（scheduler）：定时调用应用服务/API，组级只显示当前组任务 -->
+<div class="bd">
+
+  <div class="card">
+    <div class="hd">
+      <h3>定时任务</h3>
+      <span class="hint" x-text="'共 ' + jobs.length + ' 个 · ' + (group || '全部') + ' 组'"></span>
+      <button class="b-pri b-sm" style="margin-left:auto" @click="openForm()">＋ 新建任务</button>
+    </div>
+    <div class="bd">
+      <template x-if="!jobs.length"><div class="empty">暂无定时任务 —— 点「＋ 新建任务」配置定时调用服务</div></template>
+      <template x-for="j in jobs" :key="j.id">
+        <div style="padding:10px 0; border-bottom:1px solid var(--line)">
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+            <span style="font-size:20px">🔌</span>
+            <b x-text="apiJobName(j)"></b>
+            <span class="tag t-slate mono" x-text="j.cron"></span>
+            <span class="tag" :class="apiJobStatusClass(j)" x-text="apiJobStatus(j)"></span>
+            <span class="tag" :class="j.enabled ? 't-teal' : 't-slate'" x-text="j.enabled ? '启用' : '停用'"></span>
+            <span style="margin-left:auto; display:flex; gap:6px">
+              <button class="b-ghost b-sm" @click="run(j)">运行</button>
+              <button class="b-ghost b-sm" @click="toggle(j)" x-text="j.enabled ? '停用' : '启用'"></button>
+              <button class="b-dng b-sm" @click="remove(j)">删除</button>
+            </span>
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:4px" x-text="j.description || '—'"></div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+</div>
+
+<!-- 新建任务模态 -->
+<div class="modal-mask" x-show="openCreate" @click.self="closeForm()" @keydown.escape.window="closeForm()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div><div class="docno">新建定时任务</div><div class="sub">定时调用应用服务 · 当前组</div></div>
+      <button class="x" @click="closeForm()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="frow">
+        <div>
+          <label class="f">应用</label>
+          <select x-model="form.app">
+            <option value="">（选择应用）</option>
+            <template x-for="a in apps" :key="a"><option :value="a" x-text="a"></option></template>
+          </select>
+        </div>
+        <div>
+          <label class="f">服务</label>
+          <select x-model="form.service">
+            <option value="">（选择服务）</option>
+            <template x-for="s in servicesOf(form.app)" :key="s.service">
+              <option :value="s.service.split('.')[1]" x-text="s.service"></option>
+            </template>
+          </select>
+        </div>
+      </div>
+      <div class="frow" style="margin-top:10px">
+        <div>
+          <label class="f">cron 表达式（分 时 日 月 周）</label>
+          <input x-model="form.cron" placeholder="0 8 * * *">
+        </div>
+      </div>
+      <div class="frow" style="margin-top:10px">
+        <div>
+          <label class="f">描述（可选）</label>
+          <input x-model="form.description" placeholder="这个任务做什么">
+        </div>
+      </div>
+    </div>
+    <div class="modal-ft">
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost" @click="closeForm()">取消</button>
+        <button class="b-pri" @click="save()">创建任务</button>
+      </div>
+    </div>
+  </div>
+</div>

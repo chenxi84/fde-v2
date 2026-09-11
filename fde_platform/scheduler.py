@@ -242,10 +242,20 @@ def get_job(job_id: int):
     return dict(row) if row else None
 
 
-def list_jobs(enabled_only: bool = False) -> list:
+def list_jobs(group: str = None, enabled_only: bool = False) -> list:
     conn = get_conn()
-    sql = "SELECT * FROM jobs" + (" WHERE enabled=1" if enabled_only else "") + " ORDER BY id"
-    rows = conn.execute(sql).fetchall()
+    conds = []
+    params = []
+    if group:
+        conds.append("app_name LIKE ?")
+        params.append(group + "/%")
+    if enabled_only:
+        conds.append("enabled=1")
+    sql = "SELECT * FROM jobs"
+    if conds:
+        sql += " WHERE " + " AND ".join(conds)
+    sql += " ORDER BY id"
+    rows = conn.execute(sql, params).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 

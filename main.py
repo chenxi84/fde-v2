@@ -26,6 +26,7 @@ except ImportError:
     pass
 
 from fde_platform.web import HOST, PORT, VERSION, app, platform  # noqa: E402
+from fde_platform import web as _web  # noqa: E402  # 暴露组件状态给首页监控区
 
 # 启用鉴权（可插拔）：删除 fde_platform/auth.py 与 users.py 后此处 import 失败，
 # 平台自动回落无认证模式，其余代码无需改动。
@@ -72,6 +73,22 @@ try:
     RULES_ADMIN_ON = True
 except ImportError:
     RULES_ADMIN_ON = False
+
+# 组件状态收集（供首页「平台运行情况」监控区展示本次启动已加载的组件）
+_web.COMPONENTS = [
+    {"key": "auth", "name": "鉴权", "icon": "🔐", "loaded": AUTH_ON,
+     "desc": "用户登录与会话、页面/服务级授权。可插拔：删除 auth.py / users.py 即回落无认证模式。"},
+    {"key": "scheduler", "name": "定时任务", "icon": "🔌", "loaded": SCHED_ON,
+     "desc": "按 cron 定时调用应用公共服务，成功/失败落库。可插拔：删除 scheduler.py 即回落无定时任务。"},
+    {"key": "llm", "name": "大模型配置", "icon": "🧠", "loaded": LLM_ADMIN_ON,
+     "desc": "配置 LLM 档案（operator 对话 / vision 视觉 / builder 构建）。未配置不影响应用清单/手工调用/MCP。"},
+    {"key": "agent", "name": "Agent 后端", "icon": "🤖", "loaded": AGENT_ADMIN_ON,
+     "desc": "AgentScope 多智能体编排（leader 建队派活），业务角色下沉到各组 _roles.py。"},
+    {"key": "knowledge", "name": "知识库", "icon": "📚", "loaded": RULES_ADMIN_ON,
+     "desc": "非结构化知识文件（制度/SOP/最佳实践），经 LightRAG 索引后语义检索。"},
+    {"key": "db", "name": "数据库", "icon": "🗄️", "loaded": True,
+     "desc": "SQLite（默认）或 PostgreSQL（设置 DATABASE_URL 即切换，建表/方言自动翻译）。"},
+]
 
 def main():
     names = platform.app_names()

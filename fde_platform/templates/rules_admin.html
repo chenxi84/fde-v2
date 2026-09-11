@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}制度库 · FDE 平台{% endblock %}
+{% block title %}知识库 · FDE 平台{% endblock %}
 {% block content %}
   <p><a href="/">← 应用清单</a></p>
-  <div class="section-title">制度库管理</div>
-  <p class="muted">存放<b>非结构化制度/政策文件</b>（规章制度、SOP、行业规范等自由文本，<code>.md</code>/<code>.txt</code>），
+  <div class="section-title">知识库管理</div>
+  <p class="muted">存放<b>非结构化知识文件</b>（规章制度、SOP、最佳实践、FAQ、行业规范等自由文本，<code>.md</code>/<code>.txt</code>），
      经知识图谱（LightRAG）索引后，Agent 用 <code>platform_query_knowledge</code> 做语义检索。
      应用组（app/）里的结构化业务规则走 <code>read_app_doc</code>，<b>不要</b>放这里。</p>
 

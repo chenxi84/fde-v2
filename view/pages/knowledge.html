@@ -1,0 +1,66 @@
+<!-- 知识库：非结构化知识文件管理（平台级，语义检索） -->
+<div class="bd">
+
+  <!-- 上传 -->
+  <div class="card">
+    <div class="hd"><h3>上传知识文件</h3><span class="hint">.md / .txt · 上传后自动增量索引</span></div>
+    <div class="bd">
+      <div class="tagline" style="gap:10px; flex-wrap:wrap">
+        <input type="file" accept=".md,.txt" @change="upload($event)">
+      </div>
+      <div class="muted" style="font-size:12px; margin-top:8px">
+        存放非结构化知识（规章制度、SOP、最佳实践、FAQ、行业规范）。应用组里的结构化业务规则走 read_app_doc，不要放这里。
+      </div>
+    </div>
+  </div>
+
+  <!-- 文件清单 -->
+  <div class="card">
+    <div class="hd"><h3>文件清单</h3><span class="hint" x-text="'共 ' + files.length + ' 份'"></span></div>
+    <div class="bd">
+      <template x-if="!files.length"><div class="empty">暂无知识文件 —— 上传上面的文件即可开始</div></template>
+      <template x-for="f in files" :key="f.name">
+        <div style="display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--line)">
+          <span style="font-size:18px">📄</span>
+          <code x-text="f.name" style="flex:1"></code>
+          <span class="muted" style="font-size:12px" x-text="fmtSize(f.size)"></span>
+          <button class="b-dng b-sm" @click="remove(f.name)">删除</button>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- 索引状态 -->
+  <div class="card">
+    <div class="hd"><h3>索引状态</h3></div>
+    <div class="bd">
+      <template x-if="index.running">
+        <div class="tag t-amber" style="margin-bottom:8px">索引进行中… 文档已入库，正在抽取实体关系</div>
+      </template>
+      <template x-if="index.error">
+        <div class="tag t-red" style="margin-bottom:8px" x-text="'索引失败：' + index.error"></div>
+      </template>
+      <template x-if="!index.running && !index.error && index.built && index.nodes > 0">
+        <div class="tag t-teal" style="margin-bottom:8px">索引完成，可查询</div>
+      </template>
+      <div class="kv" style="margin-bottom:8px">
+        <div><div class="k">入库文档</div><div class="v" x-text="index.done ? index.docs + ' 份' : '—'"></div></div>
+        <div><div class="k">知识图谱规模</div><div class="v"><b x-text="index.nodes"></b> 节点 / <b x-text="index.edges"></b> 边</div></div>
+      </div>
+      <button class="b-ghost b-sm" @click="rebuild()">全量重建索引（换模型/修复时用）</button>
+    </div>
+  </div>
+
+  <!-- 语义查询 -->
+  <div class="card">
+    <div class="hd"><h3>语义查询</h3><span class="hint">验证索引效果 · 约 30~60 秒</span></div>
+    <div class="bd">
+      <div class="tagline" style="gap:8px">
+        <input x-model="q" placeholder="如：退货运费谁承担" style="flex:1" @keydown.enter="doQuery()">
+        <button class="b-pri b-sm" :disabled="querying" @click="doQuery()" x-text="querying ? '查询中…' : '查询'"></button>
+      </div>
+      <div class="muted" style="white-space:pre-wrap; margin-top:10px" x-text="answer || '（查询结果在此显示）'"></div>
+    </div>
+  </div>
+
+</div>

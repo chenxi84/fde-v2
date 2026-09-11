@@ -13,6 +13,32 @@
       {% endif %}
     </div>
 
+    <!-- ── 平台运行情况（本次启动已加载的组件）── -->
+    <div class="section-title">平台运行情况 <span class="muted">本次启动已加载的组件 · 点击查看详情</span></div>
+    <div x-data="homeComponents()">
+      <div class="reveal" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(140px,1fr)); gap:10px; margin:12px 0">
+        <template x-for="(c, i) in components" :key="c.key">
+          <div style="border:1px solid var(--line); border-radius:12px; padding:16px 12px; text-align:center; cursor:pointer; background:#fff; display:flex; flex-direction:column; align-items:center; gap:7px" @click="idx = i">
+            <span style="font-size:30px" x-text="c.icon"></span>
+            <span style="font-weight:600; font-size:13.5px" x-text="c.name"></span>
+            <span class="st" :class="c.loaded ? 'st-teal' : 'st-slate'" x-text="c.loaded ? '✓ 已加载' : '✗ 未加载'"></span>
+          </div>
+        </template>
+      </div>
+      <div class="modal-mask" style="align-items:center; padding:24px" x-show="idx !== null" @click.self="idx = null" @keydown.escape.window="idx = null" x-cloak>
+        <div class="modal">
+          <div class="modal-hd">
+            <div><div class="docno" x-text="idx !== null ? components[idx].name : ''"></div>
+              <div class="sub">平台组件 · 功能说明</div></div>
+            <button class="x" @click="idx = null">✕</button>
+          </div>
+          <div class="modal-bd">
+            <div class="muted" style="line-height:1.7" x-text="idx !== null ? components[idx].desc : ''"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ── 应用组卡片（主入口：进入应用组 + 应用快速直达）── -->
     <div class="section-title">应用组 · 选择进入</div>
     <div class="group-grid reveal">
@@ -54,6 +80,10 @@
           this.open = !this.open;
           localStorage.setItem("fde.agent.rail", this.open ? "1" : "0");
         },
+      }));
+      Alpine.data("homeComponents", () => ({
+        components: {{ components|tojson }},
+        idx: null,
       }));
       Alpine.start();
     </script>

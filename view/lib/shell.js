@@ -19,6 +19,9 @@ import { agentRail } from "../pages/agent_rail.js";
 import { pageAlerts } from "../pages/alerts.js";
 import { pageAutopilot } from "../pages/autopilot.js";
 import { pageFlowEditor } from "../pages/flow_editor.js";
+import { pageIntegration } from "../pages/integration.js";
+import { pageKnowledge } from "../pages/knowledge.js";
+import { pageScheduler } from "../pages/scheduler.js";
 import { pageWorkbench } from "../pages/workbench.js";
 
 /* 平台公共页（可按页面授权） */
@@ -27,9 +30,12 @@ export const PLATFORM_PAGES = [
   { key: "alerts", name: "告警", ic: "⚠", title: "库存告警", crumb: "巡检发现的库存预警", platform: true, hidden: true },
   { key: "autopilot", name: "自主运行", ic: "⏱", title: "自主运行", crumb: "定时任务 · 智能体自动执行", platform: true, hidden: true },
   { key: "flow_editor", name: "流程编排", ic: "🔀", title: "流程编排", crumb: "可视化编辑工作流 · DAG 编排", platform: true, hidden: true },
+  { key: "scheduler", name: "定时任务", ic: "🔌", title: "定时任务", crumb: "定时调用应用服务 · 当前组", platform: true, hidden: true },
+  { key: "integration", name: "集成", ic: "🔗", title: "集成接口", crumb: "外部系统接口 · 当前组", platform: true, hidden: true },
+  { key: "knowledge", name: "知识库", ic: "📚", title: "知识库", crumb: "非结构化知识 · 语义检索", platform: true, hidden: true },
 ];
 
-const PLATFORM_COMPONENTS = { workbench: pageWorkbench, alerts: pageAlerts, autopilot: pageAutopilot, flow_editor: pageFlowEditor };
+const PLATFORM_COMPONENTS = { workbench: pageWorkbench, alerts: pageAlerts, autopilot: pageAutopilot, flow_editor: pageFlowEditor, scheduler: pageScheduler, integration: pageIntegration, knowledge: pageKnowledge };
 
 /* x-html 模板片段中的助手函数经 window 全局解析（Alpine 表达式回落 window） */
 window.dash = dash;

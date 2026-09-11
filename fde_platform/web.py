@@ -50,12 +50,16 @@ VERSION = "v2.2.0-beta"
 HOST = os.environ.get("PLATFORM_HOST", "127.0.0.1")
 PORT = int(os.environ.get("PLATFORM_PORT", 4000))
 
+# 平台组件状态（main.py 启动时收集写入；首页「平台运行情况」监控区读取）
+COMPONENTS = []
+
 # ── 平台实例（加载一次并缓存）──────────────────────────────
 platform = FdePlatform()
 platform.load_all()
 users.migrate_grant_app_names(platform)  # 历史授权短名 → 组限定名 qualname（幂等）
 
 app = Flask(__name__, template_folder=str(_PKG_DIR / "templates"))
+app.config["TEMPLATES_AUTO_RELOAD"] = True  # 开发便利：模板改动即时生效，无需重启（生产可关闭）
 
 # 会话签名密钥 —— 优先 env SECRET_KEY；否则从文件恢复；再否自动生成并持久化（防开源回退值泄露）
 _SECRET_PATH = _PKG_DIR.parent / "config" / ".secret_key"
@@ -203,6 +207,7 @@ def index():
         port=PORT,
         scan=scan,
         app_names=_app_display_names(),
+        components=COMPONENTS,
     )
 
 
@@ -1336,6 +1341,208 @@ def api_flow_runs():
     return jsonify({"status": "ok", "data": flow.list_runs(limit)})
 
 
+@app.route("/api/scheduler-jobs", methods=["GET"])
+def api_scheduler_jobs():
+    """定时任务（scheduler）清单 + 最近运行。?group= 按组过滤。"""
+    from fde_platform import scheduler
+    group = (request.args.get("group") or "").strip() or None
+    out = []
+    for j in scheduler.list_jobs(group=group):
+        last = scheduler.get_last_run(j["id"])
+        try:
+            params = json.loads(j.get("params_json") or "{}")
+        except (ValueError, TypeError):
+            params = {}
+        out.append({
+            "id": j["id"],
+            "app_name": j.get("app_name") or "",
+            "service": j.get("service") or "",
+            "cron": j.get("cron_expr") or "",
+            "enabled": bool(j.get("enabled", True)),
+            "description": j.get("description") or "",
+            "run_as_user": j.get("run_as_user") or "",
+            "params": params,
+            "last_run": last,
+        })
+    return jsonify({"status": "ok", "data": out})
+
+
+def _scheduler_job_guard(group, job_id):
+    """校验任务存在且属于指定组（组为空时不校验组）。返回 (job, err)。"""
+    from fde_platform import scheduler
+    job = scheduler.get_job(job_id)
+    if not job:
+        return None, "任务不存在"
+    if group and not (job.get("app_name") or "").startswith(group + "/"):
+        return None, f"任务不属于 {group} 组"
+    return job, None
+
+
+@app.route("/api/scheduler-jobs", methods=["POST"])
+def api_scheduler_job_create():
+    """创建定时任务（仅 admin，app_name 必须属于指定组）。"""
+    u = users.session_user()
+    if not (u and u.get("is_admin")):
+        return jsonify({"status": "error", "message": "仅管理员可操作"}), 403
+    from fde_platform import scheduler
+    data = request.get_json(silent=True) or {}
+    group = (data.get("group") or "").strip()
+    app_name = (data.get("app_name") or "").strip()
+    if group and not app_name.startswith(group + "/"):
+        return jsonify({"status": "error", "message": f"只能配置 {group} 组的应用"})
+    ok, msg, jid = scheduler.create_job(
+        app_name, data.get("service", ""), data.get("cron", ""),
+        data.get("params"), data.get("run_as_user", ""),
+        data.get("description", ""), "web", bool(data.get("enabled", True)),
+    )
+    if not ok:
+        return jsonify({"status": "error", "message": msg})
+    return jsonify({"status": "ok", "data": {"id": jid}, "message": msg})
+
+
+@app.route("/api/scheduler-jobs/<int:job_id>/toggle", methods=["POST"])
+def api_scheduler_job_toggle(job_id):
+    """启用/停用定时任务（仅 admin + 组校验）。"""
+    u = users.session_user()
+    if not (u and u.get("is_admin")):
+        return jsonify({"status": "error", "message": "仅管理员可操作"}), 403
+    from fde_platform import scheduler
+    data = request.get_json(silent=True) or {}
+    group = (data.get("group") or "").strip()
+    _, err = _scheduler_job_guard(group, job_id)
+    if err:
+        return jsonify({"status": "error", "message": err})
+    ok, msg = scheduler.set_enabled(job_id, bool(data.get("enabled", True)))
+    return jsonify({"status": "ok", "message": msg})
+
+
+@app.route("/api/scheduler-jobs/<int:job_id>/run", methods=["POST"])
+def api_scheduler_job_run(job_id):
+    """立即运行定时任务（仅 admin + 组校验）。"""
+    u = users.session_user()
+    if not (u and u.get("is_admin")):
+        return jsonify({"status": "error", "message": "仅管理员可操作"}), 403
+    from fde_platform import scheduler
+    group = (request.get_json(silent=True) or {}).get("group", "").strip()
+    _, err = _scheduler_job_guard(group, job_id)
+    if err:
+        return jsonify({"status": "error", "message": err})
+    result = scheduler.run_job_now(job_id)
+    return jsonify({"status": "ok", "data": result})
+
+
+@app.route("/api/scheduler-jobs/<int:job_id>", methods=["DELETE"])
+def api_scheduler_job_delete(job_id):
+    """删除定时任务（仅 admin + 组校验）。"""
+    u = users.session_user()
+    if not (u and u.get("is_admin")):
+        return jsonify({"status": "error", "message": "仅管理员可操作"}), 403
+    from fde_platform import scheduler
+    group = (request.args.get("group") or "").strip()
+    _, err = _scheduler_job_guard(group, job_id)
+    if err:
+        return jsonify({"status": "error", "message": err})
+    ok, msg = scheduler.delete_job(job_id)
+    return jsonify({"status": "ok", "message": msg})
+
+
+@app.route("/api/knowledge")
+def api_knowledge():
+    """知识库概况：文件列表 + 索引状态（供 AI管家 知识库区）。"""
+    from fde_platform import rules_admin
+    files = rules_admin._list_files()
+    status = rules_admin._index_status()
+    return jsonify({"status": "ok", "data": {"files": files, "index": status}})
+
+
+@app.route("/api/knowledge/upload", methods=["POST"])
+def api_knowledge_upload():
+    """上传知识文件（仅 admin，自动增量索引）。"""
+    u = users.session_user()
+    if not (u and u.get("is_admin")):
+        return jsonify({"status": "error", "message": "仅管理员可操作"}), 403
+    import threading
+    from fde_platform import knowledge_graph, rules_admin
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify({"status": "error", "message": "缺少文件"}), 400
+    name = Path(f.filename).name
+    if not name.lower().endswith((".md", ".txt")):
+        return jsonify({"status": "error", "message": "仅支持 .md/.txt 文件"}), 400
+    rules_admin.RULES_DIR.mkdir(parents=True, exist_ok=True)
+    f.save(rules_admin.RULES_DIR / name)
+    content = (rules_admin.RULES_DIR / name).read_text(encoding="utf-8")
+    threading.Thread(
+        target=knowledge_graph.add_doc_sync, args=("rules", rules_admin._doc_id(name), content), daemon=True
+    ).start()
+    return jsonify({"status": "ok", "name": name})
+
+
+@app.route("/api/knowledge/<name>", methods=["DELETE"])
+def api_knowledge_delete(name):
+    """删除知识文件（仅 admin，增量删索引）。"""
+    u = users.session_user()
+    if not (u and u.get("is_admin")):
+        return jsonify({"status": "error", "message": "仅管理员可操作"}), 403
+    import threading
+    from fde_platform import knowledge_graph, rules_admin
+    name = Path(name).name
+    if not name or "/" in name or "\\" in name:
+        return jsonify({"status": "error", "message": "非法文件名"}), 400
+    p = rules_admin.RULES_DIR / name
+    if p.is_file():
+        p.unlink()
+        threading.Thread(
+            target=knowledge_graph.remove_doc_sync, args=("rules", rules_admin._doc_id(name)), daemon=True
+        ).start()
+    return jsonify({"status": "ok", "name": name})
+
+
+@app.route("/api/knowledge/index", methods=["POST"])
+def api_knowledge_index():
+    """全量重建索引（仅 admin，后台执行）。"""
+    u = users.session_user()
+    if not (u and u.get("is_admin")):
+        return jsonify({"status": "error", "message": "仅管理员可操作"}), 403
+    import threading
+    from fde_platform import knowledge_graph, rules_admin
+    rules_admin._INDEX_STATE.update({"running": True, "done": False, "docs": 0, "nodes": 0, "edges": 0, "error": ""})
+
+    def _run():
+        try:
+            r = knowledge_graph.build_index_sync("rules")
+            rules_admin._INDEX_STATE.update({"done": True, "docs": r.get("docs", 0)})
+        except Exception as e:
+            rules_admin._INDEX_STATE.update({"error": f"{type(e).__name__}: {e}"})
+        finally:
+            rules_admin._INDEX_STATE["running"] = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/knowledge/status")
+def api_knowledge_status():
+    """索引状态（含异步索引进度）。"""
+    from fde_platform import rules_admin
+    return jsonify({"status": "ok", "data": rules_admin._index_status()})
+
+
+@app.route("/api/knowledge/query", methods=["POST"])
+def api_knowledge_query():
+    """知识库语义查询（LightRAG 检索 + LLM 生成）。"""
+    from fde_platform import knowledge_graph
+    body = request.get_json(silent=True) or {}
+    q = (body.get("q") or "").strip()
+    if not q:
+        return jsonify({"status": "error", "message": "问题不能为空"}), 400
+    try:
+        answer = knowledge_graph.query_sync("rules", q)
+        return jsonify({"status": "ok", "answer": answer})
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"{type(e).__name__}: {e}"}), 500
+
+
 @app.route("/api/agent-overview")
 def api_agent_overview():
     """智能体总览：静态角色定义（agent_roles）+ 运行时状态（agent_service）。"""
@@ -1543,16 +1750,30 @@ def integration_page():
                            apps=platform.app_names())
 
 
+def _integration_guard(group, eid):
+    """校验集成端点存在且属于指定组（组为空时不校验）。返回 (ep, err)。"""
+    ep = [e for e in integration.list_endpoints() if e["id"] == eid]
+    if not ep:
+        return None, "端点不存在"
+    if group and not (ep[0].get("app_name") or "").startswith(group + "/"):
+        return None, f"端点不属于 {group} 组"
+    return ep[0], None
+
+
 @app.route("/api/integration/endpoints")
 def api_integration_list():
-    return jsonify({"status": "ok", "data": integration.list_endpoints()})
+    group = (request.args.get("group") or "").strip() or None
+    return jsonify({"status": "ok", "data": integration.list_endpoints(group=group)})
 
 
 @app.route("/api/integration/discover")
 def api_integration_discover():
+    group = (request.args.get("group") or "").strip() or None
     report = scanner.scan_report(platform)
-    external = integration.discover(platform)
+    external = integration.discover(platform, group=group)
     cross = integration.cross_group_calls(report)
+    if group:
+        cross = [c for c in cross if (c.get("app_name") or "").startswith(group + "/")]
     return jsonify({"status": "ok", "data": {"external": external, "cross_group": cross}})
 
 
@@ -1568,8 +1789,12 @@ def api_integration_get(eid):
 @app.route("/api/integration/endpoints", methods=["POST"])
 def api_integration_save():
     d = request.get_json(silent=True) or {}
+    group = (d.get("group") or "").strip()
+    app_name = (d.get("app_name") or "").strip()
+    if group and not app_name.startswith(group + "/"):
+        return jsonify({"status": "error", "message": f"只能配置 {group} 组的应用"}), 403
     eid = integration.save_endpoint(
-        app_name=d.get("app_name", ""),
+        app_name=app_name,
         method_name=d.get("method_name", ""),
         target=d.get("target", ""),
         kind=d.get("kind", "external"),
@@ -1590,6 +1815,10 @@ def api_integration_save():
 
 @app.route("/api/integration/endpoints/<int:eid>", methods=["DELETE"])
 def api_integration_delete(eid):
+    group = (request.args.get("group") or "").strip()
+    _, err = _integration_guard(group, eid)
+    if err:
+        return jsonify({"status": "error", "message": err}), 403
     integration.delete_endpoint(eid)
     return jsonify({"status": "ok"})
 

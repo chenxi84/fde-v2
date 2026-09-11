@@ -16,7 +16,10 @@ export function pageWorkbench() {
     tpl: "",
     roles: [],        // 智能体角色（员工）
     skills: [],       // 已沉淀技能（工具）
-    schedules: [],    // 定时任务
+    schedules: [],    // 定时任务（自主运行：唤醒智能体）
+    apiJobs: [],      // API 任务（scheduler：定时调用服务）
+    integrations: [], // 集成端点（外部系统 API）
+    knowledge: { files: [], index: {} },  // 知识库（平台级共享）
     runtime: { teams: [], session_count: 0, agent_count: 0 },
     flows: [],        // 工作流
     runs: [],         // 运转时间线
@@ -33,12 +36,15 @@ export function pageWorkbench() {
     async load() {
       const group = window.__fdeModule || "";
       const qs = group ? "?group=" + encodeURIComponent(group) : "";
-      const [ov, fl, runs, alerts, skills] = await Promise.all([
+      const [ov, fl, runs, alerts, skills, apiJobs, integrations, knowledge] = await Promise.all([
         get("/api/agent-overview" + qs, { quiet: true }).catch(() => null),
         get("/api/flows" + qs, { quiet: true }).catch(() => []),
         get("/api/flow-runs?limit=20", { quiet: true }).catch(() => []),
         get("/api/alerts", { quiet: true }).catch(() => []),
         get("/api/skills?all=1", { quiet: true }).catch(() => []),
+        get("/api/scheduler-jobs?group=" + encodeURIComponent(window.__fdeModule || ""), { quiet: true }).catch(() => []),
+        get("/api/integration/endpoints?group=" + encodeURIComponent(window.__fdeModule || ""), { quiet: true }).catch(() => []),
+        get("/api/knowledge", { quiet: true }).catch(() => ({ files: [], index: {} })),
       ]);
       if (ov) {
         self.roles = ov.roles || [];
@@ -50,6 +56,9 @@ export function pageWorkbench() {
       self.flows = fl || [];
       self.runs = runs || [];
       self.alerts = alerts || [];
+      self.apiJobs = apiJobs || [];
+      self.integrations = integrations || [];
+      self.knowledge = knowledge || { files: [], index: {} };
     },
 
     /* —— 图标 / 标签 —— */
@@ -75,6 +84,18 @@ export function pageWorkbench() {
       if (s.mode === "flow") return "工作流「" + s.target + "」";
       if (s.mode === "skill") return "技能「" + s.target + "」";
       return "leader 自由执行";
+    },
+    apiJobName(j) {
+      const app = String(j.app_name || "").split("/").pop();
+      return app + "." + j.service;
+    },
+    apiJobStatus(j) {
+      const s = j.last_run && j.last_run.status;
+      return s === "ok" ? "成功" : s === "error" ? "失败" : s === "running" ? "运行中" : "未运行";
+    },
+    apiJobStatusClass(j) {
+      const s = j.last_run && j.last_run.status;
+      return s === "ok" ? "t-teal" : s === "error" ? "t-red" : s === "running" ? "t-amber" : "t-slate";
     },
 
     /* —— 详情模态 —— */
@@ -111,6 +132,9 @@ export function pageWorkbench() {
     gotoFlow() { location.hash = "#/flow_editor"; },
     gotoAutopilot() { location.hash = "#/autopilot"; },
     gotoAlerts() { location.hash = "#/alerts"; },
+    gotoScheduler() { location.hash = "#/scheduler"; },
+    gotoIntegration() { location.hash = "#/integration"; },
+    gotoKnowledge() { location.hash = "#/knowledge"; },
 
     async refresh() { await self.load(); },
   });

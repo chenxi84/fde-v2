@@ -133,12 +133,15 @@ def _is_gateway_app(cls, app_name: str) -> tuple:
     return False, ""
 
 
-def discover(platform) -> list[dict]:
-    """扫描全部应用，发现外部适配器与跨组调用。
+def discover(platform, group: str = None) -> list[dict]:
+    """扫描应用，发现外部适配器与跨组调用。
     识别两类：1) 显式声明的外部适配器（`_EXTERNAL_ADAPTERS`）  2) 网关应用的全部公共服务。
+    group 非空时仅扫该组应用。
     """
     results = []
     for qn in platform.app_names():
+        if group and not qn.startswith(group + "/"):
+            continue
         h = platform.handle(qn)
         is_gw, gw_target = _is_gateway_app(h.cls, qn)
 
@@ -198,11 +201,17 @@ def _is_configured(app_name: str, method_name: str) -> bool:
     return row is not None
 
 
-def list_endpoints() -> list[dict]:
+def list_endpoints(group: str = None) -> list[dict]:
     conn = _get_conn()
-    rows = conn.execute(
-        "SELECT * FROM endpoints ORDER BY kind, target, app_name"
-    ).fetchall()
+    if group:
+        rows = conn.execute(
+            "SELECT * FROM endpoints WHERE app_name LIKE ? ORDER BY kind, target, app_name",
+            (group + "/%",)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM endpoints ORDER BY kind, target, app_name"
+        ).fetchall()
     conn.close()
     result = []
     for r in rows:

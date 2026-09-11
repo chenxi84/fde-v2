@@ -1,0 +1,119 @@
+<!-- 集成接口：外部系统 API 端点管理，组级 -->
+<div class="bd">
+
+  <div class="card">
+    <div class="hd">
+      <h3>集成接口</h3>
+      <span class="hint" x-text="'共 ' + endpoints.length + ' 个端点 · ' + (group || '全部') + ' 组'"></span>
+      <span style="margin-left:auto; display:flex; gap:6px">
+        <button class="b-ghost b-sm" @click="scan()">扫描接口</button>
+        <button class="b-pri b-sm" @click="openNew()">＋ 手动配置</button>
+      </span>
+    </div>
+    <div class="bd">
+      <template x-if="!endpoints.length"><div class="empty">暂无配置端点 —— 点「扫描接口」发现，或「手动配置」</div></template>
+      <template x-for="ep in endpoints" :key="ep.id">
+        <div style="padding:10px 0; border-bottom:1px solid var(--line)">
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+            <span style="font-size:20px">🔗</span>
+            <span class="tag" :class="kindClass(ep.kind)" x-text="kindLabel(ep.kind)"></span>
+            <b x-text="appShort(ep.app_name) + '.' + ep.method_name"></b>
+            <span class="muted">→</span>
+            <span x-text="ep.target"></span>
+            <template x-if="ep.mock_enabled"><span class="tag t-amber">Mock</span></template>
+            <span style="margin-left:auto; display:flex; gap:6px">
+              <button class="b-ghost b-sm" @click="openEdit(ep)">编辑</button>
+              <button class="b-ghost b-sm" @click="test(ep.id)">测试</button>
+              <button class="b-dng b-sm" @click="remove(ep.id)">删除</button>
+            </span>
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:3px" x-text="ep.url ? (ep.http_method || 'POST') + ' ' + ep.url : '（未配置 URL）'"></div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- 发现的接口 -->
+  <div class="card" x-show="discovered.external.length || discovered.cross_group.length">
+    <div class="hd"><h3>发现的接口</h3><span class="hint">扫描出的外部适配器与跨组调用，可一键配置</span></div>
+    <div class="bd">
+      <template x-for="d in discovered.external" :key="d.app_name + d.method_name">
+        <div style="padding:8px 0; border-bottom:1px dashed var(--line); display:flex; align-items:center; gap:8px">
+          <span class="tag t-teal">外部</span>
+          <b x-text="appShort(d.app_name) + '.' + d.method_name"></b>
+          <span class="muted">→</span>
+          <span x-text="d.target"></span>
+          <span class="muted" style="font-size:12px" x-text="d.configured ? '已配置' : '未配置'"></span>
+          <span style="margin-left:auto">
+            <button class="b-ghost b-sm" x-show="!d.configured" @click="openNew(d)">配置</button>
+          </span>
+        </div>
+      </template>
+      <template x-for="d in discovered.cross_group" :key="d.app_name + d.method_name">
+        <div style="padding:8px 0; border-bottom:1px dashed var(--line); display:flex; align-items:center; gap:8px">
+          <span class="tag t-amber">跨组</span>
+          <b x-text="appShort(d.app_name) + '.' + d.method_name"></b>
+          <span class="muted">→</span>
+          <span x-text="d.target"></span>
+          <span style="margin-left:auto">
+            <button class="b-ghost b-sm" @click="openNew(d)">配置</button>
+          </span>
+        </div>
+      </template>
+    </div>
+  </div>
+
+</div>
+
+<!-- 配置/编辑模态 -->
+<div class="modal-mask" x-show="modal.open" @click.self="closeModal()" @keydown.escape.window="closeModal()" x-cloak>
+  <div class="modal">
+    <div class="modal-hd">
+      <div><div class="docno">配置端点</div>
+        <div class="sub" x-text="form.app_name ? appShort(form.app_name) + '.' + form.method_name : '集成接口'"></div></div>
+      <button class="x" @click="closeModal()">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="frow">
+        <div><label class="f">目标系统</label><input x-model="form.target" placeholder="如 SAP / MOM / WMS"></div>
+        <div><label class="f">URL</label><input x-model="form.url" placeholder="https://"></div>
+      </div>
+      <div class="frow" style="margin-top:10px">
+        <div><label class="f">HTTP 方法</label>
+          <select x-model="form.http_method"><option>POST</option><option>GET</option><option>PUT</option><option>DELETE</option></select></div>
+        <div><label class="f">Content-Type</label>
+          <select x-model="form.content_type"><option>application/json</option><option>application/xml</option><option>text/xml</option><option>application/x-www-form-urlencoded</option></select></div>
+      </div>
+      <div class="frow" style="margin-top:10px">
+        <div><label class="f">鉴权方式</label>
+          <select x-model="form.auth_type">
+            <option value="none">无鉴权</option><option value="basic">Basic Auth</option><option value="bearer">Bearer Token</option>
+            <option value="apikey_header">API Key (Header)</option><option value="apikey_query">API Key (Query)</option>
+          </select></div>
+      </div>
+      <div class="frow" style="margin-top:10px" x-show="form.auth_type !== 'none'">
+        <div><label class="f">凭证参数名</label><input x-model="form.auth_param_name" placeholder="Authorization 或 api_key"></div>
+        <div><label class="f">凭证值（保存即加密）</label><input type="password" x-model="form.auth_credential" placeholder="sk-xxx 或密码"></div>
+      </div>
+      <div class="frow" style="margin-top:10px">
+        <div><label class="f">额外 Headers（JSON）</label><input x-model="form.extra_headers" placeholder='{"X-Tenant-Id":"123"}'></div>
+      </div>
+      <div class="frow" style="margin-top:10px">
+        <div><label class="f">超时（秒）</label><input type="number" x-model="form.timeout_s"></div>
+        <div><label class="f">重试次数</label><input type="number" x-model="form.retries"></div>
+      </div>
+      <div class="frow" style="margin-top:10px; align-items:center">
+        <label style="display:flex; align-items:center; gap:6px"><input type="checkbox" x-model="form.mock_enabled" style="width:auto"> Mock</label>
+      </div>
+      <div class="frow" style="margin-top:10px" x-show="form.mock_enabled">
+        <div><label class="f">Mock 数据（JSON）</label><input x-model="form.mock_data" placeholder='{"status":"ok"}'></div>
+      </div>
+    </div>
+    <div class="modal-ft">
+      <div class="right tagline" style="gap:8px">
+        <button class="b-ghost" @click="closeModal()">取消</button>
+        <button class="b-pri" @click="save()">保存</button>
+      </div>
+    </div>
+  </div>
+</div>

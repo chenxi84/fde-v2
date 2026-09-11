@@ -107,20 +107,70 @@
     </div>
   </div>
 
-  <!-- ⑤ 定时任务（图标网格） -->
+  <!-- ⑤ 智能体任务（自主运行 · 图标网格） -->
   <div class="card">
-    <div class="hd"><h3>定时任务（自主运行）</h3><button class="b-ghost b-sm" style="margin-left:auto" @click="gotoAutopilot()">配置 ↗</button></div>
+    <div class="hd"><h3>智能体任务（自主运行）</h3><button class="b-ghost b-sm" style="margin-left:auto" @click="gotoAutopilot()">配置 ↗</button></div>
     <div class="bd">
       <template x-if="!schedules.length"><div class="empty">暂无定时任务</div></template>
       <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(140px,1fr)); gap:10px">
         <template x-for="s in schedules" :key="s.schedule_id">
-          <div style="border:1px solid var(--line); border-radius:10px; padding:12px; text-align:center; cursor:pointer; background:#fff; display:flex; flex-direction:column; align-items:center; gap:4px" @click="openModal('schedule', s)">
+          <div style="border:1px solid var(--line); border-radius:10px; padding:12px; text-align:center; cursor:pointer; background:#fff; display:flex; flex-direction:column; align-items:center; gap:4px; overflow:hidden" @click="openModal('schedule', s)">
             <span style="font-size:26px">⏱</span>
-            <span style="font-weight:600; font-size:13px" x-text="s.name"></span>
+            <span style="font-weight:600; font-size:13px; max-width:100%; word-break:break-all" x-text="s.name"></span>
             <span class="tag" :class="s.mode === 'flow' ? 't-teal' : s.mode === 'skill' ? 't-amber' : 't-slate'" x-text="scheduleModeLabel(s.mode)"></span>
-            <span class="muted" style="font-size:11px" x-text="scheduleTargetText(s)"></span>
+            <span class="muted" style="font-size:11px; max-width:100%; word-break:break-all" x-text="scheduleTargetText(s)"></span>
           </div>
         </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- ⑤.5 API 任务（定时调用服务 · 图标网格） -->
+  <div class="card">
+    <div class="hd"><h3>API 任务（定时调用服务）</h3><span class="hint" x-text="'共 ' + apiJobs.length + ' 个'"></span><button class="b-ghost b-sm" style="margin-left:auto" @click="gotoScheduler()">配置 ↗</button></div>
+    <div class="bd">
+      <template x-if="!apiJobs.length"><div class="empty">暂无 API 定时任务</div></template>
+      <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(150px,1fr)); gap:10px">
+        <template x-for="j in apiJobs" :key="j.id">
+          <div style="border:1px solid var(--line); border-radius:10px; padding:12px; text-align:center; cursor:pointer; background:#fff; display:flex; flex-direction:column; align-items:center; gap:4px; overflow:hidden" @click="openModal('apiJob', j)">
+            <span style="font-size:26px">🔌</span>
+            <span style="font-weight:600; font-size:13px; max-width:100%; word-break:break-all" x-text="apiJobName(j)"></span>
+            <span class="tag t-slate mono" x-text="j.cron"></span>
+            <span class="tag" :class="apiJobStatusClass(j)" x-text="apiJobStatus(j)"></span>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- ⑤.6 集成（外部系统 API 端点） -->
+  <div class="card">
+    <div class="hd"><h3>集成（外部接口）</h3><span class="hint" x-text="'共 ' + integrations.length + ' 个端点'"></span><button class="b-ghost b-sm" style="margin-left:auto" @click="gotoIntegration()">配置 ↗</button></div>
+    <div class="bd">
+      <template x-if="!integrations.length"><div class="empty">暂无集成端点</div></template>
+      <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(160px,1fr)); gap:10px">
+        <template x-for="ep in integrations" :key="ep.id">
+          <div style="border:1px solid var(--line); border-radius:10px; padding:12px; text-align:center; cursor:pointer; background:#fff; display:flex; flex-direction:column; align-items:center; gap:4px; overflow:hidden" @click="openModal('integration', ep)">
+            <span style="font-size:26px">🔗</span>
+            <span style="font-weight:600; font-size:13px; max-width:100%; word-break:break-all" x-text="appShort(ep.app_name) + '.' + ep.method_name"></span>
+            <span class="tag" :class="ep.kind === 'cross_group' ? 't-amber' : 't-teal'" x-text="ep.kind === 'cross_group' ? '跨组' : '外部'"></span>
+            <span class="muted" style="font-size:11px; max-width:100%; word-break:break-all" x-text="ep.target"></span>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- ⑤.7 知识库（平台级共享） -->
+  <div class="card">
+    <div class="hd"><h3>知识库（共享）</h3><span class="hint" x-text="'共 ' + knowledge.files.length + ' 份文件'"></span><button class="b-ghost b-sm" style="margin-left:auto" @click="gotoKnowledge()">管理 ↗</button></div>
+    <div class="bd">
+      <div style="display:flex; gap:14px; align-items:center; padding:6px 0">
+        <span style="font-size:28px">📚</span>
+        <div>
+          <div><b x-text="knowledge.files.length"></b> 份知识文件（制度 / SOP / 最佳实践）</div>
+          <div class="muted" style="font-size:12px" x-text="knowledge.index && knowledge.index.built ? ('知识图谱已索引 · ' + knowledge.index.nodes + ' 节点 · ' + knowledge.index.edges + ' 边') : '尚未建立索引'"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -244,6 +294,42 @@
           </div>
           <div class="sec">任务说明</div>
           <div class="muted" x-text="modal.data.description || '（无）'"></div>
+        </div>
+      </template>
+
+      <!-- API 任务详情 -->
+      <template x-if="modal && modal.kind === 'apiJob'">
+        <div>
+          <div class="sec">基本信息</div>
+          <div class="kv">
+            <div><div class="k">任务</div><div class="v" x-text="apiJobName(modal.data)"></div></div>
+            <div><div class="k">服务</div><div class="v mono" x-text="modal.data.app_name + '.' + modal.data.service"></div></div>
+            <div><div class="k">cron</div><div class="v mono" x-text="modal.data.cron"></div></div>
+            <div><div class="k">运行身份</div><div class="v" x-text="modal.data.run_as_user || '平台默认'"></div></div>
+            <div><div class="k">最近运行</div><div class="v" x-text="apiJobStatus(modal.data)"></div></div>
+          </div>
+          <div class="sec">任务说明</div>
+          <div class="muted" x-text="modal.data.description || '（无）'"></div>
+          <template x-if="modal.data.last_run && modal.data.last_run.error_message">
+            <div class="sec">最近错误</div>
+            <div class="muted" x-text="modal.data.last_run.error_message"></div>
+          </template>
+        </div>
+      </template>
+
+      <!-- 集成详情 -->
+      <template x-if="modal && modal.kind === 'integration'">
+        <div>
+          <div class="sec">基本信息</div>
+          <div class="kv">
+            <div><div class="k">应用</div><div class="v mono" x-text="modal.data.app_name"></div></div>
+            <div><div class="k">方法</div><div class="v mono" x-text="modal.data.method_name"></div></div>
+            <div><div class="k">类型</div><div class="v" x-text="modal.data.kind === 'cross_group' ? '跨组调用' : '外部接口'"></div></div>
+            <div><div class="k">目标系统</div><div class="v" x-text="modal.data.target"></div></div>
+            <div><div class="k">URL</div><div class="v mono" x-text="modal.data.url || '（未配置）'"></div></div>
+            <div><div class="k">HTTP</div><div class="v mono" x-text="(modal.data.http_method || 'POST') + ' · ' + (modal.data.content_type || 'application/json')"></div></div>
+            <div><div class="k">鉴权</div><div class="v" x-text="modal.data.auth_type && modal.data.auth_type !== 'none' ? modal.data.auth_type : '无'"></div></div>
+          </div>
         </div>
       </template>
     </div>
