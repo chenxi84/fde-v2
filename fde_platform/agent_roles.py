@@ -75,6 +75,52 @@ def _load_group_roles() -> tuple[dict[str, list[str]], dict[str, str]]:
 ROLE_APPS, _BIZ_LABEL = _load_group_roles()
 _ROLE_LABEL: dict[str, str] = {**_BIZ_LABEL, **_PLATFORM_LABEL}
 
+
+# ── 服务可见性：下沉到各组 app/<组>/_agent_tools.py 声明 ────────────
+# 约定：导出 HIDDEN_FROM_AGENT = {"<组>/<应用>": ["服务名", ...]}，
+# 列出**明确不该给 agent 调**的服务——内部回填、外部回执、被 batch 版取代的单行版。
+#
+# 为什么用黑名单而不是白名单：白名单要为 180 个服务逐一表态，加个应用就要同步改，
+# 维护不动；而这些「agent 不该碰」的服务是少数、稳定、有明确特征。
+# 依据：外部证据显示多余的候选会**主动伤害**工具选择准确率，能摘就摘。
+def _load_hidden_tools() -> dict[str, tuple[str, ...]]:
+    """扫描各组 _agent_tools.py，装配 {应用 qualname: (服务名, ...)}。
+
+    任一文件出错仅跳过该组，不阻断平台启动（与 _load_group_roles 同策略）。
+    """
+    hidden: dict[str, set[str]] = {}
+    if not _ROLES_DIR.is_dir():
+        return {}
+    for group_dir in sorted(_ROLES_DIR.iterdir()):
+        if not group_dir.is_dir() or group_dir.name.startswith((".", "__")):
+            continue
+        decl = group_dir / "_agent_tools.py"
+        if not decl.is_file():
+            continue
+        ns: dict = {}
+        try:
+            exec(compile(decl.read_text(encoding="utf-8"), str(decl), "exec"), ns)
+        except Exception:
+            continue  # 组声明有误：跳过该组
+        for app, services in (ns.get("HIDDEN_FROM_AGENT") or {}).items():
+            if not app:
+                continue
+            hidden.setdefault(str(app), set()).update(
+                s for s in (services or []) if s)
+    return {k: tuple(sorted(v)) for k, v in hidden.items()}
+
+
+HIDDEN_FROM_AGENT = _load_hidden_tools()
+
+
+def hidden_tools_for(app_name: str) -> tuple[str, ...]:
+    """该应用声明为「不给 agent」的服务名；未声明返回空元组。"""
+    return HIDDEN_FROM_AGENT.get((app_name or "").strip(), ())
+
+
+def is_hidden_from_agent(app_name: str, service: str) -> bool:
+    return (service or "") in HIDDEN_FROM_AGENT.get((app_name or "").strip(), ())
+
 # 平台运维角色（仅 admin 可建，见 agent_service 的 subagent_type 收口）
 PLATFORM_ROLES = set(ROLE_PLATFORM_TOOLS)
 

@@ -10,9 +10,24 @@
 启动：python -m fde_platform.agent_service  → http://127.0.0.1:4100
 """
 import json
+import logging
 import os
 import re
 from pathlib import Path
+
+_logger = logging.getLogger(__name__)
+
+# AgentScope 只给自家那个 "as" logger 挂了 handler 并设 propagate=False，
+# 根 logger 没有任何 handler —— 于是 fde_platform.* 的 INFO 日志**一条也打不出来**。
+# 工具面装配日志是这套收敛方案的验收手段（见 宣传/工具面收敛方案.md §七），
+# 看不到就等于没有，所以这里给本模块挂一个 handler。
+if not _logger.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter(
+        "%(asctime)s | %(levelname)-7s | %(module)s:%(funcName)s - %(message)s"))
+    _logger.addHandler(_h)
+    _logger.setLevel(logging.INFO)
+    _logger.propagate = False
 
 from agentscope.app import create_app
 from agentscope.app.message_bus import InMemoryMessageBus
@@ -151,19 +166,131 @@ for _r, _apps in agent_roles.ROLE_APPS.items():
     for _a in _apps:
         _APP_ROLE[_a] = _r
 
-def _group_desc(role: str, apps: set[str]) -> str:
-    """ToolGroup 描述：从角色注册表动态生成（单一数据源，不再手写分组文案）。
 
-    - 业务角色：`标签（应用短名列表）`，如「销售/需求专家（md_customer、sales_forecast…）」
-    - other（未分类应用，如 e2e）：显式列出 qualname，避免「其他应用工具」太模糊
+# ── 平台工具下发策略（显式声明，单一事实来源）────────────────────
+#
+# 为什么不用 if/continue 隐式排除：**漏写 = 工具静默消失且无人察觉**。
+# 2026-09 踩过——「排除 admin 配置工具」那一句 continue 把流程编排工具一并连坐，
+# 「让数字员工跑工作流」「让大模型创建工作流」两条路都不通；而工具定义在
+# _platform_tool_defs 里、middleware 的 GLOBAL_PLATFORM_TOOLS 也放行，
+# 运行期没有任何报错，只有真的去调才发现工具根本不在。
+#
+# 约定：新增平台工具必须登记到下面两个集合之一。
+# `verify_agent_tools.py` 的登记完整性测试会盯着这件事，漏登记即失败。
+_LEADER_PLATFORM_TOOLS = {
+    # 知识 / skill 沉淀（全员能力）
+    "propose_skill", "read_app_doc", "query_knowledge", "raise_alert",
+    # 流程编排：查、跑、看进度、存删。
+    # save_flow 在这里是必须的——「让大模型创建工作流」就靠它，
+    # 少了它 A3 那类需求只能人工去画布上拖。
+    "list_flows", "run_flow", "flow_progress", "save_flow", "delete_flow",
+}
+
+_LEADER_PLATFORM_DENIED = {
+    # 集成配置：改的是外部系统连接与凭证，属 admin 职责，leader 编排用不到
+    "list_integrations", "discover_integrations", "save_integration",
+    "delete_integration", "test_integration", "integration_logs",
+    # 定时任务配置：配错了会周期性失控，不给 leader
+    "list_jobs", "create_job", "update_job", "delete_job",
+    "set_job_enabled", "run_job_now",
+    # 用户与角色：权限面，绝不下放
+    "list_users", "create_user", "delete_user", "reset_password",
+    "set_user_role", "set_user_grants",
+    "list_roles", "create_role", "delete_role", "set_role_grants",
+}
+
+
+# worker 常驻的平台工具：直接对齐 middleware 的 GLOBAL_PLATFORM_TOOLS，
+# 不另写一份——两处写两份迟早对不上，而「对不上」正是这次事故的形态。
+_WORKER_PLATFORM_TOOLS = {
+    t["_meta"]["service"] for t in bridge._platform_tool_defs(user=None)
+    if t["_meta"]["app"] == "__platform__"
+    and t["function"]["name"] in agent_tool_filter.GLOBAL_PLATFORM_TOOLS
+}
+
+
+def platform_tool_registry_gaps() -> set[str]:
+    """有定义、却没登记下发策略的平台工具 service 名。
+
+    正常应为空集。非空说明加了平台工具但忘了登记——那它就会静默地不进任何
+    agent 的工具表。启动时自检 + 回归测试都调这个函数。
     """
-    if role == "other" and apps:
-        return "示例/演示应用工具（" + "、".join(sorted(apps)) + "）"
-    label = agent_roles.role_label(role)
-    if label and apps:
-        short = "、".join(sorted(a.split("/")[-1] for a in apps))
-        return f"{label}（{short}）"
-    return role
+    all_services = {t["_meta"]["service"] for t in bridge._platform_tool_defs(user=None)
+                    if t["_meta"]["app"] == "__platform__"}
+    return all_services - _LEADER_PLATFORM_TOOLS - _LEADER_PLATFORM_DENIED
+
+
+def _leader_gets_platform_tool(service: str) -> bool:
+    """leader 是否拿到该平台工具。未登记的默认不给（fail-closed），并已在启动时告警。"""
+    return service in _LEADER_PLATFORM_TOOLS
+
+
+# 启动自检：登记缺口一出现就吼一声，别等到演示当天才发现工具没了
+_gaps = platform_tool_registry_gaps()
+if _gaps:
+    import logging as _logging
+    _logging.getLogger(__name__).warning(
+        "平台工具未登记下发策略（默认不下发给 leader）：%s —— 请补进 "
+        "agent_service._LEADER_PLATFORM_TOOLS 或 _LEADER_PLATFORM_DENIED",
+        "、".join(sorted(_gaps)))
+
+
+# ── 工具分组：一律按**应用**，不按角色 ─────────────────────────────
+#
+# 曾经 leader 按角色分组、worker 平铺。按角色分组看着更贴「领域」，
+# 实测却踩坑：psc 一个 sales 角色就是 6 个应用、58 个工具，一激活直接进塌陷区
+# （外部证据：单次呈现 >~60 即塌陷，且多余候选主动伤害准确率）。
+# 按应用分则每组 ≤ ~14，且「应用」是平台天然的语义单元（一个应用一个库一个聚合根），
+# 组描述用应用中文名就能说清，不需要额外维护映射。
+def _app_group_desc(app: str) -> str:
+    """应用分组的描述：中文名 + 一句话职责 + 归属角色。
+
+    中文名与职责取自前端页面注册表（PAGE_META 的 name/crumb）——那是应用自述的
+    单一事实来源，不必在平台侧再手写一份（2026-09 的方案初稿就在这上面绕了远路）。
+    取不到时回落为应用短名，只影响可读性，不影响分组正确性。
+    """
+    short = app.split("/")[-1]
+    role = _APP_ROLE.get(app, "")
+    label = agent_roles.role_label(role) if role else ""
+    try:
+        from fde_platform import view_registry
+        group, _, key = app.partition("/")
+        for m in (view_registry.registry().get("modules") or []):
+            if m.get("module") != group:
+                continue
+            for page in (m.get("pages") or []):
+                if page.get("id") == f"{group}:{key}":
+                    name = page.get("name") or short
+                    crumb = (page.get("crumb") or "").split("·")[0].strip()
+                    tail = f"（{label}域）" if label else ""
+                    return f"{name}{tail}：{crumb}" if crumb else f"{name}{tail}"
+    except Exception:
+        pass
+    return f"{short}（{label}域）" if label else short
+
+
+def _split_by_app(defs: list) -> dict[str, list]:
+    """把工具定义按 `_meta.app` 分组，跳过平台工具。**分组口径的唯一实现**。
+
+    工厂与回归测试都调这个函数——两边各写一份迟早对不上，
+    而「对不上」正是这次事故的形态（工厂少发工具，测试却以为一切正常）。
+    """
+    by_app: dict[str, list] = {}
+    for t in defs:
+        app = t["_meta"]["app"]
+        if app == "__platform__":
+            continue
+        by_app.setdefault(app, []).append(t)
+    return by_app
+
+
+# 懒加载下模型可能同时开多个组，工具面就叠加回去了。
+# 外部证据（arXiv:2605.24660）：多余候选会**主动伤害**选择准确率，
+# 所以「用完就关」不是洁癖，是准确率问题。这条随组激活一起下发。
+_GROUP_INSTRUCTIONS = (
+    "完成本域任务后，若接下来要处理其他应用，请先停用本组再激活目标组，"
+    "避免同时挂着多组工具——同时激活的工具越多，选错工具的概率越高。"
+)
 
 
 # leader system_prompt 里的组标记（供工具工厂按组收窄业务工具）
@@ -180,8 +307,14 @@ async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str):
     """把 FDE 业务服务桥接为 AgentScope 工具。
 
     返回 ``(tools, tool_groups)`` 元组（配合 [FDE-PATCH] 的 get_toolkit）：
-    - leader：propose_skill 进 basic；查询类服务按领域装进 ToolGroup（懒加载压首 token）
-    - worker：全量工具进 basic，由 RoleToolFilterMiddleware 按角色过滤
+
+    - **leader**：平台工具按白名单进 basic，业务工具按**角色**分组懒加载
+    - **worker**：平台工具按白名单进 basic，业务工具按**应用**分组懒加载
+
+    两者都走「常驻少量 + 其余懒加载」——外部证据显示单次呈现的工具数超过 ~60
+    进入选择塌陷区，且**多余候选会主动伤害准确率**；worker 原来是把角色可见的
+    全部工具平铺（sales 66 个），这里补齐与 leader 一致的懒加载。
+
     每次组装 agent 时调用（授权变更即时生效）；未知用户返回空（fail-closed）。
     """
     user = users.get_user_by_name(user_id)
@@ -204,47 +337,76 @@ async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str):
 
     defs = bridge.tool_schemas(_platform, user)
 
+    # 剪枝：摘掉各组声明为「不给 agent」的服务（内部回填、外部回执、被 batch 版取代的单行版）。
+    # 依据外部证据「多余候选会主动伤害选择准确率」——能摘就摘，摘掉比留着强。
+    _before = len(defs)
+    defs = [t for t in defs
+            if not agent_roles.is_hidden_from_agent(
+                t["_meta"]["app"], t["_meta"].get("service", ""))]
+    if len(defs) != _before:
+        _logger.debug("工具剪枝：%d → %d（各组 _agent_tools.py 声明）",
+                      _before, len(defs))
+
     # 区分 leader / worker
     record = await _storage.get_agent(user_id, agent_id)
-    if record is not None and record.source == "team":
-        # worker：全量工具（middleware 按角色过滤）
-        return ([_mk_ft(t) for t in defs], [])
 
-    # leader：按组收窄业务工具（从 system_prompt 的 FDE_GROUP 标记提取组；总编排/无标记不窄）
+    if record is not None and record.source == "team":
+        # ── worker：按角色收窄，再按**应用**子分组懒加载 ──
+        # 组粒度选「应用」而非更细的动作：组描述要能一句话说清何时激活，
+        # 应用的职责边界天然适合；更细会让模型多几次开关组往返，而研究指出
+        # 纯分组不减往返时反而 +15% 开销。
+        role = agent_roles.extract_role(record.data.system_prompt)
+        allowed = agent_roles.allowed_tools_for_role(role, defs)
+        basic, keep = [], []
+        for t in defs:
+            if t["_meta"]["app"] == "__platform__":
+                if t["_meta"].get("service") in _WORKER_PLATFORM_TOOLS:
+                    basic.append(_mk_ft(t))
+                continue
+            if t["function"]["name"] in allowed:
+                keep.append(t)
+        tool_groups = [
+            ToolGroup(name=a.split("/")[-1], description=_app_group_desc(a),
+                      instructions=_GROUP_INSTRUCTIONS, tools=[_mk_ft(t) for t in fts])
+            for a, fts in sorted(_split_by_app(keep).items())
+        ]
+        _log_surface(f"worker/{role}", basic, tool_groups)
+        return (basic, tool_groups)
+
+    # ── leader：按组收窄业务工具（从 system_prompt 的 FDE_GROUP 标记提取组）──
     group = _extract_group(record.data.system_prompt) if record is not None else None
     if group and group != "__platform__":
         defs = [t for t in defs
                 if t["_meta"]["app"] == "__platform__"
                 or t["_meta"]["app"].startswith(group + "/")]
 
-    # leader：知识查询类平台工具（propose_skill / 读单文档 / 查知识图谱）**以及流程编排工具**进 basic，
-    # 其余平台工具（集成/定时配置/用户角色等 admin 配置）不给 leader（走 worker 或 admin）；
-    # 业务工具按领域分组懒加载。
-    #
-    # 流程编排工具必须在这里 —— 原来只列了三个查询类，把 list_flows / run_flow / flow_progress /
-    # save_flow / delete_flow 连同 admin 配置工具一起 `continue` 掉了。于是「让数字员工跑工作流」
-    # 和「让大模型创建工作流」两条路都断了：工具确实定义在 _platform_tool_defs 里、middleware 的
-    # GLOBAL_PLATFORM_TOOLS 也放行，但工厂层从来没把它们交给 agent，数字员工在工具表里根本看不到。
-    _LEADER_BASIC_SERVICES = {"propose_skill", "read_app_doc", "query_knowledge",
-                              "list_flows", "run_flow", "flow_progress",
-                              "save_flow", "delete_flow"}
-    basic = []
-    groups: dict[str, list] = {}
-    group_apps: dict[str, set] = {}
+    # 平台工具走显式白名单（见文件上方 _LEADER_PLATFORM_TOOLS 的说明）；
+    # 业务工具按应用分组懒加载（与 worker 同口径，见 _split_by_app 的说明）。
+    basic, keep = [], []
     for t in defs:
-        app = t["_meta"]["app"]
-        if app == "__platform__":
-            if t["_meta"].get("service") in _LEADER_BASIC_SERVICES:
+        if t["_meta"]["app"] == "__platform__":
+            if _leader_gets_platform_tool(t["_meta"].get("service", "")):
                 basic.append(_mk_ft(t))
             continue
-        role = _APP_ROLE.get(app, "other")
-        groups.setdefault(role, []).append(_mk_ft(t))
-        group_apps.setdefault(role, set()).add(app)
+        keep.append(t)
     tool_groups = [
-        ToolGroup(name=r, description=_group_desc(r, group_apps.get(r, set())), tools=fts)
-        for r, fts in sorted(groups.items())
+        ToolGroup(name=a.split("/")[-1], description=_app_group_desc(a),
+                  instructions=_GROUP_INSTRUCTIONS, tools=[_mk_ft(t) for t in fts])
+        for a, fts in sorted(_split_by_app(keep).items())
     ]
+    _log_surface(f"leader/{group or 'all'}", basic, tool_groups)
     return (basic, tool_groups)
+
+
+def _log_surface(who: str, basic: list, tool_groups: list) -> None:
+    """记录本次装配的工具面。
+
+    「单次呈现 schema 数」是这套收敛方案的验收指标（见 宣传/工具面收敛方案.md §七），
+    没有这行日志就只能靠猜——出事那次（工具静默消失）正是因为没有可见性。
+    """
+    _logger.info("工具装配 [%s]：常驻 %d + 懒加载 %d 组 %s",
+                 who, len(basic), len(tool_groups),
+                 {g.name: len(g.tools) for g in tool_groups} or "—")
 
 
 # storage 提到模块级：middleware 工厂需闭包捕获它查 AgentRecord（识别 worker 角色）。
