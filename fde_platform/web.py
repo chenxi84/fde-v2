@@ -52,6 +52,11 @@ PORT = int(os.environ.get("PLATFORM_PORT", 4000))
 
 # 平台组件状态（main.py 启动时收集写入；首页「平台运行情况」监控区读取）
 COMPONENTS = []
+
+# 部署组件探测钩子：由 main.py 注册。留成钩子而不是开机算一次，是因为
+# 「Agent 编排 / Embedding / 反向代理」是**独立进程**，开机那一刻未必已经绑定端口
+# （双进程启动有先后），一次性探测会把状态永久钉死成「未加载」。
+DEPLOY_PROBE = None
 # 运行环境信息（版本/地址/数据库/应用数，main() 启动时写入）
 RUNTIME_INFO = {}
 
@@ -209,7 +214,7 @@ def index():
         port=PORT,
         scan=scan,
         app_names=_app_display_names(),
-        components=COMPONENTS,
+        components=COMPONENTS + (DEPLOY_PROBE() if DEPLOY_PROBE else []),
         runtime_info=RUNTIME_INFO,
     )
 

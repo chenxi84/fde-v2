@@ -131,36 +131,37 @@ def main():
         "version": VERSION, "url": f"http://{HOST}:{PORT}",
         "db": _db_mode, "apps": len(names),
     }
-    # 部署组件（完整部署方案：主进程 / Agent 编排 / Embedding / 反向代理，说明本次是否部署）
+    # 部署组件（完整部署方案：主进程 / Agent 编排 / Embedding / 反向代理）
+    # 注册成**每次渲染首页时现探**的钩子，而不是开机算一次——
+    # Agent 编排、Embedding 都是独立进程，与主进程启动有先后，开机那一刻往往还没绑定端口，
+    # 一次性探测会把它们永久钉成「未加载」（明明稍后就起来了）。
     # 部署方式识别：Docker（compose 设 DATABASE_URL=postgresql://... 或显式 DEPLOY_MODE=docker）vs 本机 pip 双进程
     _is_docker = (os.environ.get("DEPLOY_MODE") or
                   ("docker" if (os.environ.get("DATABASE_URL") or "").startswith("postgresql://") else "pip")) == "docker"
-    if _is_docker:
-        # Docker：各组件是独立容器，经内部服务名探测（fde-v2 容器内 127.0.0.1 看不到它们）
-        _agent_on = _port_open(4100, "agent-service")
-        _embed_on = _port_open(9800, "embed")
-        _nginx_on = _port_open(443, "nginx") or _port_open(80, "nginx")
-    else:
-        # 本机 pip：独立进程同机监听
-        _agent_on = _port_open(4100)
-        _embed_on = _port_open(9800)
-        _nginx_on = False
-    _web.COMPONENTS.append({
-        "key": "platform", "name": "平台主进程", "icon": "🖥️", "loaded": True,
-        "desc": "本次已部署：main.py（fde-v2 进程/容器），平台核心服务。",
-    })
-    _web.COMPONENTS.append({
-        "key": "agent_service", "name": "Agent 编排", "icon": "🤖", "loaded": _agent_on,
-        "desc": f"agent-service 独立编排进程（端口 4100）。{'本次已部署（AI 对话可用）。' if _agent_on else '本次未部署（AI 对话不可用）。'}",
-    })
-    _web.COMPONENTS.append({
-        "key": "embed", "name": "Embedding 服务", "icon": "🧬", "loaded": _embed_on,
-        "desc": f"embed 独立服务（端口 9800，BGE 向量化）。{'本次已部署（知识图谱语义检索可用）。' if _embed_on else '本次未部署（知识图谱语义检索不可用）。'}",
-    })
-    _web.COMPONENTS.append({
-        "key": "nginx", "name": "反向代理", "icon": "🌐", "loaded": _nginx_on,
-        "desc": f"nginx 反向代理（HTTPS）。{'本次已部署（外部经 443 访问）。' if _nginx_on else f'本次未部署（本地直连 {PORT} 端口）。'}",
-    })
+
+    def _probe_deploy_components():
+        if _is_docker:
+            # Docker：各组件是独立容器，经内部服务名探测（fde-v2 容器内 127.0.0.1 看不到它们）
+            agent_on = _port_open(4100, "agent-service")
+            embed_on = _port_open(9800, "embed")
+            nginx_on = _port_open(443, "nginx") or _port_open(80, "nginx")
+        else:
+            # 本机 pip：独立进程同机监听
+            agent_on = _port_open(4100)
+            embed_on = _port_open(9800)
+            nginx_on = False
+        return [
+            {"key": "platform", "name": "平台主进程", "icon": "🖥️", "loaded": True,
+             "desc": "本次已部署：main.py（fde-v2 进程/容器），平台核心服务。"},
+            {"key": "agent_service", "name": "Agent 编排", "icon": "🤖", "loaded": agent_on,
+             "desc": f"agent-service 独立编排进程（端口 4100）。{'本次已部署（AI 对话可用）。' if agent_on else '本次未部署（AI 对话不可用）。'}"},
+            {"key": "embed", "name": "Embedding 服务", "icon": "🧬", "loaded": embed_on,
+             "desc": f"embed 独立服务（端口 9800，BGE 向量化）。{'本次已部署（知识图谱语义检索可用）。' if embed_on else '本次未部署（知识图谱语义检索不可用）。'}"},
+            {"key": "nginx", "name": "反向代理", "icon": "🌐", "loaded": nginx_on,
+             "desc": f"nginx 反向代理（HTTPS）。{'本次已部署（外部经 443 访问）。' if nginx_on else f'本次未部署（本地直连 {PORT} 端口）。'}"},
+        ]
+
+    _web.DEPLOY_PROBE = _probe_deploy_components
     print(f"鉴权     : {'开启（首次登录 admin/admin，请尽快改密）' if AUTH_ON else '关闭（无认证模式）'}")
     print(f"定时任务 : {'开启（/scheduler）' if SCHED_ON else '关闭'}")
     print(f"大模型配置: {'开启（/llm）' if LLM_ADMIN_ON else '关闭'}")
