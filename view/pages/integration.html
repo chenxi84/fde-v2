@@ -74,6 +74,21 @@
       <button class="x" @click="closeModal()">✕</button>
     </div>
     <div class="modal-bd">
+      <div class="frow" x-show="!form.app_name">
+        <div style="grid-column:1/-1"><label class="f">要配置的接口</label>
+          <select x-model="picked" @change="pickDiscover()">
+            <option value="">（选择已发现的适配器）</option>
+            <template x-for="d in pickable()" :key="d.app_name + '.' + d.method_name">
+              <option :value="d.app_name + '|' + d.method_name"
+                      x-text="appShort(d.app_name) + '.' + d.method_name + '（' + (d.target || '外部') + '）'
+                              + (d.configured ? ' · 已配置' : '')"></option>
+            </template>
+          </select>
+          <div class="muted" style="margin-top:6px;font-size:12px">
+            只能选扫描到的适配器 —— 接口是代码里声明出来的，不在页面凭空创建。
+          </div>
+        </div>
+      </div>
       <div class="frow">
         <div><label class="f">目标系统</label><input x-model="form.target" placeholder="如 SAP / MOM / WMS"></div>
         <div><label class="f">URL</label><input x-model="form.url" placeholder="https://"></div>

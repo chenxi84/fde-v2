@@ -28,6 +28,7 @@ export function pageIntegration() {
     discovered: { external: [], cross_group: [] },
     modal: { open: false },
     form: _blankForm(),
+    picked: "",                 // 「手动配置」下拉选中的 应用|方法
 
     async init() {
       self.tpl = await fetch(new URL("integration.html", import.meta.url)).then((r) => r.text());
@@ -50,16 +51,51 @@ export function pageIntegration() {
     kindLabel(k) { return k === "cross_group" ? "跨组" : "外部"; },
     kindClass(k) { return k === "cross_group" ? "t-amber" : "t-teal"; },
 
-    openNew(ep) {
-      self.modal.open = true;
+    // 「＋ 手动配置」不该让人手打 app_name/method_name —— 那能建出指向不存在适配器的
+    // 空配置。改成从「已发现的适配器」里挑，保证配置一定落在真实存在的适配器上。
+    async openNew(ep) {
       if (ep) {
+        self.modal.open = true;
+        self.picked = "";
         self.form = {
           ..._blankForm(),
           app_name: ep.app_name, method_name: ep.method_name,
           kind: ep.kind || "external", target: ep.target || "",
         };
-      } else {
-        self.form = _blankForm();
+        return;
+      }
+      if (!self.discovered.external.length && !self.discovered.cross_group.length) {
+        await self.scan();                       // 没扫过就先扫，否则下拉是空的
+      }
+      self.modal.open = true;
+      self.picked = "";
+      self.form = _blankForm();
+    },
+
+    // 列出**全部**已发现的适配器（含已配置的）——只列未配置的话，全配好之后
+    // 这个下拉就是空的，「手动配置」反而不可用；已配置的选中即等于编辑。
+    pickable() {
+      return [...(self.discovered.external || []), ...(self.discovered.cross_group || [])];
+    },
+
+    pickDiscover() {
+      const [a, m] = String(self.picked || "").split("|");
+      if (!a) return;
+      // 已配置过 → 按真实配置载入。不能拿 discover 推出来的 target 顶替：
+      // discover 的 target 是从方法名前缀猜的（_http_fetch_materials → HTTP），
+      // 与用户实际保存的目标系统（如 MOCK-ERP）不是一回事，照猜的保存会把配置改坏。
+      const saved = (self.endpoints || [])
+        .find((e) => e.app_name === a && e.method_name === m);
+      if (saved) {
+        self.openEdit(saved);
+        return;
+      }
+      const d = self.pickable().find((x) => x.app_name === a && x.method_name === m);
+      self.form.app_name = a;
+      self.form.method_name = m;
+      if (d) {
+        self.form.kind = d.kind || "external";
+        self.form.target = self.form.target || d.target || "";
       }
     },
     openEdit(ep) {
