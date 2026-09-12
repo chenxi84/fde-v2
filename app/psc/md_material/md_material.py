@@ -320,6 +320,115 @@ class MdMaterial:
                     chain.append(m)
         return chain
 
+    # ---- 外部接口适配（CONVENTION §7.3 / 接口适配器开发.md：_ 前缀，供 /integration 发现）----
+
+    _EXTERNAL_ADAPTERS = ("_http_fetch_materials",)
+
+    # 外部字段 → 内部字段（外部接口字段名与内部不一致时改这里）
+    _EXTERNAL_FIELD_MAP = {
+        "material_no": "material_no",
+        "material_name": "material_name",
+        "unit_value": "unit_value",
+        "value_class": "value_class",
+        "change_cost": "change_cost",
+        "prod_days": "prod_days",
+        "logistics_days": "logistics_days",
+        "change_risk": "change_risk",
+        "service_level": "service_level",
+        "batch_window": "batch_window",
+    }
+
+    def sync_external_material(self):
+        """对外服务：从外部（ERP / PLM）拉取物料主数据并经 import_batch 落库。
+
+        内部委托给 `_http_fetch_materials` 外部适配器（其 URL / 鉴权由 /integration 配置）。
+        供「API 定时任务」每天凌晨调用——ERP 新立的料号次日自动进入平台。
+        """
+        return self._http_fetch_materials()
+
+    def _http_fetch_materials(self):
+        """外部系统适配器：拉取物料主数据 → 字段映射 → import_batch 落库 → 记日志。"""
+        from fde_platform import integration
+
+        ep = integration.get_endpoint("psc/md_material", "_http_fetch_materials")
+        if not ep:
+            raise FdeError("外部物料主数据接口未配置（请先到 /integration 配置目标 URL）")
+        if ep.get("mock_enabled"):
+            return {"status": "mock", "imported": 0, "message": "Mock 已启用，跳过真实调用"}
+
+        url = (ep.get("url") or "").strip()
+        if not url:
+            raise FdeError("外部接口未配置 URL")
+
+        body = self._do_http_call(ep, url)
+        rows = self._parse_external_rows(body)
+        result = self.import_batch(rows)
+
+        integration.log_call(
+            "psc/md_material", "_http_fetch_materials",
+            ep.get("target", "external"), f"{ep.get('http_method', 'GET')} {url}",
+            "success", 0,
+            response_summary=f"导入 {result.get('success', 0)}/{result.get('total', 0)} 行",
+        )
+        return result
+
+    def _do_http_call(self, ep, url):
+        """按集成配置发 HTTP 请求（含鉴权），返回响应正文文本；配置方法 404/405 时自动改 GET 探测。"""
+        import urllib.error
+        import urllib.request
+
+        def _send(method):
+            req = urllib.request.Request(url, method=method)
+            req.add_header("Content-Type", ep.get("content_type", "application/json"))
+            for k, v in (ep.get("extra_headers") or {}).items():
+                req.add_header(k, v)
+            auth_type = ep.get("auth_type", "none")
+            cred = ep.get("auth_credential") or ""
+            param_name = ep.get("auth_param_name") or ""
+            if auth_type == "basic" and cred:
+                import base64
+                req.add_header("Authorization", f"Basic {base64.b64encode(cred.encode()).decode()}")
+            elif auth_type == "bearer" and cred:
+                req.add_header("Authorization", f"Bearer {cred}")
+            elif auth_type == "apikey_header" and param_name and cred:
+                req.add_header(param_name, cred)
+            elif auth_type == "apikey_query":
+                sep = "&" if "?" in url else "?"
+                req = urllib.request.Request(url + f"{sep}{param_name}={cred}", method=method)
+            resp = urllib.request.urlopen(req, timeout=ep.get("timeout_s", 30))
+            return resp.read().decode("utf-8", errors="replace")
+
+        configured = ep.get("http_method", "GET")
+        try:
+            return _send(configured)
+        except urllib.error.HTTPError as e:
+            if e.code in (404, 405) and configured.upper() != "GET":
+                return _send("GET")
+            raise
+
+    def _parse_external_rows(self, body):
+        """解析外部响应：支持 [...] 或 {rows|data|items:[...]} 结构，逐行字段映射。"""
+        import json
+
+        data = json.loads(body)
+        raw = None
+        if isinstance(data, list):
+            raw = data
+        elif isinstance(data, dict):
+            for key in ("rows", "data", "items"):
+                if isinstance(data.get(key), list):
+                    raw = data[key]
+                    break
+        if raw is None:
+            raise FdeError("外部接口返回结构不符合预期（应为列表或 {rows|data|items:[...]}）")
+        return [self._map_external_row(r) for r in raw if isinstance(r, dict)]
+
+    def _map_external_row(self, raw):
+        """外部字段 → 内部字段（字段名映射见 _EXTERNAL_FIELD_MAP）。"""
+        return {internal: raw[external]
+                for external, internal in self._EXTERNAL_FIELD_MAP.items()
+                if external in raw}
+
     # ---- 内部辅助（_ 前缀，不对外暴露）----
 
     def _normalize_record(self, material_no, material_name, status="正常", unit_value=None,

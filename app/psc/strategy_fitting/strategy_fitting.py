@@ -496,9 +496,11 @@ class StrategyFitting:
             winner_model = self._make_model(best["method"])
             winner_model.fit(np.array(history, dtype=np.float64))
             fc = winner_model.predict(1, level=[80])
-            pred_qty = round(float(fc["mean"][0]), 2)
-            pred_lo = round(float(fc["lo-80"][0]), 2)
-            pred_hi = round(float(fc["hi-80"][0]), 2)
+            # 需求不能为负：模型对退坡件外推（趋势下行穿过 0）会给出负数，
+            # 直接钳到 0——否则「预测 -81 件」这种值进了水位计算会污染全链。
+            pred_qty = round(max(0.0, float(fc["mean"][0])), 2)
+            pred_lo = round(max(0.0, float(fc["lo-80"][0])), 2)
+            pred_hi = round(max(0.0, float(fc["hi-80"][0])), 2)
             model_blob = base64.b64encode(pickle.dumps(winner_model)).decode()
         except Exception:
             pass

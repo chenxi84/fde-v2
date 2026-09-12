@@ -25,8 +25,8 @@ upsert(customer_no*, material_no*, mape*, bias*)
 {
  "customer_no": "AITO",
  "material_no": "M9-BEAM",
- "mape": 0.1,
- "bias": 0.05
+ "mape": 0.08,
+ "bias": 0.03
 }
 ```
 
@@ -52,22 +52,6 @@ publish(version_no*)
 ### get/list 示例
 （未造出样例 —— 字段请读源码 get()/INSERT 语句）
 
-### list 返回项示例
-```json
-{
- "version_no": "202608",
- "material_no": "M9-BEAM",
- "rolling_month": "N+1",
- "forecast_qty": 10000.0,
- "inventory_qty": 353.45,
- "gross_qty": 10353.45,
- "open_order_qty": 0.0,
- "onhand_qty": 0.0,
- "in_transit_qty": 0.0,
- "net_qty": 10353.45
-}
-```
-
 
 ## demand_pool
 
@@ -92,19 +76,6 @@ release(replenish_no*, promised_inbound=None:string)
 ### get/list 示例
 （未造出样例 —— 字段请读源码 get()/INSERT 语句）
 
-### list 返回项示例
-```json
-{
- "replenish_no": "RP202609030001",
- "material_no": "M9-BEAM",
- "replenish_type": "最低库存补库",
- "replenish_qty": 353.45,
- "required_inbound": "2026-09-03",
- "promised_inbound": null,
- "status": "已取消"
-}
-```
-
 
 ## inventory_projection
 
@@ -124,18 +95,6 @@ scan_alert(material_no*, version_no=None:string)
 
 ### get/list 示例
 （未造出样例 —— 字段请读源码 get()/INSERT 语句）
-
-### list 返回项示例
-```json
-{
- "material_no": "M9-BEAM",
- "biz_date": "2026-09-09",
- "inbound_qty": 0.0,
- "outbound_qty": 0.0,
- "balance": 0.0,
- "alert_type": "击穿最低"
-}
-```
 
 
 ## inventory_strategy
@@ -157,24 +116,6 @@ list(version_no=None:string, material_no=None:string, hedge_tool=None:string, pa
 ### get/list 示例
 （未造出样例 —— 字段请读源码 get()/INSERT 语句）
 
-### list 返回项示例
-```json
-{
- "version_no": "202608",
- "material_no": "M9-BEAM",
- "hedge_tool": "速度",
- "min_level": 353.45,
- "service_factor": 1.65,
- "resp_volatility": 595.68,
- "safety_level": 0,
- "batch_window": 0,
- "batch_level": 0,
- "basis": "物料M9-BEAM：生产3天+物流2天，满足率95%，组批窗口0天，近7期月均干净需求5301.71件，对冲工具速度",
- "lower": 353.45,
- "upper": 353.45
-}
-```
-
 
 ## master_plan
 
@@ -192,18 +133,6 @@ list(version_no=None:string, material_no=None:string, page=None:integer, size=No
 
 ### get/list 示例
 （未造出样例 —— 字段请读源码 get()/INSERT 语句）
-
-### list 返回项示例
-```json
-{
- "material_no": "M9-LAMP",
- "version_no": "202610",
- "rolling_month": "N+1",
- "plan_version": 1,
- "plan_qty": 32647.5,
- "latest_inbound_date": "2026-10-31"
-}
-```
 
 
 ## md_breakpoint
@@ -231,6 +160,19 @@ update(bp_id*, customer_no=None:string, old_material_no=None:string, new_materia
 ### get/list 示例
 （未造出样例 —— 字段请读源码 get()/INSERT 语句）
 
+### list 返回项示例
+```json
+{
+ "bp_id": 4,
+ "customer_no": "BYD",
+ "old_material_no": "BYD-HAN-FB25",
+ "new_material_no": "BYD-HAN-FB26",
+ "switch_time": "2026-07-01",
+ "ecn_no": "ECN-2026-0451",
+ "disabled": 0
+}
+```
+
 
 ## md_customer
 
@@ -255,8 +197,8 @@ update(customer_no*, customer_name=None:string, settle_mode=None:string, line_st
 ```json
 {
  "customer_no": "AITO",
- "customer_name": "问界汽车（赛力斯）",
- "credit_code": null,
+ "customer_name": "赛力斯汽车有限公司",
+ "credit_code": "915000007094891941",
  "settle_mode": "寄售",
  "line_stock_days": 3,
  "transfer_lead_days": 2
@@ -282,6 +224,8 @@ predecessor_chain(material_no*)
     — 递归追溯前序物料链，返回 [最老前序, …, 直接前序, 本物料]（最老在前）。
 set_fit_params(material_no*, base_method*, base_params*, batch_window*, service_level*, fit_version*, model_blob=None:string, sigma_l=None:number)
     — 拟合参数回填（被 strategy_fitting 调用），更新方法/参数并记录版本快照。
+sync_external_material()
+    — 对外服务：从外部（ERP / PLM）拉取物料主数据并经 import_batch 落库。
 update(material_no*, material_name=None:string, status=None:string, unit_value=None:number, value_class=None:string, change_cost=None:number, prod_days=None:number, logistics_days=None:number, change_risk=None:string, service_level=None:number, batch_window=None:number, base_method=None:string, base_params=None:string, predecessor_material_no=None:string)
     — 更新物料名称与各参数；material_no（主键）与 status（只读）不可修改。
 ```
@@ -292,22 +236,22 @@ update(material_no*, material_name=None:string, status=None:string, unit_value=N
 ### list 返回项示例
 ```json
 {
- "material_no": "M9-BEAM",
- "material_name": "前防撞梁总成",
+ "material_no": "BYD-HAN-BRK",
+ "material_name": "汉2026款制动踏板总成",
  "predecessor_material_no": null,
  "status": "正常",
- "unit_value": null,
+ "unit_value": 2600.0,
  "value_class": "高",
- "change_cost": null,
- "prod_days": 3.0,
- "logistics_days": 2.0,
- "change_risk": null,
- "service_level": 0.95,
- "batch_window": 28.0,
- "base_method": "AutoETS",
- "base_params": "{\"season_length\": 12}",
- "fit_version": "202609",
- "fit_effective_at": "2026-09-04 14:53:08",
+ "change_cost": 8000.0,
+ "prod_days": 2.0,
+ "logistics_days": 1.0,
+ "change_risk": "高",
+ "service_level": 0.98,
+ "batch_window": 14.0,
+ "base_method": null,
+ "base_params": null,
+ "fit_version": null,
+ "fit_effective_at": null,
  "model_blob": null,
  "sigma_l": null
 }
@@ -334,9 +278,9 @@ unfreeze(version_no*)
 ### list 返回项示例
 ```json
 {
- "version_no": "202612",
- "anchor_period": "2026-12",
- "opening_date": "2026-12-01",
+ "version_no": "202610",
+ "anchor_period": "2026-10",
+ "opening_date": "2026-10-01",
  "lock_status": "草稿"
 }
 ```
@@ -384,13 +328,13 @@ update(project_no*, project_name=None:string, stage=None:string, sop_date=None:s
 ### list 返回项示例
 ```json
 {
- "project_no": "M9",
- "project_name": "问界M9",
- "stage": "进行中",
- "sop_date": "",
- "eop_date": "",
- "owner": "赛力斯",
- "veh_model": "问界M9",
+ "project_no": "BYD-HAN-25",
+ "project_name": "比亚迪·汉 2025 款",
+ "stage": "EOP",
+ "sop_date": "2024-09-01",
+ "eop_date": "2026-08-31",
+ "owner": "王振",
+ "veh_model": "比亚迪·汉",
  "share": 1.0
 }
 ```
@@ -420,8 +364,8 @@ update(project_no*, material_no*, usage=None:string)
 ### list 返回项示例
 ```json
 {
- "project_no": "M9",
- "material_no": "M9-BEAM",
+ "project_no": "BYD-HAN-25",
+ "material_no": "BYD-HAN-FB25",
  "usage": 1
 }
 ```
@@ -491,26 +435,26 @@ summarize(version_no*)
 ### list 返回项示例
 ```json
 {
- "version_no": "202608",
- "material_no": "M9-BEAM",
- "customer_no": "AITO",
+ "version_no": "202610",
+ "material_no": "BYD-HAN-BRK",
+ "customer_no": "BYD",
  "rolling_month": "N+1",
- "orig_qty": 10000.0,
- "mape": 0.1,
- "bias": 0.05,
- "adj_qty": 9500.0,
- "base_method": "移动平均",
- "base_params": "{\"window\": 6}",
- "base_qty": 5139.0,
+ "orig_qty": null,
+ "mape": null,
+ "bias": null,
+ "adj_qty": null,
+ "base_method": null,
+ "base_params": null,
+ "base_qty": null,
  "event_analysis": null,
  "event_adj": 0.0,
- "base_event_qty": 5139.0,
+ "base_event_qty": null,
  "bp_material_no": null,
  "switch_time": null,
- "abnormal_flag": 1,
- "final_qty": 10000.0,
- "created_at": "2026-08-20 20:09:39",
- "updated_at": "2026-08-20 20:09:39",
+ "abnormal_flag": 0,
+ "final_qty": null,
+ "created_at": "2026-09-13 00:26:10",
+ "updated_at": "2026-09-13 00:26:10",
  "created_by": "demo",
  "updated_by": "demo"
 }
@@ -547,10 +491,10 @@ upsert(material_no*, customer_no*, period*, qty*)
 ### list 返回项示例
 ```json
 {
- "material_no": "M9-LAMP",
- "customer_no": "AITO",
+ "material_no": "BYD-HAN-BRK",
+ "customer_no": "BYD",
  "period": "2024-09",
- "qty": 6500.0,
+ "qty": 1426.0,
  "forecast_qty": null
 }
 ```
@@ -580,28 +524,3 @@ run_batch(fit_version=None:string)
 
 ### get/list 示例
 （未造出样例 —— 字段请读源码 get()/INSERT 语句）
-
-### list 返回项示例
-```json
-{
- "material_no": "M9-BEAM",
- "fit_version": "202609",
- "pred_method": "AutoETS",
- "pred_params": "{\"season_length\": 12}",
- "smape": 0.0272,
- "mase": null,
- "pred_qty": null,
- "pred_lo": null,
- "pred_hi": null,
- "sigma_l": null,
- "detail_json": null,
- "service_factor": 1.65,
- "safety_level": 42.47,
- "batch_window": 28.0,
- "fulfill_rate": 0.95,
- "inv_days": 38.73,
- "changeover_cnt": 4,
- "abnormal_flag": false,
- "status": "待复核"
-}
-```
