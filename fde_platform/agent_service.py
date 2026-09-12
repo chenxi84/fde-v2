@@ -217,9 +217,17 @@ async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str):
                 if t["_meta"]["app"] == "__platform__"
                 or t["_meta"]["app"].startswith(group + "/")]
 
-    # leader：知识查询类平台工具（propose_skill / 读单文档 / 查知识图谱）进 basic，
-    # 其余平台工具（集成/定时配置等）不给 leader（走 worker 或 admin）；业务工具按领域分组懒加载。
-    _LEADER_BASIC_SERVICES = {"propose_skill", "read_app_doc", "query_knowledge"}
+    # leader：知识查询类平台工具（propose_skill / 读单文档 / 查知识图谱）**以及流程编排工具**进 basic，
+    # 其余平台工具（集成/定时配置/用户角色等 admin 配置）不给 leader（走 worker 或 admin）；
+    # 业务工具按领域分组懒加载。
+    #
+    # 流程编排工具必须在这里 —— 原来只列了三个查询类，把 list_flows / run_flow / flow_progress /
+    # save_flow / delete_flow 连同 admin 配置工具一起 `continue` 掉了。于是「让数字员工跑工作流」
+    # 和「让大模型创建工作流」两条路都断了：工具确实定义在 _platform_tool_defs 里、middleware 的
+    # GLOBAL_PLATFORM_TOOLS 也放行，但工厂层从来没把它们交给 agent，数字员工在工具表里根本看不到。
+    _LEADER_BASIC_SERVICES = {"propose_skill", "read_app_doc", "query_knowledge",
+                              "list_flows", "run_flow", "flow_progress",
+                              "save_flow", "delete_flow"}
     basic = []
     groups: dict[str, list] = {}
     group_apps: dict[str, set] = {}
