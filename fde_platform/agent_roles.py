@@ -83,14 +83,19 @@ _ROLE_LABEL: dict[str, str] = {**_BIZ_LABEL, **_PLATFORM_LABEL}
 # 为什么用黑名单而不是白名单：白名单要为 180 个服务逐一表态，加个应用就要同步改，
 # 维护不动；而这些「agent 不该碰」的服务是少数、稳定、有明确特征。
 # 依据：外部证据显示多余的候选会**主动伤害**工具选择准确率，能摘就摘。
-def _load_hidden_tools() -> dict[str, tuple[str, ...]]:
-    """扫描各组 _agent_tools.py，装配 {应用 qualname: (服务名, ...)}。
+def _load_agent_tools_decl() -> tuple[dict, dict]:
+    """扫描各组 _agent_tools.py，装配 (HIDDEN_FROM_AGENT, GROUP_HINTS)。
+
+    一次扫描两个声明：**服务可见性**（哪些服务不给 agent 调）与
+    **组描述提示**（这个应用什么时候该激活）。两者都是「组级下沉的 agent 相关声明」，
+    放同一个文件、同一次扫描，避免两处各扫一遍迟早不同步。
 
     任一文件出错仅跳过该组，不阻断平台启动（与 _load_group_roles 同策略）。
     """
     hidden: dict[str, set[str]] = {}
+    hints: dict[str, str] = {}
     if not _ROLES_DIR.is_dir():
-        return {}
+        return {}, {}
     for group_dir in sorted(_ROLES_DIR.iterdir()):
         if not group_dir.is_dir() or group_dir.name.startswith((".", "__")):
             continue
@@ -107,10 +112,13 @@ def _load_hidden_tools() -> dict[str, tuple[str, ...]]:
                 continue
             hidden.setdefault(str(app), set()).update(
                 s for s in (services or []) if s)
-    return {k: tuple(sorted(v)) for k, v in hidden.items()}
+        for app, hint in (ns.get("GROUP_HINTS") or {}).items():
+            if app and (hint or "").strip():
+                hints[str(app)] = hint.strip()
+    return ({k: tuple(sorted(v)) for k, v in hidden.items()}, hints)
 
 
-HIDDEN_FROM_AGENT = _load_hidden_tools()
+HIDDEN_FROM_AGENT, GROUP_HINTS = _load_agent_tools_decl()
 
 
 def hidden_tools_for(app_name: str) -> tuple[str, ...]:
@@ -120,6 +128,11 @@ def hidden_tools_for(app_name: str) -> tuple[str, ...]:
 
 def is_hidden_from_agent(app_name: str, service: str) -> bool:
     return (service or "") in HIDDEN_FROM_AGENT.get((app_name or "").strip(), ())
+
+
+def group_hint_for(app_name: str) -> str:
+    """该应用声明的组描述提示（什么时候激活、和哪个相邻应用别搞混）。"""
+    return GROUP_HINTS.get((app_name or "").strip(), "")
 
 # 平台运维角色（仅 admin 可建，见 agent_service 的 subagent_type 收口）
 PLATFORM_ROLES = set(ROLE_PLATFORM_TOOLS)

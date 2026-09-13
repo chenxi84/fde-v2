@@ -245,10 +245,17 @@ if _gaps:
 def _app_group_desc(app: str) -> str:
     """应用分组的描述：中文名 + 一句话职责 + 归属角色。
 
-    中文名与职责取自前端页面注册表（PAGE_META 的 name/crumb）——那是应用自述的
-    单一事实来源，不必在平台侧再手写一份（2026-09 的方案初稿就在这上面绕了远路）。
-    取不到时回落为应用短名，只影响可读性，不影响分组正确性。
+    优先级：**组级声明的提示** > 前端页面注册表（PAGE_META 的 name/crumb）> 应用短名。
+
+    为什么要有「组级提示」这一层：初版只用注册表的 crumb，实测 A/B 评测里
+    **最大的新增失败模式就是「组选错」**（demand_pool 选成 demand、md_project 选成
+    master_plan），因为相邻应用的 crumb 都是「计划/排产专家域：xxx」这种同构文案，
+    模型分不出该开哪个。提示层专门写「什么时候用它、什么时候用隔壁那个」。
+    注册表仍是默认来源——它是应用自述的单一事实来源，不该在平台侧复制一份。
     """
+    hint = agent_roles.group_hint_for(app)
+    if hint:
+        return hint
     short = app.split("/")[-1]
     role = _APP_ROLE.get(app, "")
     label = agent_roles.role_label(role) if role else ""
