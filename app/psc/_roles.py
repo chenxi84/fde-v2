@@ -8,7 +8,8 @@ ROLES = [
               "psc/master_plan", "psc/demand_pool"]},
     {"type": "inventory", "label": "物料/库存专家",
      "apps": ["psc/md_material", "psc/md_breakpoint", "psc/md_part_replace",
-              "psc/inventory_strategy", "psc/inventory_projection"]},
+              "psc/inventory_strategy", "psc/inventory_projection",
+              "psc/demand_pool"]},
     {"type": "delivery", "label": "交付/出库专家",
-     "apps": ["psc/outbound_plan"]},
+     "apps": ["psc/outbound_plan", "psc/demand"]},
 ]

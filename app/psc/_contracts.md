@@ -52,6 +52,22 @@ publish(version_no*)
 ### get/list 示例
 （未造出样例 —— 字段请读源码 get()/INSERT 语句）
 
+### list 返回项示例
+```json
+{
+ "version_no": "202610",
+ "material_no": "BYD-HAN-BRK",
+ "rolling_month": "N+1",
+ "forecast_qty": 1629.6,
+ "inventory_qty": 0.0,
+ "gross_qty": 1629.6,
+ "open_order_qty": 0.0,
+ "onhand_qty": 0.0,
+ "in_transit_qty": 0.0,
+ "net_qty": 1629.6
+}
+```
+
 
 ## demand_pool
 
@@ -76,6 +92,19 @@ release(replenish_no*, promised_inbound=None:string)
 ### get/list 示例
 （未造出样例 —— 字段请读源码 get()/INSERT 语句）
 
+### list 返回项示例
+```json
+{
+ "replenish_no": "RP202609130001",
+ "material_no": "BYD-HAN-BRK",
+ "replenish_type": "最低库存补库",
+ "replenish_qty": 151.64,
+ "required_inbound": "2026-10-01",
+ "promised_inbound": null,
+ "status": "待下达"
+}
+```
+
 
 ## inventory_projection
 
@@ -95,6 +124,18 @@ scan_alert(material_no*, version_no=None:string)
 
 ### get/list 示例
 （未造出样例 —— 字段请读源码 get()/INSERT 语句）
+
+### list 返回项示例
+```json
+{
+ "material_no": "BYD-HAN-BRK",
+ "biz_date": "2026-10-01",
+ "inbound_qty": 0.0,
+ "outbound_qty": 0.0,
+ "balance": 0.0,
+ "alert_type": "击穿最低"
+}
+```
 
 
 ## inventory_strategy
@@ -116,6 +157,24 @@ list(version_no=None:string, material_no=None:string, hedge_tool=None:string, pa
 ### get/list 示例
 （未造出样例 —— 字段请读源码 get()/INSERT 语句）
 
+### list 返回项示例
+```json
+{
+ "version_no": "202610",
+ "material_no": "BYD-HAN-BRK",
+ "hedge_tool": "库存",
+ "min_level": 151.64,
+ "service_factor": 1.65,
+ "resp_volatility": 5.99,
+ "safety_level": 9.88,
+ "batch_window": 28,
+ "batch_level": 1415.32,
+ "basis": "物料BYD-HAN-BRK：生产2天+物流1天，满足率95%，组批窗口28天，近12期月均干净需求1516.42件，对冲工具库存",
+ "lower": 161.52,
+ "upper": 1576.84
+}
+```
+
 
 ## master_plan
 
@@ -125,6 +184,8 @@ get(plan_version*, material_no*, rolling_month*)
     — 按主键（plan_version + material_no + rolling_month）查询单行主计划。
 get_latest(version_no*, material_no*)
     — 取某物料在指定月度版本下、每个滚动月度最大 plan_version 的行（供库存推移表取预计入库量）。
+import_from_net(version_no*, material_nos=None:string, rolling_month='N+1':string, latest_inbound_date=None:string)
+    — 「原样通过」导入：把净需求清单里的指定行原样转成主计划行（FUNC-05）。
 import_plan(version_no*, rows*)
     — 导入线下产能平衡结果：逐行校验，合法行落新版本（plan_version +1），返回导入摘要。
 list(version_no=None:string, material_no=None:string, page=None:integer, size=None:integer)
@@ -133,6 +194,18 @@ list(version_no=None:string, material_no=None:string, page=None:integer, size=No
 
 ### get/list 示例
 （未造出样例 —— 字段请读源码 get()/INSERT 语句）
+
+### list 返回项示例
+```json
+{
+ "material_no": "BYD-HAN-WIR",
+ "version_no": "202610",
+ "rolling_month": "N+1",
+ "plan_version": 1,
+ "plan_qty": 3307.2,
+ "latest_inbound_date": "2026-10-31"
+}
+```
 
 
 ## md_breakpoint
@@ -163,7 +236,7 @@ update(bp_id*, customer_no=None:string, old_material_no=None:string, new_materia
 ### list 返回项示例
 ```json
 {
- "bp_id": 4,
+ "bp_id": 20,
  "customer_no": "BYD",
  "old_material_no": "BYD-HAN-FB25",
  "new_material_no": "BYD-HAN-FB26",
@@ -246,12 +319,12 @@ update(material_no*, material_name=None:string, status=None:string, unit_value=N
  "prod_days": 2.0,
  "logistics_days": 1.0,
  "change_risk": "高",
- "service_level": 0.98,
- "batch_window": 14.0,
- "base_method": null,
- "base_params": null,
- "fit_version": null,
- "fit_effective_at": null,
+ "service_level": 0.95,
+ "batch_window": 28.0,
+ "base_method": "AutoTheta",
+ "base_params": "{\"season_length\": 12}",
+ "fit_version": "202610",
+ "fit_effective_at": "2026-09-13 22:07:10",
  "model_blob": null,
  "sigma_l": null
 }
@@ -281,7 +354,7 @@ unfreeze(version_no*)
  "version_no": "202610",
  "anchor_period": "2026-10",
  "opening_date": "2026-10-01",
- "lock_status": "草稿"
+ "lock_status": "冻结"
 }
 ```
 
@@ -392,6 +465,19 @@ update(plan_no*, customer_no=None:string, material_no=None:string, qty=None:stri
 ### get/list 示例
 （未造出样例 —— 字段请读源码 get()/INSERT 语句）
 
+### list 返回项示例
+```json
+{
+ "plan_no": "OB202609130001",
+ "customer_no": "BYD",
+ "material_no": "BYD-HAN-SPARM",
+ "qty": 44.2,
+ "out_date": "2026-10-10",
+ "actual_out_no": null,
+ "status": "待出库"
+}
+```
+
 
 ## sales_forecast
 
@@ -439,10 +525,10 @@ summarize(version_no*)
  "material_no": "BYD-HAN-BRK",
  "customer_no": "BYD",
  "rolling_month": "N+1",
- "orig_qty": null,
- "mape": null,
- "bias": null,
- "adj_qty": null,
+ "orig_qty": 1680.0,
+ "mape": 0.09,
+ "bias": 0.03,
+ "adj_qty": 1629.6,
  "base_method": null,
  "base_params": null,
  "base_qty": null,
@@ -452,9 +538,9 @@ summarize(version_no*)
  "bp_material_no": null,
  "switch_time": null,
  "abnormal_flag": 0,
- "final_qty": null,
- "created_at": "2026-09-13 00:26:10",
- "updated_at": "2026-09-13 00:26:10",
+ "final_qty": 1629.6,
+ "created_at": "2026-09-13 22:06:58",
+ "updated_at": "2026-09-13 22:07:06",
  "created_by": "demo",
  "updated_by": "demo"
 }
@@ -524,3 +610,28 @@ run_batch(fit_version=None:string)
 
 ### get/list 示例
 （未造出样例 —— 字段请读源码 get()/INSERT 语句）
+
+### list 返回项示例
+```json
+{
+ "material_no": "BYD-HAN-BRK",
+ "fit_version": "202610",
+ "pred_method": "AutoTheta",
+ "pred_params": "{\"season_length\": 12}",
+ "smape": 0.0391,
+ "mase": null,
+ "pred_qty": null,
+ "pred_lo": null,
+ "pred_hi": null,
+ "sigma_l": null,
+ "detail_json": null,
+ "service_factor": 1.65,
+ "safety_level": 119.94,
+ "batch_window": 28.0,
+ "fulfill_rate": 0.95,
+ "inv_days": 30.43,
+ "changeover_cnt": 6,
+ "abnormal_flag": false,
+ "status": "已生效"
+}
+```

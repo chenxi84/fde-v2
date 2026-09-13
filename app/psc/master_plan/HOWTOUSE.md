@@ -4,10 +4,11 @@
 
 ## 标准工作流（按此顺序）
 
-1. `import_plan` — **唯一的数据入口**：传 `version_no` 与 `rows`，每行含 `material_no` / `rolling_month` / `plan_qty` / `latest_inbound_date`。**用户拿一份线下平衡结果要你导进去是完全正常的请求**，直接导
-2. `list` — 按 `version_no` / `material_no` 精确筛选浏览（`plan_version` 降序）
-3. `get` — 用返回的 `plan_version + material_no + rolling_month` 核对单行
-4. `get_latest` — 取该物料在每个滚动月度的**最新版本**行；这是下游库存推移表「预计入库量」的取数口径
+1. `import_from_net` — **产能平衡「照单全收」时走它**：只给 `version_no` / `material_nos` / `rolling_month` / `latest_inbound_date`，净需求多少就排多少，取数换算由服务自己做。**别自己去读净需求再手抄数字拼 rows**——抄错一位就是一个错的主计划
+2. `import_plan` — 线下平衡**动过数量**时才用它：传 `version_no` 与 `rows`，每行含 `material_no` / `rolling_month` / `plan_qty` / `latest_inbound_date`。**用户拿一份线下平衡结果要你导进去是完全正常的请求**，直接导
+3. `list` — 按 `version_no` / `material_no` 精确筛选浏览（`plan_version` 降序）
+4. `get` — 用返回的 `plan_version + material_no + rolling_month` 核对单行
+5. `get_latest` — 取该物料在每个滚动月度的**最新版本**行；这是下游库存推移表「预计入库量」的取数口径
 
 ## 前置条件与禁忌
 

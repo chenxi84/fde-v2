@@ -2,6 +2,20 @@ from __future__ import annotations
 
 from fde import FdeError
 from datetime import datetime
+import json
+
+
+def _split_materials(value):
+    """料号清单归一：JSON 数组串 / 中英文逗号分隔串 / 单个料号 → 字符串列表。"""
+    text = str(value).strip()
+    if text.startswith("["):
+        try:
+            loaded = json.loads(text)
+        except ValueError:
+            loaded = None
+        if isinstance(loaded, list):
+            return [str(x) for x in loaded]
+    return text.replace("，", ",").split(",")
 
 
 class MasterPlan:
@@ -83,6 +97,59 @@ class MasterPlan:
             "fail": len(errors),
             "errors": errors,
         }
+
+    def import_from_net(self, version_no, material_nos=None, rolling_month="N+1",
+                        latest_inbound_date=None):
+        """「原样通过」导入：把净需求清单里的指定行原样转成主计划行（FUNC-05）。
+
+        线下产能平衡通常是**照单全收**——产能够，净需求多少就排多少。这一步在系统里
+        此前只能靠人（或智能体）盯着 export_net 的返回手抄数字，抄错一位就是一个
+        错的主计划。数量换算本身没有判断成分，所以放回聚合根里做：**net_qty 即
+        plan_qty，逐字不改**；有调整的场景仍走 `import_plan` 手填。
+
+        :param version_no: 月度版本 YYYYMM（必填——不能默认取活跃版本：
+            `demand.calc_net` 会把版本推入冻结态，此时「活跃版本」已不是它了）
+        :param material_nos: 限定料号（列表或逗号分隔串）；不传 = 该滚动月度全部行
+        :param rolling_month: N+1 / N+2 / N+3，默认 N+1
+        :param latest_inbound_date: 最迟入库日期 YYYY-MM-DD，必填
+        """
+        version_no = self._clean(version_no)
+        if not version_no:
+            raise FdeError("月度版本不能为空")
+        rolling_month = self._clean(rolling_month) or "N+1"
+        latest_inbound_date = self._clean(latest_inbound_date)
+        if not latest_inbound_date:
+            raise FdeError("最迟入库日期不能为空")
+        if isinstance(material_nos, str):
+            # 调用方常把数组写成字符串：'["A","B"]' 或 'A,B' 都接住
+            material_nos = _split_materials(material_nos)
+        want = [self._clean(m) for m in (material_nos or [])]
+        want = [m for m in want if m]
+
+        net_rows = self.fde.call("demand", "export_net", version_no=version_no)
+        picked, hit = [], set()
+        for r in net_rows or []:
+            material_no = self._clean(r.get("material_no"))
+            if self._clean(r.get("rolling_month")) != rolling_month:
+                continue
+            if want and material_no not in want:
+                continue
+            hit.add(material_no)
+            picked.append({
+                "material_no": material_no,
+                "rolling_month": rolling_month,
+                "plan_qty": r.get("net_qty"),
+                "latest_inbound_date": latest_inbound_date,
+            })
+        if not picked:
+            scope = "、".join(want) if want else "全部物料"
+            raise FdeError(f"净需求清单里没有 {rolling_month} 的 {scope} 可导")
+
+        summary = self.import_plan(version_no, picked)
+        summary["rolling_month"] = rolling_month
+        summary["materials"] = sorted(hit)
+        summary["missing"] = [m for m in want if m not in hit]
+        return summary
 
     def get(self, plan_version: int, material_no: str, rolling_month: str):
         """按主键（plan_version + material_no + rolling_month）查询单行主计划。"""

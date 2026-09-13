@@ -14,6 +14,7 @@
 | 工具名 | 参数 | 说明 |
 |---|---|---|
 | `psc__master_plan__import_plan` | `version_no`（文本，必填，YYYYMM）、`rows`（list[dict]，必填） | 批量导回线下产能平衡结果；每条行含 `material_no`/`rolling_month`/`plan_qty`/`latest_inbound_date`；逐行校验，合法行落新版本（`plan_version +1`），返回导入摘要 |
+| `psc__master_plan__import_from_net` | `version_no`（文本，必填，YYYYMM）、`material_nos`（list[str] 或逗号分隔串，选填）、`rolling_month`（文本，选填，默认 `N+1`）、`latest_inbound_date`（文本，必填，YYYY-MM-DD） | **原样通过**导入：从 `demand.export_net` 取的净需求里捞出指定料号/滚动月度的行，`net_qty` 即 `plan_qty` 逐字不改，再走 `import_plan` 入库；返回导入摘要 + `materials` / `missing` |
 | `psc__master_plan__get` | `plan_version`（整数，必填）、`material_no`（文本，必填）、`rolling_month`（文本，必填） | 按主键查询单行主计划 |
 | `psc__master_plan__list` | `version_no`（文本，选填）、`material_no`（文本，选填）、`page`（整数，选填，默认 1）、`size`（整数，选填，默认 20） | 分页列表，按 `plan_version` 降序；返回 `{"items", "total"}` |
 | `psc__master_plan__get_latest` | `version_no`（文本，必填）、`material_no`（文本，必填） | 取该物料在指定月度版本下、每个滚动月度最大 `plan_version` 的行（列表，无记录返回空列表） |
@@ -23,6 +24,7 @@
 ## 三、标准工作流
 
 1. **导入主计划（唯一数据入口）**：计划在线下完成产能平衡后，调用 `psc__master_plan__import_plan(version_no, rows)`。服务内部先自动调用 `demand.export_net(version_no)` 导出净需求作参考，再逐行校验并入库，返回 `{version_no, plan_version, success, fail, errors}`。
+   - **产能平衡「照单全收」时走 `import_from_net`**：线下没改数量就别手抄数字，`psc__master_plan__import_from_net(version_no, material_nos, rolling_month, latest_inbound_date)` 会把 `net_qty` 原样转成 `plan_qty` 再导入。手抄 18 行数字出错是必然，不是偶然。
 2. **浏览主计划**：调用 `psc__master_plan__list(version_no=..., material_no=..., page=..., size=...)` 分页浏览；需要核对某行时，用返回的 `plan_version + material_no + rolling_month` 调 `psc__master_plan__get` 取详情。
 3. **下游取预计入库量**（库存推移表）：对每个物料调 `psc__master_plan__get_latest(version_no, material_no)`，返回该物料各滚动月度最新版本行的 `plan_qty`/`latest_inbound_date`。
 
@@ -40,7 +42,10 @@
 
 | 错误信息 | 含义 | Agent 下一步 |
 |---|---|---|
-| `月度版本不能为空` | `import_plan` / `get_latest` 未传 version_no | 向用户索要月度版本号（YYYYMM，如 202608）后重试 |
+| `月度版本不能为空` | `import_plan` / `import_from_net` / `get_latest` 未传 version_no | 向用户索要月度版本号（YYYYMM，如 202608）后重试 |
+| `最迟入库日期不能为空` | `import_from_net` 未传 latest_inbound_date | 补全最迟入库日期后重试 |
+| `净需求清单里没有 N+1 的 XXX 可导` | `import_from_net` 在该版本/滚动月度下没捞到指定料号 | 先 `demand.export_net` 看有哪些料号行，或核对 rolling_month；净需求未运算时先跑 `demand.calc_net` |
+| `净需求未运算` | 该版本还没跑过 `demand.calc_net`（未冻结） | 先 `demand.build_gross` → `demand.publish` → `demand.calc_net`，再导 |
 | `导入行不能为空` | `rows` 非列表或为空 | 向用户索要至少一行平衡结果后再导入 |
 | `物料号不能为空` | 导入行缺 material_no 或 `get`/`get_latest` 未传 material_no | 补全物料号后重试 |
 | `滚动月度不能为空` | 导入行缺 rolling_month 或 `get` 未传 rolling_month | 补全滚动月度后重试 |

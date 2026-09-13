@@ -300,6 +300,35 @@ def run_part(call, step, expect_err, record):
     except Exception as e:
         record(False, f"{e}")
 
+    step("TC-MC-11b 净需求原样通过导入（import_from_net，FUNC-05）")
+    try:
+        net = call("demand", "get", version_no=V202608, material_no=M1, rolling_month="N+1")
+        r = call("master_plan", "import_from_net", version_no=V202608, material_nos=M1,
+                 rolling_month="N+1", latest_inbound_date="2026-09-30")
+        assert r.get("success") == 1, r
+        assert r.get("plan_version") == 2, r     # TC-MC-11 的 import_plan 已占 v1
+        assert r.get("materials") == [M1] and r.get("missing") == [], r
+        latest = call("master_plan", "get_latest", version_no=V202608, material_no=M1)
+        # 原样通过：plan_qty 逐字等于 net_qty，不掺任何再计算
+        assert abs((latest[0].get("plan_qty") or 0) - (net.get("net_qty") or 0)) < 0.01, latest
+        record(True)
+    except Exception as e:
+        record(False, f"{e}")
+
+    step("TC-MC-11c 净需求原样通过导入：料号无命中须报错，不静默导 0 行")
+    try:
+        expect_err(lambda: call("master_plan", "import_from_net", version_no=V202608,
+                                material_nos="NO-SUCH-MAT", rolling_month="N+1",
+                                latest_inbound_date="2026-09-30"), "可导")
+        # material_nos 写成 JSON 数组串也要认（调用方常这么传）
+        r = call("master_plan", "import_from_net", version_no=V202608,
+                 material_nos='["%s"]' % M1, rolling_month="N+1",
+                 latest_inbound_date="2026-09-30")
+        assert r.get("success") == 1 and r.get("materials") == [M1], r
+        record(True)
+    except Exception as e:
+        record(False, f"{e}")
+
     step("TC-MC-12 库存推移表逐日推演")
     try:
         call("inventory_projection", "refresh", material_no=M1, biz_date="2026-08-15",
