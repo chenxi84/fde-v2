@@ -57,16 +57,46 @@ _DB_URL = os.environ.get(
 _WORKDIR = str(_BASE / "agent_workspaces")
 
 # 危险服务判定：命中即走 HITL 确认。
-_DANGEROUS_PATTERNS = (
-    "delete", "remove", "publish", "unpublish", "lock", "deprecate", "cancel",
-    "approve", "reject", "archive", "drop", "truncate", "destroy", "deactivate",
-    "close",
-)
+# 走 HITL（人工确认）的业务服务 —— **显式清单，不按名字猜**。
+#
+# 为什么不再用名字子串匹配：原来那套（delete/publish/cancel/approve/close…）既漏又误伤——
+#   · 漏：`calc_net` 名字里没有关键词，但它会**联动冻结月度版本**（全链转只读）；
+#         `freeze` / `disable` / `rollback` 同样漏网。
+#   · 误伤：`close_expired` 只是「到期自动关闭」的惰性结算（读列表时顺带触发），
+#         拦它等于每次查询都要点确认。
+#
+# 判据两条，任一成立即拦：
+#   ① **需要人拍板**（即使技术上可逆）—— 它是「对全公司的宣布」或「要人担责的复核」
+#   ② **不可逆**（现有服务里没有能回到原状的操作）
+#
+# ⚠️ 只作用于「智能体对话里调工具」这条路径。API 定时任务与 flow 节点走的是
+#    `_platform.call` / `bridge.execute`，**不经过这里**——所以无人值守不会因此卡住。
+_HITL_SERVICES = {
+    # ① 需要人拍板
+    "publish",     # 版本锁定：等于宣布「本月定了」，下游全线转只读
+    "approve",     # 拟合复核通过：回填物料主数据，影响全链预测参数
+    "reject",      # 拟合否决：同样改变全链参数状态
+    # ② 不可逆
+    "delete",      # 真删除（出库计划）
+    "disable",     # 软失效（断点/替换关系）：没有对应的 enable，做完回不去
+    "rollback",    # 作废已生效的拟合版本
+    "cancel",      # 补库单作废（终态）
+    # ③ 名字看不出、但副作用不可逆
+    "calc_net",    # 净需求运算会**联动冻结月度版本** —— 名字里的 calc 掩盖了这一点
+    "freeze",      # 版本冻结
+}
 
 
-def _is_dangerous(tool_name: str) -> bool:
-    service = tool_name.rsplit("__", 1)[-1].lower()
-    return any(p in service for p in _DANGEROUS_PATTERNS)
+def _is_dangerous(tool: dict) -> bool:
+    """该工具是否走 HITL。
+
+    平台工具用它们**自己声明的** `_meta.dangerous`（定义处就标好了，18/31 为 True）；
+    业务工具没有这个字段，回落 `_HITL_SERVICES`。
+    """
+    meta = tool.get("_meta") or {}
+    if "dangerous" in meta:                     # 平台工具：以显式声明为准
+        return bool(meta["dangerous"])
+    return (meta.get("service") or "").lower() in _HITL_SERVICES
 
 
 def _mk_allow():
@@ -349,7 +379,7 @@ async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str):
         ft = FunctionTool(_make_call(name), name=name, description=t["function"]["description"])
         ft.input_schema = _slim_schema(t["function"]["parameters"])
         # 权限：普通工具 ALLOW（授权已由 execute 层 fail-closed）；危险工具 ASK（HITL）。
-        ft.check_permissions = _mk_ask() if _is_dangerous(name) else _mk_allow()
+        ft.check_permissions = _mk_ask() if _is_dangerous(t) else _mk_allow()
         return ft
 
     defs = bridge.tool_schemas(_platform, user)

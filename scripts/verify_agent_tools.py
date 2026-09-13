@@ -158,6 +158,44 @@ def main():
         has_cn = any("一" <= ch <= "鿿" for ch in d)
         check(f"{app} 描述含中文职责", has_cn and len(d) > 4, d[:46])
 
+    # ── ⑥ HITL 闸门（哪些工具要人工确认） ─────────────────────
+    print("\n⑥ HITL 闸门（防「该拦没拦」与「误伤」）")
+    by_name = {t["function"]["name"]: t for t in defs}
+
+    def gated(app: str, svc: str) -> bool:
+        t = by_name.get(f"{app.replace('/', '__')}__{svc}")
+        return bool(t) and A._is_dangerous(t)
+
+    # 漏网补上的四个：名字里没有关键词，但副作用不可逆（calc_net 会冻结版本！）
+    for app, svc, why in (
+            ("psc/demand", "calc_net", "会联动冻结月度版本"),
+            ("psc/md_monthly_version", "freeze", "冻结版本"),
+            ("psc/strategy_fitting", "rollback", "作废已生效拟合"),
+            ("psc/outbound_plan", "delete", "真删除"),
+    ):
+        check(f"{svc} 需人工确认（{why}）", gated(app, svc))
+
+    # 误伤解除：到期自动关闭是惰性结算（读列表时顺带触发），拦它等于每次查询都要点确认
+    check("close_expired 不需确认（惰性结算，非危险动作）",
+          not gated("psc/outbound_plan", "close_expired"))
+
+    # 平台工具改用它们**自己声明的** _meta.dangerous（原来这个字段从没被读过）
+    plat = [t for t in defs if t["_meta"]["app"] == "__platform__"]
+    declared = [t for t in plat if t["_meta"].get("dangerous")]
+    honored = [t for t in declared if A._is_dangerous(t)]
+    check("平台工具的 dangerous 声明被真正使用",
+          len(honored) == len(declared),
+          f"{len(honored)}/{len(declared)} 个 True 声明的被拦")
+
+    # 清单里的服务名必须真实存在（写错 = 静默不生效，与剪枝同一类坑）
+    all_svc = set()
+    for t in defs:
+        if t["_meta"]["app"] != "__platform__":
+            all_svc.add(t["_meta"].get("service", ""))
+    ghost = sorted(s for s in A._HITL_SERVICES if s not in all_svc)
+    check("HITL 清单里的服务名都真实存在", not ghost,
+          f"幽灵条目：{ghost}" if ghost else f"{len(A._HITL_SERVICES)} 条全部命中")
+
     # ── 汇总 ──────────────────────────────────────────────────
     print("\n" + "=" * 74)
     print(f"  结果：{len(PASS)} 项通过，{len(FAIL)} 项失败")
