@@ -31,11 +31,13 @@ fde-v2/
 │   │   │   ├── 前端详设.md    # 可选：前端详细设计（构建流水线步骤 7 产出，设计态、不 serve）
 │   │   │   ├── view.js        # 可选：前端页面（自描述 PAGE_META + 默认导出工厂，见 design-plus/VIEW_CONVENTION.md）
 │   │   │   ├── view.html      # 可选：前端模板片段
-│   │   │   └── README.md      # 可选：应用说明（平台喂给该应用的 Agent，见 §11）
+│   │   │   ├── HOWTOUSE.md    # 可选但强烈推荐：**常驻注入** Agent 的精简要点（见 §11）
+│   │   │   └── README.md      # 可选：完整操作指南，Agent 按需查阅（见 §11）
 │   │   └── sales_org/         # 应用「sales_org」
 │   │       ├── sales_org.py   # 聚合根 SalesOrg
 │   │       ├── sales_org.db
 │   │       ├── resource/
+│   │       ├── HOWTOUSE.md
 │   │       └── README.md
 │   └── todo/                  # 也可直接放在 app/ 下 → 归入「未分组」
 │       └── todo.py
@@ -51,8 +53,10 @@ fde-v2/
 - **主文件与文件夹同名**：`app/e2e/member/member.py`；其中的聚合根类用 `PascalCase`（`member.py` → `class Member`）。文件夹名用 `snake_case`。
 - **同名库放在该应用文件夹内**：`app/e2e/member/member.db`，由平台管理；应用**不需要**也**不应该**自己 `sqlite3.connect`。
 - 平台按**文件路径**加载主文件（非 Python 包导入），故应用文件夹**无需** `__init__.py`。
-- **可选 `README.md`**：放在应用文件夹内，是该应用写给 Agent 的操作指南（标准工作流 / 注意事项 / 错误处理·Agent 应对策略）。
-  平台会把整个 README 喂给**该应用的 Agent**；编写规范见 **§11**。无 README 时 Agent 仅凭内省出的服务签名工作。
+- **可选 `HOWTOUSE.md` / `README.md`**：都放在应用文件夹内，都是该应用写给 Agent 的。
+  **HOWTOUSE 是精简要点（约 300-600 tokens），平台整体注入其对应角色 Agent 的 system prompt**；
+  **README 是完整操作指南，不注入，由 Agent 经 `platform_read_app_doc` 按需查阅**。
+  两者编写规范见 **§11**；都没有时 Agent 仅凭内省出的服务签名工作。
 - **可选前端视图 `view.js` + `view.html`**：放在应用文件夹内（与后端同文件夹，一次生成、整文件夹交付）。平台自动扫描
   装配进所属组的视图菜单（`/view/<组>/`），经写死端点 `/app/<组>/<名>/view.{js,html}` serve（同目录 `.py`/`.db` 绝不暴露）。
   页面自描述约定（`PAGE_META` + 默认导出工厂 + 绝对路径 import `/view/lib/*`）与生成规范见 **`design-plus/VIEW_CONVENTION.md`**（前端视图约定正本）；
@@ -226,25 +230,44 @@ class Todo:
 6. **db 连接管理**：在应用文件夹内创建/打开同名库连接、设 WAL/busy_timeout、每操作的事务提交/回滚。**空库自愈**：每次调用若发现库文件被外部删除/清空（SQLite 会自动重建空库 → 无表），自动经 `schema.sql` 重建表结构（数据不恢复，服务回到「未初始化/未同步」业务态，而不是抛 OperationalError）。
 7. **错误归一与日志**：区分业务失败（`FdeError`）与系统异常，统一记录。
 8. **静态调用扫描器**：用 AST 在**不运行**的前提下校验所有 `self.fde.call` 的目标（应用 / 服务）真实存在，且**调用参数符合目标服务签名契约**（未知参数/缺必传/重复/位置过多）；结果展示于平台首页（`/api/scan`），CLI `python -m fde_platform.scanner`（有问题退出码 1）。
-9. **Agent 操作指南**：加载应用文件夹内的 `README.md`（若有），整体注入该应用 Agent 的 system prompt（见 §11）；无 README 时 Agent 回落到仅用服务签名。
-10. **资源目录与内置文件工具**：加载时自动创建 `resource/import-file`（上传）/ `export-file`（产出）；提供 `platform_list/read/write_file` 内置工具（路径安全防穿越、`import-file` 只读），供 Agent / MCP 做数据导入解析；详情页可上传/下载/删除文件。
+9. **Agent 使用要点**：加载应用文件夹内的 `HOWTOUSE.md`（若有），整体注入**该应用所属角色** Agent 的 system prompt（见 §11）；完整 `README.md` 不进 prompt，由 Agent 经 `platform_read_app_doc` 按需读取。两者都无时 Agent 回落到仅用服务签名。
+10. **资源目录与内置文件工具**：加载时自动创建 `resource/import-file`（上传）/ `export-file`（产出）；提供 `platform_list/read/write_file` 内置工具（路径安全防穿越、`import-file` 只读），供 MCP 与页面使用。**Agent 面只暴露 `read_file`**（读上传的导入文件、图片附件）——`list_files` / `write_file` 对 Agent 边际价值低，却会在工具组内**抢选择**（实测误选里 4 条有 3 条是它），已摘除；开关在 `agent_service._AGENT_HIDDEN_BUILTINS`。
 11. **定时任务**：以 APScheduler 按计划（cron）调度应用的公共服务，走与手工/Agent/MCP 同一 `platform.call` 调用链（含身份注入、事务）；运行日志落 `config/scheduler.db`；管理页 `/scheduler`（按应用授权可见）。可插拔（`python -m fde_platform.scheduler` 可 CLI 管理）。
 
 ---
 
-## 11. 应用 README（Agent 操作指南，强烈推荐）
+## 11. 应用 Agent 文档（HOWTOUSE 常驻 + README 按需）
 
-每个应用**应当**在文件夹内提供 `README.md`（`app/<名>/README.md`）。它不是对外宣传文档，
-而是**应用写给 Agent 的操作指南**：平台在构建该应用的 Agent 会话时，会把整个 README **原样注入
-system prompt**（见 §10 职责⑨）。Agent 据此理解业务、按「标准工作流」调用工具、按「错误处理·Agent
-应对策略」应对失败。
+每个应用**应当**在文件夹内提供两份文档，分工明确：
 
-- **可选但强烈推荐**：平台**不强制**——无 README 的应用照样加载运行，Agent 回落到仅凭内省出的
-  服务签名工作（能用，但缺业务指引与出错对策）。凡是要经 Agent 操作的应用，都应提供 README。
-- **README 是契约，须与代码同步**：其中写的工具名、参数、会抛的错误，必须与公共方法签名一致
-  （工具名恒为 `<组>__<应用名>__<公共方法名>`，组限定前缀保证跨组唯一）。代码改了服务，README 要跟着改。
+| 文件 | 进 prompt 吗 | 写给谁 | 篇幅 |
+|---|---|---|---|
+| `HOWTOUSE.md` | ✅ **常驻注入**（该应用所属角色的 system prompt） | Agent 每次动手前要看的 | 300-600 tokens |
+| `README.md` | ❌ 不注入，`platform_read_app_doc(app, "README")` 按需查 | Agent 遇到细节时查 | 不限 |
 
-### 推荐章节结构（与样例应用一致）
+**为什么不把 README 直接注入**：README 是完整指南（3-4k tokens/应用），一个角色 5-6 个应用就是
+13k tokens，**每次调用都要重过一遍**——实测每次 LLM 调用约 2 倍延迟；外部研究也显示指令密度
+过高会显著降低遵从率（指令数到 ~80 条时，完美遵从率对所有模型归零）。这与 Anthropic 的分层
+实践一致：**常驻放正文（L2），大规则表按需加载（L3）**。
+
+### 11.1 `HOWTOUSE.md`（常驻，四段）
+
+| 段落 | 写什么 |
+|------|--------|
+| 一句话定位 | 这个应用管什么（**一行**） |
+| 标准工作流 | **按顺序**该调哪些工具——这是 HOWTOUSE 的核心价值 |
+| 前置条件与禁忌 | 影响「能不能调 / 何时能调 / 什么不能做」的硬约束；**被摘除的服务在这里点明**「XX 不在你的工具表里，改用 YY」 |
+| 出错时 | 一句指路：`platform_read_app_doc(app="<组>/<应用>", doc="README")` |
+
+**不要写**（这三块占 README 的 60% 以上，且对「选哪个工具」零帮助）：
+
+- ❌ **对外服务表** —— 工具名 / 参数 / 说明**已在每次调用的工具 schema 里**，抄一遍是零信息量的重复
+- ❌ **错误处理表** —— 出错时按需读 README
+- ❌ 聚合根 / 主键 / 同名库 / 数据来源类型等 background
+
+### 11.2 `README.md`（按需，五章）
+
+章节结构不变——它现在的定位正是「查细节的完整手册」：
 
 | 章节 | 写什么 |
 |------|--------|
@@ -254,15 +277,23 @@ system prompt**（见 §10 职责⑨）。Agent 据此理解业务、按「标�
 | 四、前置条件与注意事项 | 约束（非空 / 唯一 / 取值范围）、跨应用依赖、弱引用 / 删除不级联等易踩的坑 |
 | 五、错误处理（Agent 应对策略） | 表格：本应用会抛的每条 `FdeError` 信息 \| 含义 \| **Agent 下一步该怎么做** |
 
-### 写作要求
+### 11.3 两份文档共同的写作要求
 
-1. **工具名与参数以代码为准**：用 `<组>__<应用名>__<公共方法名>`（组限定前缀），参数类型 / 必填 / 默认与签名一致。
+1. **工具名以代码为准**，恒为 `<组>__<应用名>__<公共方法名>`（组限定前缀保证跨组唯一），
+   参数类型 / 必填 / 默认与签名一致。**代码改了服务，文档要跟着改**——文档是契约。
 2. **「标准工作流」要可执行**：写成"先调 A，再调 B"的调用顺序，Agent 会优先照此执行。
-3. **「错误处理」逐条覆盖**本应用抛出的 `FdeError`，并给出 Agent 的**具体动作**
-   （如索要缺失字段 / 先 `list` 核对编号 / 先建依赖应用的数据 / 改用另一服务），而非泛泛而谈。
-4. **用中文，简洁可操作**：面向 Agent，避免与调用无关的铺陈。
+3. **用中文，简洁可操作**：面向 Agent，避免与调用无关的铺陈。
+4. **README 的「错误处理」逐条覆盖**本应用抛出的 `FdeError`，并给出 Agent 的**具体动作**
+   （索要缺失字段 / 先 `list` 核对编号 / 先建依赖应用的数据 / 改用另一服务），而非泛泛而谈。
 
-> 参考样例：`app/e2e/member/README.md`（最小主数据）、`app/e2e/task/README.md`（单据型：状态机 + 跨应用调用）。
+> ⚠️ **两份文档都要遵守「不写没消费者的东西」**：服务藏在工具表里、错误在 README 里，
+> 都是为了让 Agent 读到的每一句都有用。写进 HOWTOUSE 的每一行都在**每次调用**上重复付费。
+
+> 参考样例：`app/e2e/member/`、`app/e2e/task/`（两份文档齐全）；`app/psc/sales_forecast/HOWTOUSE.md`
+> 是 HOWTOUSE 的典型样例（工作流 + 禁忌 + 出错指路，约 500 tokens）。
+
+> 校验：`scripts/verify_agent_tools.py` 会检查**声明了角色绑定的应用是否都有 `HOWTOUSE.md`**
+> （漏写会静默地不注入，属于「静默失效」，必须能被发现）。
 
 ---
 

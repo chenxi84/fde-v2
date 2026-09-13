@@ -219,6 +219,12 @@ def main():
     check("登记表里没有已消失的字段", not stale,
           f"表中多余：{stale}（字段已删，表要同步）" if stale else "")
 
+    # 角色绑定的应用必须都有 HOWTOUSE.md —— 漏写不会报错、只是静默地不注入，
+    # 而「静默地少了一块」正是这类事故的形态（见 CONVENTION §11）。
+    missing_howto = agent_roles.apps_missing_howto()
+    check("角色绑定的应用都有 HOWTOUSE.md", not missing_howto,
+          f"缺：{missing_howto}" if missing_howto else "全部就位")
+
     # ── 汇总 ──────────────────────────────────────────────────
     print("\n" + "=" * 74)
     print(f"  结果：{len(PASS)} 项通过，{len(FAIL)} 项失败")
