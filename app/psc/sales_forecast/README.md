@@ -19,15 +19,19 @@
 |---|---|---|
 | `psc__sales_forecast__open_version` | `version_no`：str，必填 | 开启月度版本：按「正常状态物料 × 该物料的历史采购客户」生成清单并拆 N+1/N+2/N+3 进处理表；某物料无历史采购记录时客户字段为空、仅初始化一行。返回 `{version_no, list_rows, line_rows}`。 |
 | `psc__sales_forecast__create` | `version_no`：str，必填<br>`material_no`：str，必填<br>`customer_no`：str，可选（留空 = 空客户组合） | 手工新建物料×客户组合，覆盖 `open_version` 未生成的组合；拆 N+1/N+2/N+3 三行进处理表。组合已存在 / 物料或客户不存在 / 版本非草稿均拒绝。返回 `{version_no, material_no, customer_no, line_rows}`。 |
-| `psc__sales_forecast__fill_customer` | `version_no`：str，必填<br>`material_no`：str，必填<br>`customer_no`：str，必填<br>`rolling_month`：str，必填（N+1/N+2/N+3）<br>`orig_qty`：float，可选<br>`adj_qty`：float，可选 | 填写客户原始预测数量。系统按 `bias` 自动算 `adj_qty = orig_qty × (1 − bias)`（人工可调）；`orig_qty` 可留空。返回该行全字段。 |
-| `psc__sales_forecast__calc_baseline` | `version_no`：str，必填<br>`material_no`：str，必填<br>`customer_no`：str，必填<br>`rolling_month`：str，必填 | 断点追溯前置 + 按物料 `base_method`/`base_params` 作用于历史干净需求算 `base_qty`，并算 `base_event_qty = base_qty + event_adj`。返回该行全字段。 |
+| `psc__sales_forecast__fill_customer` | `version_no`：str，必填<br>`material_no`：str，必填<br>`customer_no`：str，必填<br>`rolling_month`：str，必填（N+1/N+2/N+3）<br>`orig_qty`：float，可选<br>`adj_qty`：float，可选 | 填写客户原始预测数量。系统按 `bias` 自动算 `adj_qty = orig_qty × (1 − bias)`（人工可调）；`orig_qty` 可留空。返回该行全字段。 单行填数；智能体用 `import_orig_qty` 整批导，**本条不暴露** |
+| `psc__sales_forecast__calc_baseline` | `version_no`：str，必填<br>`material_no`：str，必填<br>`customer_no`：str，必填<br>`rolling_month`：str，必填 | 断点追溯前置 + 按物料 `base_method`/`base_params` 作用于历史干净需求算 `base_qty`，并算 `base_event_qty = base_qty + event_adj`。返回该行全字段。 单行版；智能体用 `calc_baseline_batch`，**本条不暴露** |
 | `psc__sales_forecast__adjust_event` | `version_no`：str，必填<br>`material_no`：str，必填<br>`customer_no`：str，必填<br>`rolling_month`：str，必填<br>`event_analysis`：str，可选<br>`event_adj`：float，可选，默认 0 | 填写事件分析/调整量，重算 `base_event_qty`。事件调整只作用归属期、不外推。返回该行全字段。 |
-| `psc__sales_forecast__decide` | `version_no`：str，必填<br>`material_no`：str，必填<br>`customer_no`：str，必填<br>`rolling_month`：str，必填 | 按 MAPE 与偏离率自动标记异常并给出最终预测建议（异常行不自动填 `final_qty`）。返回该行全字段。 |
+| `psc__sales_forecast__decide` | `version_no`：str，必填<br>`material_no`：str，必填<br>`customer_no`：str，必填<br>`rolling_month`：str，必填 | 按 MAPE 与偏离率自动标记异常并给出最终预测建议（异常行不自动填 `final_qty`）。返回该行全字段。 单行版；智能体用 `decide_batch`，**本条不暴露** |
 | `psc__sales_forecast__set_final` | `version_no`：str，必填<br>`material_no`：str，必填<br>`customer_no`：str，必填<br>`rolling_month`：str，必填<br>`final_qty`：float，必填 | 异常行人工填写最终预测量（仅 `abnormal_flag=1` 的行可填）。返回该行全字段。 |
 | `psc__sales_forecast__summarize` | `version_no`：str，必填 | 按物料 × 滚动月度合计所有客户 `final_qty`，刷新汇总表。返回 `{version_no, summary_rows}`。 |
 | `psc__sales_forecast__get` | `version_no`：str，必填<br>`material_no`：str，必填<br>`customer_no`：str，必填<br>`rolling_month`：str，必填 | 按主键取处理表单行全部字段。 |
 | `psc__sales_forecast__list` | `version_no`：str，可选<br>`material_no`：str，可选<br>`customer_no`：str，可选<br>`rolling_month`：str，可选<br>`abnormal_flag`：bool，可选<br>`page`：int，可选<br>`size`：int，可选 | 按条件筛选分页查询处理表。返回 `{"items": [...], "total": N}`。 |
 | `psc__sales_forecast__get_summary` | `version_no`：str，必填<br>`material_no`：str，可选 | 取指定版本（可指定物料）的汇总行，供毛需求合成。返回汇总行列表。 |
+| `psc__sales_forecast__calc_baseline_batch` | `version_no`：str，必填<br>`material_no`：str，可选<br>`customer_no`：str，可选 | 批量算基线：遍历版本内全部处理行逐行 `calc_baseline`。**智能体应优先用它**（单行版 `calc_baseline` 不暴露） |
+| `psc__sales_forecast__decide_batch` | `version_no`：str，必填<br>`material_no`：str，可选<br>`customer_no`：str，可选 | 批量决策：遍历版本内全部处理行逐行 `decide`，单行失败跳过。**智能体应优先用它**（单行版 `decide` 不暴露） |
+| `psc__sales_forecast__import_orig_qty` | `version_no`：str，必填<br>`rows`：list，必填（`{material_no, customer_no, rolling_month, orig_qty}` 数组） | 批量导入客户原始预测：逐行写 `orig_qty` 并按 bias 自动算 `adj_qty`。**「把客户发来的预测导进来」用它**；版本须为**草稿**态 |
+| `psc__sales_forecast__customer_forecast_history` | `material_no`：str，必填<br>`customer_no`：str，必填<br>`months`：int，可选 | 历史客户预测投影（供 `attainment` 算达成率，口径A）：取 rolling=N+1 且 orig_qty 非空的行。**不暴露给智能体**，是内部投影 |
 
 ---
 
@@ -36,17 +40,22 @@
 ### 1. 完整预测闭环（标准顺序，务必按此推进）
 
 1. **开启版本**：调用 `psc__sales_forecast__open_version`，传入草稿版本号 `version_no`，生成清单与处理表行（每组合拆 N+1/N+2/N+3）。
-2. **填客户预测**：对每个「物料 × 客户 × 滚动月度」行调用 `psc__sales_forecast__fill_customer`，传入 `orig_qty`（可留空），系统自动算 `adj_qty`。
-3. **基线计算**：对每行调用 `psc__sales_forecast__calc_baseline`（先断点追溯，再按物料方法/参数算 `base_qty`）。
-4. **事件调整**：对需要调整的行调用 `psc__sales_forecast__adjust_event`，传入 `event_analysis`/`event_adj`。
-5. **决策**：对每行调用 `psc__sales_forecast__decide`，系统自动标记异常并给出 `final_qty`。
-6. **异常收口**：对 `abnormal_flag=1` 的行调用 `psc__sales_forecast__set_final` 人工填 `final_qty`。
+2. **导入客户预测**：调用 `psc__sales_forecast__import_orig_qty`，传 `version_no` 与行数组（`{material_no, customer_no, rolling_month, orig_qty}`）。系统逐行写 `orig_qty` 并按该「客户×物料」的 bias 自动算 `adj_qty`。
+   > 单行版 `fill_customer` 是界面逐行录入用的，**不暴露给智能体**——要填就整批导。
+3. **批量算基线**：调用 `psc__sales_forecast__calc_baseline_batch(version_no)`（可传 `material_no`/`customer_no` 收窄）。逐行先断点追溯、再按物料基线方法算 `base_qty`。
+   > 同理，单行版 `calc_baseline` 不暴露。
+4. **事件调整**：对需要调整的行调用 `psc__sales_forecast__adjust_event`，传入 `event_analysis`/`event_adj`。**这条没有批量版**，需逐行。
+5. **批量决策**：调用 `psc__sales_forecast__decide_batch(version_no)`，自动标记异常并给出 `final_qty`。
+   > 单行版 `decide` 不暴露。
+6. **异常收口**：对 `abnormal_flag=1` 的行调用 `psc__sales_forecast__set_final` 人工填 `final_qty`（**这是人工定稿动作，逐行**）。
 7. **汇总**：调用 `psc__sales_forecast__summarize` 生成/刷新汇总表。
 8. **交付**：下游经 `psc__sales_forecast__get_summary(version_no, material_no=None)` 取汇总结果。
 
+> **版本必须是草稿态**：导入、基线、决策、汇总都只对草稿版本开放。版本已被发布/冻结时先确认是否该开新版本（`open_version`）。
+
 ### 2. 双源分歧人工介入
 
-1. `psc__sales_forecast__decide` 发现偏离率 > 5% → `abnormal_flag=1`，`final_qty` 不自动填。
+1. `psc__sales_forecast__decide_batch` 发现偏离率 > 5% → `abnormal_flag=1`，`final_qty` 不自动填。
 2. 线下与销售核对原因后，调用 `psc__sales_forecast__set_final` 人工填写 `final_qty`。
 3. 再次调用 `psc__sales_forecast__summarize`，人工值计入 `final_qty_sum`。
 
@@ -76,7 +85,7 @@
    - `orig_qty` 可留空（客户不填报）；留空时 `adj_qty` 为空，后续决策走「默认信基线」路径。
 
 5. **基线计算前提（BR-17）**
-   - `calc_baseline` 要求物料已配置 `base_method`（移动平均/指数平滑/阶跃检测/借用参考）与 `base_params`；未配置报「物料未配置基线方法」。
+   - `calc_baseline` 要求物料已配置 `base_method` 与 `base_params`。合法方法共 10 个：4 个传统方法（移动平均/指数平滑/阶跃检测/借用参考，兼容保留）+ 6 个统计模型（AutoTheta/AutoARIMA/AutoETS/SeasonalNaive/CrostonOptimized/TSB，由 `strategy_fitting` 拟合回填）。**未配置时报的不一定是错**——`calc_baseline` 对未配置基线的物料会留空基线、以人工/调整后值为准（见 BR-17）。
    - 断点追溯（`md_breakpoint.trace`）只拼接「原件历史 + 新件历史」（量比固定 1.0），与「借用参考」不同。
 
 6. **决策阈值可配置（BR-16）**
@@ -117,7 +126,7 @@
 | `调整后需求不合法` | `adj_qty` 非数字。 | 传入合法数字或省略（让系统按 bias 自动算）后重试。 |
 | `物料未配置基线方法` | `calc_baseline` 时物料无 `base_method`。 | 先在 `md_material` 配置该物料的 `base_method`/`base_params`。 |
 | `借用参考缺少参考物料号` | `base_method=借用参考` 但 `base_params.ref_material` 缺失。 | 在 `md_material.base_params` 中补 `ref_material` 后重试。 |
-| `未知基线方法` | `base_method` 不在「移动平均/指数平滑/阶跃检测/借用参考」内。 | 修正 `md_material.base_method` 后重试。 |
+| `未知基线方法` | `base_method` 不在支持列表内（4 个传统方法 + 6 个统计模型）。 | 修正 `md_material.base_method` 后重试；统计模型建议先跑 `strategy_fitting` 拟合再复核回填，不要手工指定 |
 | `事件调整量不合法` | `event_adj` 非数字。 | 传入合法数字（默认 0）后重试。 |
 | `该行非异常行，无需人工填写` | 对 `abnormal_flag=0` 的行执行 `set_final`。 | 该行已自动填 `final_qty`，无需人工覆盖。 |
 | `最终预测量不合法` | `set_final` 的 `final_qty` 非数字。 | 传入合法数字后重试。 |

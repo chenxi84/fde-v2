@@ -25,7 +25,9 @@
 | `psc__md_breakpoint__list` | `customer_no: str`，可选，默认 `None`<br>`old_material_no: str`，可选，默认 `None`<br>`new_material_no: str`，可选，默认 `None`<br>`page: int`，可选，默认 `None`<br>`size: int`，可选，默认 `None` | 按客户/原物料/新物料（精确匹配）筛选分页列表，默认不含已停用记录，按切换时间降序。返回 `{"items": [...], "total": n}`；`page`/`size` 均为 `None` 时返回全部。 |
 | `psc__md_breakpoint__update` | `bp_id: int`，必填<br>`customer_no: str`，可选，默认 `None`<br>`old_material_no: str`，可选，默认 `None`<br>`new_material_no: str`，可选，默认 `None`<br>`switch_time: str`，可选，默认 `None`<br>`ecn_no: str`，可选，默认 `None` | 更新断点的切换时间/变更单号等字段（`None` 表示保留原值）。重新校验物料引用、原≠新、组合唯一。成功返回更新后记录。 |
 | `psc__md_breakpoint__disable` | `bp_id: int`，必填 | 停用断点记录（软失效，不物理删除）。已停用记录再停用会报错。停用后不参与 `trace` 与列表默认展示。 |
-| `psc__md_breakpoint__trace` | `new_material_no: str`，必填 | 沿断点向上追溯原物料号链，返回从最上游原物料号到给定新物料号的序列；无断点时返回 `[物料号自身]`。 |
+| `psc__md_breakpoint__trace` | `new_material_no: str`，必填 | 沿断点向上追溯原物料号链，返回从最上游原物料号到给定新物料号的序列；无断点时返回 `[物料号自身]`。**回答「这个新料的上一代是谁」用它** |
+| `psc__md_breakpoint__upcoming` | `days: int`，可选，默认 60 | 即将切换的断点关系：`switch_time` 在 `[今天, 今天+days]` 且未停用。查「最近有哪些料要切换」用它 |
+| `psc__md_breakpoint__get_switch_time` | `new_material_no: str`，必填<br>`customer_no: str`，可选 | 取某新物料的断点切换时间（可按客户收窄）；无断点返回 `None`（不抛错）。`sales_forecast.calc_baseline` 内部用它定追溯起点 |
 
 ---
 

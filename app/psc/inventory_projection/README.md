@@ -21,7 +21,7 @@
 
 | 工具名 | 参数 | 说明 |
 |---|---|---|
-| `psc__inventory_projection__refresh` | `material_no`：str，必填<br>`biz_date`：str，必填（YYYY-MM-DD）<br>`opening_stock`：float \| None，可选，默认 `None`（缺省取 ERP 库存） | 对单物料逐日推演未来 3 个月（90 自然日）库存水位并落盘，返回逐日记录列表与起始库存、版本号。 |
+| `psc__inventory_projection__refresh` | `material_no`：str，必填<br>`biz_date`：str，必填（YYYY-MM-DD）<br>`opening_stock`：float \| None，可选，默认 `None`（缺省取 ERP 库存） | 对单物料逐日推演未来 3 个月（90 自然日）库存水位并落盘，返回逐日记录列表与起始库存、版本号。 界面逐物料刷新用；智能体请用 `refresh_batch`，**本条不暴露** |
 | `psc__inventory_projection__refresh_batch` | `biz_date`：str \| None，可选，默认当天（YYYY-MM-DD）<br>`material_nos`：list \| None，可选，默认 `None`（缺省取 `md_material` 正常状态物料全量） | 整批刷新推移表，刷新成功后逐物料联动 `scan_alert`（击穿水位**自动创建**需求池补库单）；返回 `{total, success, fail, success_materials, errors, replenishments}`。 |
 | `psc__inventory_projection__get` | `material_no`：str，必填<br>`biz_date`：str，必填 | 按物料号 + 日期查询单日推移明细（入库/出库/余额/预警类型）。 |
 | `psc__inventory_projection__list` | `material_no`：str \| None，可选，精确匹配<br>`biz_date`：str \| None，可选，精确匹配<br>`alert_type`：str \| None，可选，精确匹配（无/缺货/击穿最低/击穿安全/呆滞/超储）<br>`page`：int \| None，可选，默认 `None`（None 返回全部）<br>`size`：int \| None，可选，默认 `None` | 按物料/日期/预警类型筛选推移表列表，默认按 `biz_date` 升序（从早到晚）且只显示当日及以后（BR-11 历史隐藏；选定具体历史日期可回看），返回 `{"items": [...], "total": N}`。 |
@@ -37,11 +37,13 @@
 2. 命中预警的行（`alert_type ≠ 无`）即预警时点；需看某日明细时，调 `psc__inventory_projection__get`，传 `material_no` + `biz_date`。
 3. 对缺货/击穿行，跟进需求池补库单；对超储/呆滞行，跟进降储治理。
 
-### 2. 单物料刷新推演
+### 2. 刷新推演
 
-1. 确认 `material_no` 来自 `md_material`（主数据引用铁律）。
-2. 调 `psc__inventory_projection__refresh`，传 `material_no`、`biz_date`（推演起始日，如 `2026-08-14`）；如需指定起始库存可传 `opening_stock`，否则系统取 ERP 库存。
-3. 刷新后如需生成补库单，再调 `psc__inventory_projection__scan_alert`。
+1. 调 `psc__inventory_projection__refresh_batch`，传 `biz_date`（推演起始日，如 `2026-08-14`）；只关心个别物料时用 `material_no` 收窄。刷新时会联动预警扫描（击穿自动生成补库单）。
+2. 需要单独补扫预警时，调 `psc__inventory_projection__scan_alert`。
+
+> 单物料版 `psc__inventory_projection__refresh` 是界面逐物料刷新用的，**不暴露给智能体**——
+> 逐物料调既慢，又容易只刷一半。
 
 ### 3. 整批刷新 + 预警联动（每日 0 点定时）
 

@@ -27,6 +27,7 @@
 | `psc__strategy_fitting__approve` | `fit_version`：str，必填<br>`material_no`：str，必填<br>`confirm`：bool \| None，选填，默认 false（异常记录二次确认标记） | 复核通过：`待复核 → 已生效`，回填物料主数据（带版本）。 |
 | `psc__strategy_fitting__reject` | `fit_version`：str，必填<br>`material_no`：str，必填 | 否决：`待复核 → 已否决`，不回填物料主数据。 |
 | `psc__strategy_fitting__rollback` | `fit_version`：str，必填<br>`material_no`：str，必填 | 回滚：`已生效 → 已否决`（本版作废），回填上一版参数。 |
+| `psc__strategy_fitting__get_latest` | `material_no`：str，必填 | 取某物料**最新一版**拟合结果（按 `fit_version` 降序）。无拟合返回 `None`（不抛错）。不知道版本号时用它，而不是 `get` |
 
 ---
 

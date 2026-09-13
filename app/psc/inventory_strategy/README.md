@@ -11,7 +11,7 @@
 - **是否跨应用调用**：
   - `calc` 调用 `md_material.get(material_no=...)`、`md_customer.get(customer_no=...)`（`customer_no` 缺省时按缓冲 0 处理）。
   - `calc_batch` 调用 `md_material.list(status="正常")` 确定物料范围。
-  - 历史干净需求经 `_load_sales_history` 适配器取数（当前为 stub，真实接入 ERP 时替换实现）。
+  - 历史干净需求经 `_load_sales_history` 适配器取数：`md_material.history_chain`（前序链 ∪ 断点链）取链 → `sales_history.history_sequence` 取近 12 期。**新料自有历史不足时靠前序链补足**；取不到时返回空列表，水位按 0 兜底。
 
 本应用为每个物料×月度版本计算三层水位——最低库存 A、安全库存 C、组批库存 B，并判定品种分层对冲工具（库存/速度），产出水位带（下限 A+C、上限 A+C+B），供毛需求叠加与库存推移表对照水位线。
 
@@ -107,7 +107,7 @@ psc__inventory_strategy__get_water_level(version_no="202608", material_no="82100
 3. **主数据引用铁律（禁止手工录入参数）**
    - 生产时间 `prod_days`、物流时间 `logistics_days`、满足率目标 `service_level`、组批窗口 `batch_window`、价值分类 `value_class` 等均来自 `md_material`。
    - 可用缓冲天数 `line_stock_days`、调拨提前期 `transfer_lead_days` 来自 `md_customer`。
-   - 历史干净需求经 `_load_sales_history` 适配器取数（当前 stub 返回空列表，**真实接入 ERP 前 `calc`/`calc_batch` 会因历史数据缺失而失败**，接入时只需替换 `_load_sales_history` 实现）。
+   - 历史干净需求经 `_load_sales_history` 适配器取数：`md_material.history_chain`（前序链 ∪ 断点链）取链 → `sales_history.history_sequence` 取近 12 期。**新料自有历史不足时靠前序链补足**；链为空或台账无数据时返回空列表，随后 `calc` 会抛「历史需求数据缺失」。
 
 4. **版本号格式**
    - `version_no` 必须为 `YYYYMM`（6 位数字，月 01~12），否则报错。
@@ -141,7 +141,7 @@ psc__inventory_strategy__get_water_level(version_no="202608", material_no="82100
 | `满足率目标不能为空` | `md_material` 中该物料未配置 `service_level`。 | 引导用户先在 `md_material` 补全满足率目标后重算。 |
 | `满足率目标格式非法` | `service_level` 非数字。 | 请用户在 `md_material` 中改为数字（如 `0.95`）后重算。 |
 | `满足率目标仅支持 90%/95%/98%/99%` | `service_level` 不在支持值内。 | 请用户将满足率目标改为 90%/95%/98%/99% 之一后重算。 |
-| `物料 ... 历史需求数据缺失，无法计算库存策略` | `_load_sales_history` 未取到该物料近 N 期干净需求（stub 阶段恒为此结果）。 | 确认历史需求是否已接入；若为 stub，提示需接入真实 ERP 历史数据后再计算。 |
+| `物料 ... 历史需求数据缺失，无法计算库存策略` | `_load_sales_history` 未取到该物料近 N 期干净需求——该料既无自己的台账，前序链/断点链也没并出历史。 | 先调 `psc__md_material__history_chain` 看链是否为空：为空说明该料确实没有可用历史（新料且未维护前序关系），需用户先补历史台账或维护前序物料；非空则检查台账期间是否覆盖近 N 期。 |
 | `数值参数非法` | `md_material`/`md_customer` 的数值字段为非法值。 | 引导用户先修正对应主数据的数值字段后重算。 |
 | `库存策略记录不存在` | 调用 `get`/`get_water_level` 时目标物料×版本尚无策略记录。 | 先调 `psc__inventory_strategy__calc` 计算该物料；或先 `list` 核对 `version_no`/`material_no` 是否正确。 |
 | `对冲工具筛选不合法` | 调用 `list` 时 `hedge_tool` 不是 `库存`/`速度`。 | 将 `hedge_tool` 改为 `库存` 或 `速度`；不需要该过滤时可省略或传 `None`。 |

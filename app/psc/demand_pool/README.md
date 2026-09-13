@@ -21,8 +21,8 @@
 |---|---|---|
 | `psc__demand_pool__create` | `material_no`：str，必填<br>`replenish_type`：str，必填（缺货补库 / 最低库存补库 / 安全库存补库）<br>`replenish_qty`：number，必填（触发档补货量）<br>`required_inbound`：str，必填（要求入库时间，击穿时点）<br>`stock_on_hand`：number \| None，可选<br>`min_level_a`：number \| None，可选<br>`safety_level_c`：number \| None，可选<br>`batch_level_b`：number \| None，可选<br>`capacity_tight`：bool \| None，可选，默认富余（False） | 库存推移表击穿触发自动生成补库单，初始状态 `待下达`，返回补库单对象。 |
 | `psc__demand_pool__release` | `replenish_no`：str，必填<br>`promised_inbound`：str \| None，可选 | 下达生产：`待下达 → 已下达`，经 `_dispatch_to_erp` 下发生产计划给 ERP，可回填承诺入库时间。 |
-| `psc__demand_pool__on_workorder_started` | `replenish_no`：str，必填 | ERP 回传工单开工：`已下达 → 生产中`。 |
-| `psc__demand_pool__on_inbound` | `replenish_no`：str，必填 | ERP 回传入库：`生产中 → 已完成`（终态）。 |
+| `psc__demand_pool__on_workorder_started` | `replenish_no`：str，必填 | ERP 回传工单开工：`已下达 → 生产中`。 ERP 回调入口（开工回传），**不暴露给智能体** |
+| `psc__demand_pool__on_inbound` | `replenish_no`：str，必填 | ERP 回传入库：`生产中 → 已完成`（终态）。 ERP 回调入口（入库回传），**不暴露给智能体** |
 | `psc__demand_pool__cancel` | `replenish_no`：str，必填 | 需求消失作废：`待下达 / 已下达 → 已取消`（终态）。 |
 | `psc__demand_pool__get` | `replenish_no`：str，必填 | 按补库单号查看单条补库单详情。 |
 | `psc__demand_pool__list` | `material_no`：str \| None，可选（精确）<br>`replenish_type`：str \| None，可选（精确）<br>`status`：str \| None，可选（精确）<br>`page`：int \| None，可选<br>`size`：int \| None，可选 | 按物料 / 类型 / 状态筛选分页列表，返回 `{"items", "total"}`。 |
@@ -45,8 +45,12 @@
 1. 先调 `psc__demand_pool__list`，筛选 `status="待下达"` 定位待下达补库单。
 2. 调 `psc__demand_pool__get` 核对补库单当前状态与字段。
 3. 确认产能允许后，调 `psc__demand_pool__release`（可传 `promised_inbound`）。
-4. ERP 执行生产并回传开工 → 调 `psc__demand_pool__on_workorder_started`。
-5. ERP 回传入库 → 调 `psc__demand_pool__on_inbound`，补库单转为 `已完成` 闭环结束。
+4. ERP 执行生产并回传开工 → 触发 `psc__demand_pool__on_workorder_started`。
+5. ERP 回传入库 → 触发 `psc__demand_pool__on_inbound`，补库单转为 `已完成` 闭环结束。
+
+> ⚠️ **第 4、5 步不由智能体发起**。它们是 ERP/周边系统回调进来的入口（`on_*` 前缀），
+> 已从智能体的工具表中摘除。智能体的职责到第 3 步 `release` 下达为止；
+> 若用户问「工单开工了吗 / 入库了吗」，用 `list`/`get` 查状态，不要试图自己去推进这两步。
 
 ### 3. 需求消失取消
 

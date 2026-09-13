@@ -20,7 +20,7 @@
 
 | 工具名 | 参数 | 说明 |
 |---|---|---|
-| `psc__attainment__upsert` | `customer_no: str`，必填，无默认<br>`material_no: str`，必填，无默认<br>`mape: float`，必填，无默认<br>`bias: float`，必填，无默认 | ERP 统计回写 MAPE/bias。同客户+物料已存在则覆盖更新，不存在则插入（幂等），不产生重复行。`mape` 必须非负；`bias` 必须为数值（可正可负）。返回该条记录。 |
+| `psc__attainment__upsert` | `customer_no: str`，必填，无默认<br>`material_no: str`，必填，无默认<br>`mape: float`，必填，无默认<br>`bias: float`，必填，无默认 | ERP 统计回写 MAPE/bias。同客户+物料已存在则覆盖更新，不存在则插入（幂等），不产生重复行。`mape` 必须非负；`bias` 必须为数值（可正可负）。返回该条记录。 **不暴露给智能体**——ERP 统计同步任务回写，智能体要刷新达成率该用 `compute` |
 | `psc__attainment__get` | `customer_no: str`，必填，无默认<br>`material_no: str`，必填，无默认 | 按客户+物料查询该组合的 MAPE/bias。命中返回完整记录；未命中返回 `None`，不抛异常。 |
 | `psc__attainment__list` | `customer_no: str`，可选，默认 `None`<br>`material_no: str`，可选，默认 `None`<br>`page: int`，可选，默认 `None`（None 表示不分页）<br>`size: int`，可选，默认 `None`（默认每页 20 条） | 按客户/物料筛选达成率列表（两个条件为 AND 关系，均为空时返回全部）。返回 `{"items": [...], "total": 总数}`，`total` 为切片前全量行数。 |
 | `psc__attainment__compute` | `months: int`，可选，默认 `6` | 口径A **单表**计算 MAPE/bias 并 upsert 回写：直接读 sales_history 行内 forecast_qty(F) 与 qty(A)，无需 join 销售预测；滚动 months 个月，窗口内有效样本<3 或 Σ实际=0 跳过。返回 `{computed, skipped}`。 |
@@ -31,7 +31,8 @@
 
 ### 1. ERP 统计回写（系统回写，非用户触发）
 
-由 ERP 达成率统计同步任务驱动，Agent 通常不主动触发。若需回写，先取 ERP 统计结果，再按客户×物料逐条 `upsert`。
+由 ERP 达成率统计同步任务驱动，**不由智能体发起**（`upsert` 已从智能体工具表摘除）。
+智能体若要重算达成率，用 `psc__attainment__compute`；下面只是回写接口的入参形状，供理解数据来源，不要照它调用。
 
 ```text
 psc__attainment__upsert(customer_no="C001", material_no="M001", mape=0.12, bias=0.08)

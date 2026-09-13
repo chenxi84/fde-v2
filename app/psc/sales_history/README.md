@@ -9,13 +9,15 @@
 ## 二、对外服务
 | 工具名 | 参数 | 说明 |
 |---|---|---|
-| `psc__sales_history__upsert` | material_no*, customer_no*, period*, qty* | ERP 单条幂等回写（存在覆盖/不存在插入），并自动拉取 N+1 原始预测写 forecast_qty |
+| `psc__sales_history__upsert` | material_no*, customer_no*, period*, qty* | ERP 单条幂等回写（存在覆盖/不存在插入），并自动拉取 N+1 原始预测写 forecast_qty 单条回写；智能体走 `import_batch` / `sync_external_history`，**本条不暴露** |
 | `psc__sales_history__import_batch` | rows* | 批量 upsert，返回 {total,success,fail,errors} |
-| `psc__sales_history__attach_forecast` | material_no*, customer_no*, period*, qty 可选 | 预测侧推送 N+1 原始预测到 forecast_qty；实际行不存在则跳过（attached=false） |
-| `psc__sales_history__sync_forecast` | — | 批量回填存量行 forecast_qty，返回 {updated} |
+| `psc__sales_history__attach_forecast` | material_no*, customer_no*, period*, qty 可选 | 预测侧推送 N+1 原始预测到 forecast_qty；实际行不存在则跳过（attached=false） 由 `sales_forecast` 调用，**不暴露给智能体** |
+| `psc__sales_history__sync_forecast` | — | 批量回填存量行 forecast_qty，返回 {updated} 由 `attainment` 调用，**不暴露给智能体** |
 | `psc__sales_history__list` | material_no/customer_no/period/page/size 可选 | 精确 AND 筛选分页 {items,total} |
 | `psc__sales_history__history_sequence` | material_nos(单物料或断点链)/customer_no/limit | 消费方投影：按 period 升序数量序列（链内多物料按期求和、缺期补 0、limit 取末尾 N 期） |
 | `psc__sales_history__purchasing_customers` | material_no 可选 | 历史采购客户集（去重升序） |
+| `psc__sales_history__history_series` | material_nos(单物料或链)/customer_no/limit | 与 `history_sequence` 同口径，但返回 `[{period, qty}]`（**带期间标签**）。需要「哪一期多少量」时用它；只要数量序列用 `history_sequence` |
+| `psc__sales_history__sync_external_history` | — | 对外服务：拉取外部历史台账接口并经 `import_batch` 落库，供定时任务 / 智能体调用。URL 与鉴权在 `/integration` 配置 |
 
 ## 三、消费端
 - `sales_forecast`：`open_version`→purchasing_customers（清单客户维度）；`calc_baseline`/借用参考→history_sequence（基线）。
