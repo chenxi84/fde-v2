@@ -142,12 +142,25 @@ def _app_short(app: str) -> str:
     return app.split("/")[-1]
 
 
-# 应用《Agent 操作指南》文件名（与 CONVENTION §11、agent_common._APP_DOC_FILENAMES 一致）。
-_APP_README = "README.md"
+# 常驻注入的是**精简版**《使用要点》HOWTOUSE.md，不是完整 README.md。
+#
+# 为什么不直接注入 README：README 是完整操作指南（约 3-4k tokens/应用），
+# 一个角色 5-6 个应用就是 13k，每次调用都要重过一遍——实测每次调用约 2 倍延迟；
+# 且研究显示指令密度过高会显著降低遵从率（arXiv:2607.19257：指令数到 ~80 条时
+# 完美遵从率对所有模型归零；上下文 80% 位置的规则遵从率只有开头的 70%）。
+#
+# HOWTOUSE 只保留影响「工具选择与调用顺序」的部分（约 500 tokens/应用），
+# 砍掉三块：对外服务表（工具名/参数/说明已在每次调用的工具 schema 里，抄一遍是零信息量的
+# 重复）、错误处理表（出错时按需读 README）、聚合根/主键等 background。
+# 这正是 Anthropic 的 L2/L3 分层：常驻放正文，大规则表按需加载。
+#
+# **不回落到 README**：新应用忘了写 HOWTOUSE 时宁可什么都不注入，
+# 也不要悄悄把 4k tokens 的全量 README 塞回 prompt——那会让这次收敛白做。
+_APP_HOWTO = "HOWTOUSE.md"
 
 
-def _read_app_readmes(apps: list[str]) -> str:
-    """读各应用的 README，拼成一个注入块；没有 README 的应用跳过。
+def _read_app_howtos(apps: list[str]) -> str:
+    """读各应用的 HOWTOUSE.md，拼成一个注入块；没有的应用跳过。
 
     在模块加载时执行（AGENT_ROLES 是模块级常量）——只读文件、不碰平台运行时，
     所以不受「平台是否已 load_all」影响。
@@ -157,7 +170,7 @@ def _read_app_readmes(apps: list[str]) -> str:
         group, _, short = (qn or "").partition("/")
         if not group or not short:
             continue
-        p = _ROLES_DIR / group / short / _APP_README
+        p = _ROLES_DIR / group / short / _APP_HOWTO
         try:
             if not p.is_file():
                 continue
@@ -165,8 +178,25 @@ def _read_app_readmes(apps: list[str]) -> str:
         except OSError:
             continue  # 单个应用读失败不该拖垮整份角色定义
         if text:
-            blocks.append(f'<app-doc app="{short}">\n{text}\n</app-doc>')
+            blocks.append(f'<howto app="{short}">\n{text}\n</howto>')
     return "\n\n".join(blocks)
+
+
+def apps_missing_howto() -> list[str]:
+    """角色绑定里那些**有应用但没写 HOWTOUSE.md** 的项。
+
+    用于启动自检与回归测试：漏写不会报错、只是静默地不注入，
+    而「静默地少了一块」正是这次收敛前后一路踩的坑（工具静默消失、README 静默漂移）。
+    """
+    out = []
+    for apps in ROLE_APPS.values():
+        for qn in apps:
+            group, _, short = (qn or "").partition("/")
+            if not group or not short:
+                continue
+            if not (_ROLES_DIR / group / short / _APP_HOWTO).is_file():
+                out.append(qn)
+    return sorted(set(out))
 
 
 def _esc_braces(text: str) -> str:
@@ -181,21 +211,20 @@ def _esc_braces(text: str) -> str:
 
 
 def _build_app_template(role: str) -> SubAgentTemplate:
-    """业务角色：绑定应用集合 + 注入各应用的《Agent 操作指南》（README）。
+    """业务角色：绑定应用集合 + 注入各应用的《使用要点》（HOWTOUSE.md）。
 
-    README 里写的是「标准工作流（工具调用顺序）」「错误处理（应对策略）」，
-    是工具选择与纠错最直接的依据。**2026-09-03 的 e7f04f1 删掉应用级 Agent 时，
-    这条注入路径一并消失了**，worker 只剩一串应用名，业务规则与调用顺序全丢——
-    这是「以前用 README 效果挺好」这句话对应的那次回退（见 CONVENTION §11）。
+    历史上（e7f04f1，2026-09-03）这条注入曾随应用级 Agent 一起被删掉，worker 只剩
+    一串应用名，业务规则与工具调用顺序全丢——是「以前用 README 效果挺好」对应的那次回退。
+    现以 HOWTOUSE 恢复：只带「标准工作流 + 前置条件与禁忌」，完整 README 留给按需查阅。
     """
     apps = ROLE_APPS[role]
     label = _ROLE_LABEL[role]
     app_list = "、".join(_app_short(a) for a in apps)
-    docs = _read_app_readmes(apps)
+    docs = _read_app_howtos(apps)
     doc_block = (
-        "\n\n下面是这几个应用的《Agent 操作指南》。**优先按其中的「标准工作流」推进**"
-        "（那是经过验证的工具调用顺序），出错时按「错误处理」里的应对策略走；"
-        "指南里没写到的细节再靠工具签名自省。\n"
+        "\n\n下面是这几个应用的《使用要点》。**优先按其中的「标准工作流」推进**"
+        "（那是经过验证的工具调用顺序），并遵守「前置条件与禁忌」；"
+        "要点没覆盖的细节，用 platform_read_app_doc 读该应用的完整 README 再动手。\n"
         + _esc_braces(docs)
     ) if docs else ""
 
