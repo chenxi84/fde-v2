@@ -11,6 +11,7 @@
 """
 import ast
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -121,6 +122,45 @@ def _check_contract(app_name: str, service: str, params: list, call: dict):
 # ── 全平台扫描 ──────────────────────────────────────────
 
 
+# ── 规范引用完整性 ────────────────────────────────────────────
+#
+# 源码里常写「见 design-plus/<某文档> §N」作为设计依据。这类引用**悬空了没人知道**——
+# `agent_roles.py` 与 `agent_service.py` 都引用了 `design-plus/多智能体方案.md`，
+# 而那个文件根本不存在，是靠人工 grep 才发现的。
+#
+# 规范与实现的互指一旦断裂，实现演化了规范却不会有人察觉；这条检查把它变成 CI 红线。
+#
+# 字符集必须放开到 CJK —— design-plus 下**多数是中文文件名**，用 [A-Za-z0-9_/-]
+# 会把它们全漏掉（第一版就漏了，只命中我自己注释里的英文占位符）。
+_DOC_REF_RE = re.compile(r"design-plus/([^\s，。、；：）)】」\"'`]+\.md)")
+
+
+def doc_ref_report(root: Path = None) -> list[dict]:
+    """扫源码里对 design-plus 下 md 文档的引用，返回指向**不存在的文件**的那些。"""
+    root = root or ROOT
+    problems = []
+    for sub in ("fde_platform", "app", "scripts", "main.py"):
+        target = root / sub
+        files = sorted(target.rglob("*.py")) if target.is_dir() else (
+            [target] if target.is_file() else [])
+        for f in files:
+            try:
+                src = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for m in _DOC_REF_RE.finditer(src):
+                rel = f"design-plus/{m.group(1)}"
+                if not (root / rel).is_file():
+                    problems.append({
+                        "kind": "doc_ref",
+                        "file": str(f.relative_to(root)),
+                        "line": src.count("\n", 0, m.start()) + 1,
+                        "ref": rel,
+                        "message": f"引用了不存在的规范：{rel}",
+                    })
+    return problems
+
+
 def scan_report(platform) -> dict:
     """扫描平台已加载的全部应用，返回结构化报告。
 
@@ -196,13 +236,17 @@ def scan_report(platform) -> dict:
                 status, msg = _check_contract(resolved, ts, services_cache[resolved][ts], c)
                 sites.append(_site(q, rel, c["line"], resolved, ts, status, msg))
 
+    doc_refs = doc_ref_report()
+
     return {
         "apps_scanned": len(known_apps),
         "total_calls": sum(1 for s in sites if s["status"] != PARSE_ERROR),
-        "problems": sum(1 for s in sites if s["status"] in PROBLEM_STATUSES),
+        "problems": (sum(1 for s in sites if s["status"] in PROBLEM_STATUSES)
+                     + len(doc_refs)),          # 悬空规范引用也算问题（CI 应失败）
         "warnings": sum(1 for s in sites if s["status"] == DYNAMIC),
         "sites": sites,
         "parse_errors": parse_errors,
+        "doc_refs": doc_refs,
     }
 
 
