@@ -200,6 +200,16 @@ _LEADER_PLATFORM_DENIED = {
 }
 
 
+# 内置文件工具里，哪些**不给 agent**。
+#
+# 每个应用都会挂 3 个内置文件工具（list_files / read_file / write_file）。
+# read_file 是刚需——读人工上传的导入文件、图片附件（图片导入那条演示就靠它）。
+# 但 list_files / write_file 对 agent 边际价值低，而实测它们在组内**抢选择**：
+# A/B 评测里 B 的 9 条未命中中有 4 条是这个原因（3 次错选 list_files）。
+# 外部证据说「多余候选会主动伤害准确率」——这里就是那条结论的具体体现。
+_AGENT_HIDDEN_BUILTINS = {"platform_list_files", "platform_write_file"}
+
+
 # worker 常驻的平台工具：直接对齐 middleware 的 GLOBAL_PLATFORM_TOOLS，
 # 不另写一份——两处写两份迟早对不上，而「对不上」正是这次事故的形态。
 _WORKER_PLATFORM_TOOLS = {
@@ -344,15 +354,16 @@ async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str):
 
     defs = bridge.tool_schemas(_platform, user)
 
-    # 剪枝：摘掉各组声明为「不给 agent」的服务（内部回填、外部回执、被 batch 版取代的单行版）。
+    # 剪枝：摘掉 ①各组声明为「不给 agent」的服务（内部回填、外部回执、被 batch 版取代的单行版）
+    # 与 ②对 agent 边际价值低、却会在组内抢选择的内置文件工具。
     # 依据外部证据「多余候选会主动伤害选择准确率」——能摘就摘，摘掉比留着强。
     _before = len(defs)
     defs = [t for t in defs
-            if not agent_roles.is_hidden_from_agent(
+            if t["_meta"].get("service") not in _AGENT_HIDDEN_BUILTINS
+            and not agent_roles.is_hidden_from_agent(
                 t["_meta"]["app"], t["_meta"].get("service", ""))]
     if len(defs) != _before:
-        _logger.debug("工具剪枝：%d → %d（各组 _agent_tools.py 声明）",
-                      _before, len(defs))
+        _logger.debug("工具剪枝：%d → %d", _before, len(defs))
 
     # 区分 leader / worker
     record = await _storage.get_agent(user_id, agent_id)
