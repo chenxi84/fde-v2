@@ -30,9 +30,10 @@ HIDDEN_FROM_AGENT = {
     "psc/md_material": [
         "set_fit_params",        # 由 strategy_fitting.approve 回填，agent 直接改会跳过复核
     ],
-    "psc/master_plan": [
-        "import_plan",           # 线下产能平衡结果导回，是人工/外部动作，不是 agent 动作
-    ],
+    # 注：master_plan.import_plan **不在**隐藏列表里。它曾是「线下产能平衡结果导回，
+    # 属人工/外部动作」被摘掉，但读完 README 发现它是主计划**唯一的数据入口**——
+    # 摘掉等于 agent 完全无法写主计划；而「人工动作」不等于「agent 不能代劳」，
+    # 用户说「把这份平衡表导进去」是完全合理的请求。
 
     # ── 外部回执：ERP / 周边系统回调入口 ──
     "psc/demand_pool": [

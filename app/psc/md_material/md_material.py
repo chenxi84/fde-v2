@@ -173,7 +173,10 @@ class MdMaterial:
         if base_method is not None:
             new_method = self._clean(base_method)
             if new_method not in self._BASE_METHODS:
-                raise FdeError("基线方法仅支持移动平均/指数平滑/阶跃检测/借用参考")
+                # 从常量动态生成，不写死枚举 —— 原来写死成「移动平均/指数平滑/阶跃检测/借用参考」，
+                # 接入 statsforecast 后 _BASE_METHODS 扩到 10 个，这句报错就成了误导：
+                # 智能体照着它去纠正，永远纠正不到正确值。
+                raise FdeError("基线方法仅支持：" + "、".join(self._BASE_METHODS))
             new_params = self._normalize_base_params(new_method, base_params)
         elif base_params is not None:
             if not new_method:
@@ -237,7 +240,7 @@ class MdMaterial:
 
         base_method = self._clean(base_method)
         if base_method not in self._BASE_METHODS:
-            raise FdeError("基线方法仅支持移动平均/指数平滑/阶跃检测/借用参考")
+            raise FdeError("基线方法仅支持：" + "、".join(self._BASE_METHODS))
         params_norm = self._normalize_base_params(base_method, base_params)
 
         bw = self._check_batch_window(batch_window)
@@ -513,7 +516,7 @@ class MdMaterial:
         method = self._clean(base_method)
         if method:
             if method not in self._BASE_METHODS:
-                errors["base_method"] = "基线方法仅支持移动平均/指数平滑/阶跃检测/借用参考"
+                errors["base_method"] = "基线方法仅支持：" + "、".join(self._BASE_METHODS)
                 values["base_method"] = None
                 values["base_params"] = None
             else:
