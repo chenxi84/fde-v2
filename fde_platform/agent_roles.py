@@ -199,6 +199,21 @@ def apps_missing_howto() -> list[str]:
     return sorted(set(out))
 
 
+# 工作纪律：注入每个业务角色的 system prompt。
+#
+# 为什么单独拎出来：恢复率实测发现，**失败分两类，命运完全不同**——
+#   · 「选错工具」：拿到真实返回后有一半能在下一轮自己换对（实测 2/4）
+#   · 「压根不调工具/不开组」：它直接回一段文字，对话就此结束，**没有任何纠错机会**
+# 后者是终端失败，占比还不低（C 条件 24 例里 5 例）。而 HOWTOUSE 管的是「按什么顺序调」，
+# 管不到「该动手时不动手」，所以这条纪律必须单独写死在这里。
+AGENT_DISCIPLINE = (
+    "\n\n## 工作纪律（务必遵守）\n"
+    "- **能用工具查证的事，一律先调工具再回答**；不要凭常识或上下文猜测后直接给结论。\n"
+    "- 参数不全也先用工具查（比如拿不准物料号，就先 `list` 搜一下），确实查不到再问用户。\n"
+    "- 一次调一个工具，拿到结果再决定下一步；**发现调错了就立刻换一个**，不要将错就错。\n"
+)
+
+
 def _esc_braces(text: str) -> str:
     """把花括号转义成 format 字面量。
 
@@ -237,6 +252,7 @@ def _build_app_template(role: str) -> SubAgentTemplate:
         f"你的分工：{{member_description}}\n\n"
         f"你只负责以下应用的服务，不要越界调用其他角色的应用：\n{app_list}"
         + doc_block
+        + _esc_braces(AGENT_DISCIPLINE)
         + "\n\n完成分配给你的任务后，用 TeamSay 向 {leader_name} 回报结果。"
     )
     return SubAgentTemplate(
