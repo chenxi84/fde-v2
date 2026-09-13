@@ -33,7 +33,7 @@ def tool_schemas(platform, user=None) -> list[dict]:
             if s["name"] not in visible:
                 continue
             t = introspect.to_mcp_tool(prefix, s, qualname=name,
-                                       group=handle.group, app_name=handle.name)
+                                       app_name=handle.name)
             defs.append({
                 "type": "function",
                 "function": {
@@ -45,7 +45,7 @@ def tool_schemas(platform, user=None) -> list[dict]:
             })
         if user is None or user.get("is_admin") or users.has_app_access(user["id"], name):
             for t in builtin_tools.builtin_tool_defs(prefix, qualname=name,
-                                                     group=handle.group, app_name=handle.name):
+                                                     app_name=handle.name):
                 defs.append({
                     "type": "function",
                     "function": {

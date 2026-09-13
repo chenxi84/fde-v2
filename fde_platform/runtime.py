@@ -300,9 +300,9 @@ class FdePlatform:
             prefix = tool_prefix(qn)
             for svc in self.services(qn):
                 tools.append(introspect.to_mcp_tool(
-                    prefix, svc, qualname=qn, group=handle.group, app_name=handle.name))
+                    prefix, svc, qualname=qn, app_name=handle.name))
             tools.extend(builtin_tools.builtin_tool_defs(
-                prefix, qualname=qn, group=handle.group, app_name=handle.name))
+                prefix, qualname=qn, app_name=handle.name))
         return tools
 
     # ── 调用（顶层入口 + 跨应用路由共用）──────────────────────

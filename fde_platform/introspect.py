@@ -121,7 +121,7 @@ def list_services(cls) -> list[dict]:
 
 
 def to_mcp_tool(prefix: str, service: dict, *, qualname: str = None,
-                group=None, app_name: str = None) -> dict:
+                app_name: str = None) -> dict:
     """把一个服务转成 MCP / LLM function calling 通用的 tool 定义。
 
     工具名 = `<prefix>__<服务名>`，prefix 为组限定应用前缀（'组__名' 或未分组的 '名'，
@@ -151,8 +151,12 @@ def to_mcp_tool(prefix: str, service: dict, *, qualname: str = None,
             "properties": properties,
             "required": required,
         },
-        # 平台内部路由元数据（不进入对外的 MCP schema）；app=qualname 供 platform.call 精确路由
-        "_meta": {"app": qn, "service": service["name"], "group": group, "app_name": display_app},
+        # 平台内部路由元数据（不进入对外的 MCP schema）。每个键都必须有消费者——
+        # 没有消费者的字段就是死字段（原来这里还有个 "group"，全仓零读取，已删）：
+        #   app      → 工具路由 / 鉴权 / 按组收窄
+        #   service  → 服务名过滤与平台工具白名单
+        #   app_name → 流程编排服务下拉（web.py /api/flow-service-options）
+        "_meta": {"app": qn, "service": service["name"], "app_name": display_app},
     }
 
 

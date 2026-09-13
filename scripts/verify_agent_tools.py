@@ -33,6 +33,15 @@ PASS, FAIL = [], []
 VISIBLE_BUDGET = 25        # 常驻 + 最大的一组
 GROUP_BUDGET = 15          # 单个应用组（业务服务 + 该应用的 3 个文件工具）
 
+# `_meta` 各键的**消费者登记表**。新增字段必须登记——「标了不用」与「工具静默消失」
+# 是同一类失效：静态看不出、运行期不报错。`dangerous` 就曾长期是死字段（18 个 True 无人读）。
+META_CONSUMERS = {
+    "app":       "工具路由 / 鉴权 / 按组收窄（agent_service、agent_roles）",
+    "service":   "服务名过滤与平台工具白名单（agent_service）",
+    "app_name":  "流程编排服务下拉（web.py /api/flow-service-options）",
+    "dangerous": "HITL 闸门（agent_service._is_dangerous）",
+}
+
 
 def check(label, cond, detail=""):
     (PASS if cond else FAIL).append(label)
@@ -195,6 +204,20 @@ def main():
     ghost = sorted(s for s in A._HITL_SERVICES if s not in all_svc)
     check("HITL 清单里的服务名都真实存在", not ghost,
           f"幽灵条目：{ghost}" if ghost else f"{len(A._HITL_SERVICES)} 条全部命中")
+
+    # ── ⑦ _meta 字段的消费者登记（防死字段） ───────────────────
+    # 「标了不用」和「工具静默消失」是同一类失效：静态看不出、运行期没报错。
+    # `_meta.dangerous` 就曾标了 18 个 True 却从没被读过——没人问过「这个字段谁来读」。
+    # 用登记表而不是自动扫描：grep 判「只写不读」很脆（["key"] 会命中大量无关代码）。
+    print("\n⑦ _meta 字段消费者登记（防死字段）")
+    produced = {k for t in defs for k in (t.get("_meta") or {})}
+    unregistered = sorted(produced - set(META_CONSUMERS))
+    check("工具产出的 _meta 字段都已登记消费者", not unregistered,
+          f"未登记：{unregistered}（新增字段请登记它由谁读）" if unregistered
+          else f"{len(produced)} 个字段全部有登记")
+    stale = sorted(set(META_CONSUMERS) - produced)
+    check("登记表里没有已消失的字段", not stale,
+          f"表中多余：{stale}（字段已删，表要同步）" if stale else "")
 
     # ── 汇总 ──────────────────────────────────────────────────
     print("\n" + "=" * 74)

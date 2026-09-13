@@ -212,10 +212,11 @@ def call_builtin(app_dir: Path, service: str, params: dict):
 
 
 def builtin_tool_defs(prefix: str, *, qualname: str = None,
-                      group=None, app_name: str = None) -> list[dict]:
+                      app_name: str = None) -> list[dict]:
     """生成某应用的内置文件工具定义（工具名 <prefix>__platform_*，prefix 为组限定前缀）。
 
-    _meta.app 为 qualname（路由/鉴权用）；group/app_name 供展示。"""
+    工具 metadata 的 _meta.app 为 qualname（路由/鉴权用）；_meta.app_name 供流程编排的服务
+    下拉做展示与过滤。**每个键都必须有消费者**——原先还有个 "group"，全仓零读取，已删。"""
     qn = qualname or prefix
     _app = app_name or qn
     return [
@@ -236,7 +237,7 @@ def builtin_tool_defs(prefix: str, *, qualname: str = None,
                 },
                 "required": [],
             },
-            "_meta": {"app": qn, "service": "platform_list_files", "group": group, "app_name": _app},
+            "_meta": {"app": qn, "service": "platform_list_files", "app_name": _app},
         },
         {
             "name": f"{prefix}__platform_read_file",
@@ -255,7 +256,7 @@ def builtin_tool_defs(prefix: str, *, qualname: str = None,
                 },
                 "required": ["directory", "file_name"],
             },
-            "_meta": {"app": qn, "service": "platform_read_file", "group": group, "app_name": _app},
+            "_meta": {"app": qn, "service": "platform_read_file", "app_name": _app},
         },
         {
             "name": f"{prefix}__platform_write_file",
@@ -272,6 +273,6 @@ def builtin_tool_defs(prefix: str, *, qualname: str = None,
                 },
                 "required": ["file_name", "content"],
             },
-            "_meta": {"app": qn, "service": "platform_write_file", "group": group, "app_name": _app},
+            "_meta": {"app": qn, "service": "platform_write_file", "app_name": _app},
         },
     ]
