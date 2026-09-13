@@ -165,10 +165,13 @@ def _platform_tool_defs(user=None) -> list:
             "function": {
                 "name": "platform_read_app_doc",
                 "description": (
-                    "按需读取某应用的详细设计文档，用于深入该应用开发/改造前了解其业务规则（BR）、"
-                    "功能（FUNC）、数据字典等。app 填应用 qualname（如 psc/sales_forecast）或短名；"
-                    "doc 填文档类型（应用详设/前端详设/前端测试用例/README）。仅当需要了解单个应用的"
-                    "业务细节时才调用，不要一次性读全部应用。"
+                    "按需读取某应用的设计文档。**先想清楚要问什么，再选文档类型**：\n"
+                    "· 要「该调哪些工具、按什么顺序、出错怎么办」→ doc=\"README\"（写给智能体的"
+                    "操作指南，含标准工作流与错误处理）；\n"
+                    "· 要「业务规则/公式/字段口径」→ doc=\"应用详设\"（按 BR 编号、数据字典定位）；\n"
+                    "· 要「页面上有哪些交互」→ doc=\"前端详设\"。\n"
+                    "app 填应用 qualname（如 psc/sales_forecast）或短名。"
+                    "仅当需要了解单个应用的细节时才调用，不要一次性读全部应用。"
                 ),
                 "parameters": {
                     "type": "object",

@@ -142,11 +142,63 @@ def _app_short(app: str) -> str:
     return app.split("/")[-1]
 
 
+# 应用《Agent 操作指南》文件名（与 CONVENTION §11、agent_common._APP_DOC_FILENAMES 一致）。
+_APP_README = "README.md"
+
+
+def _read_app_readmes(apps: list[str]) -> str:
+    """读各应用的 README，拼成一个注入块；没有 README 的应用跳过。
+
+    在模块加载时执行（AGENT_ROLES 是模块级常量）——只读文件、不碰平台运行时，
+    所以不受「平台是否已 load_all」影响。
+    """
+    blocks = []
+    for qn in apps:
+        group, _, short = (qn or "").partition("/")
+        if not group or not short:
+            continue
+        p = _ROLES_DIR / group / short / _APP_README
+        try:
+            if not p.is_file():
+                continue
+            text = p.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue  # 单个应用读失败不该拖垮整份角色定义
+        if text:
+            blocks.append(f'<app-doc app="{short}">\n{text}\n</app-doc>')
+    return "\n\n".join(blocks)
+
+
+def _esc_braces(text: str) -> str:
+    """把花括号转义成 format 字面量。
+
+    `system_prompt_template` 是 **Python format 字符串**——AgentScope 用
+    `.format(team_name=…, member_name=…)` 渲染它。README 里满是 `{"window": 6}`、
+    `{material_no, customer_no, …}` 这类 JSON/占位片段，不转义会在建队那一刻
+    直接 KeyError 把 AgentCreate 打挂（而且是运行期才炸，静态看不出来）。
+    """
+    return text.replace("{", "{{").replace("}", "}}")
+
+
 def _build_app_template(role: str) -> SubAgentTemplate:
-    """业务角色：绑定应用集合。"""
+    """业务角色：绑定应用集合 + 注入各应用的《Agent 操作指南》（README）。
+
+    README 里写的是「标准工作流（工具调用顺序）」「错误处理（应对策略）」，
+    是工具选择与纠错最直接的依据。**2026-09-03 的 e7f04f1 删掉应用级 Agent 时，
+    这条注入路径一并消失了**，worker 只剩一串应用名，业务规则与调用顺序全丢——
+    这是「以前用 README 效果挺好」这句话对应的那次回退（见 CONVENTION §11）。
+    """
     apps = ROLE_APPS[role]
     label = _ROLE_LABEL[role]
     app_list = "、".join(_app_short(a) for a in apps)
+    docs = _read_app_readmes(apps)
+    doc_block = (
+        "\n\n下面是这几个应用的《Agent 操作指南》。**优先按其中的「标准工作流」推进**"
+        "（那是经过验证的工具调用顺序），出错时按「错误处理」里的应对策略走；"
+        "指南里没写到的细节再靠工具签名自省。\n"
+        + _esc_braces(docs)
+    ) if docs else ""
+
     # 普通字符串（非 f-string）：{member_name} 等占位符留给 AgentScope 的 AgentCreate 填充。
     # 首行埋机器标记 <!--FDE_ROLE:<role>-->，供工具过滤 middleware 可靠识别角色（不靠 LLM 起名）。
     prompt = (
@@ -154,8 +206,9 @@ def _build_app_template(role: str) -> SubAgentTemplate:
         f"你是{{member_name}}，{label}，隶属团队'{{team_name}}'（由{{leader_name}}领导）。\n\n"
         f"团队目标：{{team_description}}\n"
         f"你的分工：{{member_description}}\n\n"
-        f"你只负责以下应用的服务，不要越界调用其他角色的应用：\n{app_list}\n\n"
-        f"完成分配给你的任务后，用 TeamSay 向 {{leader_name}} 回报结果。"
+        f"你只负责以下应用的服务，不要越界调用其他角色的应用：\n{app_list}"
+        + doc_block
+        + "\n\n完成分配给你的任务后，用 TeamSay 向 {leader_name} 回报结果。"
     )
     return SubAgentTemplate(
         type=role,
