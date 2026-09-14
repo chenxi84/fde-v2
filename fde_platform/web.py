@@ -789,9 +789,20 @@ def _agent2_turn_finished(agent_id: str, sid: str, headers: dict) -> bool:
         for s in (r.json().get("sessions") or []):
             if (s.get("session") or {}).get("id") != sid:
                 continue
-            if s.get("status") == "awaiting_permission":
-                return False
-            if s.get("is_running"):
+            # **只认 `status == "idle"`**，其余一律「还没完」。
+            #
+            # 不能用 `is_running`：它已废弃（AgentScope 的 schema 明写 "Deprecated —
+            # use status"），而且只在「worker 正持有运行租约」时为真——会话停在
+            # `awaiting_permission` / `awaiting_external_result` 时它读 **False**，
+            # 会被这里误判成「跑完了」，于是提前收尾：前端看着像结束、按钮恢复，
+            # 而后台等结果回来还会唤醒它继续跑 → 那段结果只在历史里，刷新才看得见。
+            #
+            # `awaiting_external_result` 的成因（AgentScope `derive_parked_status`）：
+            # 最后一条 assistant 消息上挂着 **SUBMITTED** 状态的工具调用——
+            # 提交了、结果还没回，正是「后台还在执行」的形态。
+            # 四种状态（running / idle / awaiting_permission / awaiting_external_result）
+            # 里只有 idle 是终点。
+            if s.get("status") != "idle":
                 return False
             team = s.get("team")
             members = (team or {}).get("members") if isinstance(team, dict) else None
