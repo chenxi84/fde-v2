@@ -761,6 +761,46 @@ def _agent2_headers():
     return {"X-User-ID": u["username"] if u else "anon"}
 
 
+# 上游 stream 静默多久就查一次「还在跑吗」。定得短是为了让「答完了」尽快被看见——
+# 一次会话状态查询很便宜（本地 HTTP + 内存），而它换掉的是原来那个 180 秒的盲等。
+_QUIET_SECS = 3
+
+# 整轮硬上限，纯兜底：会话卡死（既不在跑也不收敛）时别把 waitress 线程吊住不放。
+_MAX_TURN_SECS = 1800
+
+
+def _agent2_turn_finished(agent_id: str, sid: str, headers: dict) -> bool:
+    """这一轮是不是真的结束了——问会话状态，而不是等墙钟。
+
+    为什么不用固定超时当收敛信号：一轮要跑多久取决于 leader 有没有建队、worker 要多长
+    时间回报、知识图谱查询有没有被 offload……是个**分布**，不是常数。180 秒是猜的，
+    改成 5 秒还是猜。而 agent_service 的会话对象直接给了答案：实测跑动中
+    `is_running=True / status=running`，收敛后 2 秒内转 `idle`。
+
+    HITL 的 `awaiting_permission` 不算「结束」——那条路由事件路径处理（发
+    `confirm_required` 后 return），不让这里抢先收尾。团队还有在册成员时也继续等。
+
+    查询失败一律当「没结束」（保守：宁可多等一个探测周期，也不要把还在跑的活截断）；
+    真正的兜底是调用方的 `_MAX_TURN_SECS`。
+    """
+    try:
+        r = httpx.get(f"{AGENT2_BASE}/sessions/", params={"agent_id": agent_id},
+                      headers=headers, timeout=10)
+        for s in (r.json().get("sessions") or []):
+            if (s.get("session") or {}).get("id") != sid:
+                continue
+            if s.get("status") == "awaiting_permission":
+                return False
+            if s.get("is_running"):
+                return False
+            team = s.get("team")
+            members = (team or {}).get("members") if isinstance(team, dict) else None
+            return not members
+        return True                     # 会话查不到（已删），别继续吊着
+    except Exception:
+        return False
+
+
 def _agent2_group() -> str:
     """从请求读当前应用组（前端 agent_rail 通过 ?group= 传入）。空 = 总编排。"""
     return (request.args.get("group") or "").strip()
@@ -898,16 +938,35 @@ def api_agent2_chat_stream():
             if r.status_code >= 400:
                 yield "data: " + json.dumps({"event": "error", "data": f"HTTP {r.status_code}"}, ensure_ascii=False) + "\n\n"
                 return
-            # 订阅 stream 并翻译；read timeout = 静默超时（leader 收敛后无新事件）。
-            # 多智能体 leader 收到 worker 回报会开启新一轮 reply，故 REPLY_END 不 break，
-            # 持续读直到静默超时，把多轮文本合并成最终 done。
-            # 知识图谱查询（platform_query_knowledge）耗时 30~70s，会被 AgentScope offload 到
-            # 后台异步执行，完成后 wakeup 开启新一轮 reply；故 read timeout 须大于该耗时，
-            # 否则前端在后台完成前提前 done，收不到最终答案。
+            # 订阅 stream 并翻译。**收敛判据是「会话还在不在跑」，不是墙钟**：
+            #
+            # 原来用「上行静默 180 秒」当收敛信号——那是个猜测，而实测上行根本不会静默
+            # （agent_service 的 session stream 一直挂着），于是 180 秒永不触发，
+            # **这一轮永不收尾**：前端 `await streamRequest` 不返回，发送按钮永久禁用，
+            # waitress 线程被吊住。症状是「发完第一条就发不出第二条」。
+            #
+            # 改成：静默超过 _QUIET_SECS 就查一次会话状态（agent_service 现成给的）。
+            # 实测跑动中 is_running=True/status=running，收敛后 2 秒内转 idle——
+            # 这是「还有没有在跑的活」的直接回答，一轮要跑多久都不用猜（建队、知识图谱
+            # offload 30~70s 都自动覆盖）。_MAX_TURN_SECS 只作纯兜底，防会话卡死吊住线程。
+            deadline = time.monotonic() + _MAX_TURN_SECS
             with httpx.stream("GET", f"{AGENT2_BASE}/sessions/{sid}/stream",
                               params={"agent_id": agent_id}, headers=headers,
-                              timeout=(None, 180, None, None)) as up:
-                for line in up.iter_lines():
+                              timeout=(None, _QUIET_SECS, None, None)) as up:
+                lines = up.iter_lines()
+                while True:
+                    try:
+                        line = next(lines)
+                    except StopIteration:
+                        break
+                    except httpx.ReadTimeout:
+                        # 上游静默：问一次「还在跑吗」。还在跑就接着读（worker 可能
+                        # 正在干活），跑完了就收尾。
+                        if _agent2_turn_finished(agent_id, sid, headers):
+                            break
+                        if time.monotonic() > deadline:
+                            break
+                        continue
                     if not line.startswith("data:"):
                         continue
                     try:

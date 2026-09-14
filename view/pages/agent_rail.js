@@ -188,6 +188,11 @@ export function agentRail() {
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
+      // `done` 是这条流的终态事件（服务端在 finally 里发完就结束响应）。收到它就主动
+      // 断开，不依赖服务端关连接——否则一旦服务端该关没关（曾经就是这样：收敛判据用
+      // 的是 180 秒静默，而那永远不会来），这里的 await 永不返回，调用方的
+      // `finally { sending = false }` 也就不执行：发送按钮永久禁用、发不出第二条。
+      let ended = false;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -200,7 +205,9 @@ export function agentRail() {
           let evt;
           try { evt = JSON.parse(frame.slice(5).trim()); } catch { continue; }
           onEvent(evt);
+          if (evt.event === "done") { ended = true; break; }
         }
+        if (ended) { try { await reader.cancel(); } catch (e) { /* 已断开 */ } break; }
       }
     },
 
