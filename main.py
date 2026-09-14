@@ -198,7 +198,12 @@ def main():
         # threads 决定「同时能处理几个请求」；Agent 对话是长连接会占满一个线程
         # 直到说完，所以它约等于「同时能几个人对话」。可用 PLATFORM_THREADS 调。
         print(f"使用 Waitress 启动（多线程生产模式，threads={THREADS}）")
-        serve(app, host=HOST, port=PORT, threads=THREADS)
+        # channel_request_lookahead=1：让 waitress 在处理请求期间**继续在该 socket 上
+        # select**，从而把 `environ["waitress.client_disconnected"]` 维持在最新状态。
+        # 默认 0 时它不再看这个 socket，那个回调永远返回 False——
+        # 于是「用户关了页面」只能等到这一轮活干完才被发现（SSE 长连接尤其明显）。
+        serve(app, host=HOST, port=PORT, threads=THREADS,
+              channel_request_lookahead=1)
     except ImportError:
         print(f"Waitress 未安装，回退 Flask 内置服务器")
         app.run(host=HOST, port=PORT, debug=False, use_reloader=False)

@@ -904,6 +904,16 @@ def api_agent2_chat_stream():
             yield "data: " + json.dumps({"event": "error", "data": "会话创建失败"}, ensure_ascii=False) + "\n\n"
         return Response(_err2(), mimetype="text/event-stream")
 
+    # waitress 给的回调：客户端还在不在。**必须在这里取**——gen() 是在响应流式
+    # 阶段执行的，那时 request 上下文已经结束（同 api_agent2_proxy 的处理）。
+    #
+    # 为什么需要它：waitress 一旦进入 WSGI 应用代码就唤不醒那个线程（Pylons/waitress#381），
+    # 客户端关页面/断网它察觉不到，那一轮要是跑得久（建队十几分钟），线程就被白占十几分钟。
+    # 有了这个回调，人一走就立刻收尾放线程。
+    # 注意：默认 channel_request_lookahead=0 时 waitress 不会继续在 socket 上 select，
+    # 这个回调也就没机会更新——main.py 的 serve() 里已把它开到 1。
+    client_gone = request.environ.get("waitress.client_disconnected")
+
     headers = _agent2_headers()
     msg = {"role": "user", "name": "user",
            "content": [{"type": "text", "text": message}]}
@@ -960,13 +970,27 @@ def api_agent2_chat_stream():
                     except StopIteration:
                         break
                     except httpx.ReadTimeout:
-                        # 上游静默：问一次「还在跑吗」。还在跑就接着读（worker 可能
+                        # 上游静默，先看人还在不在：走了就立刻收尾放线程，
+                        # 不必陪着一轮没人看的活跑完。
+                        if client_gone is not None and client_gone():
+                            break
+                        # 人还在：问一次「还在跑吗」。还在跑就接着读（worker 可能
                         # 正在干活），跑完了就收尾。
                         if _agent2_turn_finished(agent_id, sid, headers):
                             break
                         if time.monotonic() > deadline:
                             break
                         continue
+                    # 每行都查一次「人还在不在」：这个回调只是 `not channel.connected`
+                    # 的属性读取（waitress/channel.py:74），没有系统调用，可以随便调。
+                    # 放在这里而不是只在静默时查，是因为连续输出的那一轮上游一直不静默，
+                    # 只在超时分支查的话，人走了也要等出现 3 秒空隙才发现。
+                    if client_gone is not None and client_gone():
+                        # 记一笔：这一轮是被「人走了」掐掉的，不是自己跑完的。
+                        # 排查「某人说 agent 没回完」时，这行能立刻分清是模型问题还是
+                        # 他中途关了页面；也是这套断连检测本身是否生效的直接证据。
+                        print(f"[agent2] 客户端已断开，提前结束本轮 sid={sid}", flush=True)
+                        break
                     if not line.startswith("data:"):
                         continue
                     try:
