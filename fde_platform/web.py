@@ -953,9 +953,17 @@ def api_agent2_chat_stream():
     def gen():
         try:
             # 触发 chat（异步返回 started）
-            r = httpx.post(f"{AGENT2_BASE}/chat/", json={
-                "agent_id": agent_id, "session_id": sid, "input": msg,
-            }, headers=headers, timeout=60)
+            # 触发本轮。409 在这里要**重试几次**再报错：run 租约的释放与 SSE 流的
+            # 关闭不是原子的，紧接上一轮发下一句时很容易撞上一个几百毫秒的窗口
+            # （AgentScope `_router/_chat.py` 自己管这叫 "the old 409 race"）。
+            # 用户看到的就是「刚答完就问下一句，却被回一句『上一条还在处理中』」。
+            for _try in range(4):
+                r = httpx.post(f"{AGENT2_BASE}/chat/", json={
+                    "agent_id": agent_id, "session_id": sid, "input": msg,
+                }, headers=headers, timeout=60)
+                if r.status_code != 409:
+                    break
+                time.sleep(0.4)
             if r.status_code >= 400:
                 # 409 = agent_service 的「单会话同时只跑一轮」闸门（防重复提交）。
                 # 典型触发：上一轮还在跑，用户刷新了页面（前端状态清零、按钮又可点了）

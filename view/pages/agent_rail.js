@@ -175,6 +175,19 @@ export function agentRail() {
         self.sending = false;
         self.scrollEnd();
       }
+      // 拿服务端的会话历史**对账一次**。
+      //
+      // 这条流可能因为任何原因提前结束（收敛判据、客户端断连、超时），而**历史里是完整的**。
+      // 不对账就会出现「看着答完了、其实少了一段，手动刷新才补上」——用户报的就是这个。
+      // loadMsgs 内部有 `if (self.sending) return`，所以必须放在 finally 之后。
+      //
+      // 只在历史**不比本地短**时才采纳：历史可能还没落盘完，那样替换反而会把
+      // 刚显示出来的答案抹掉。
+      const snapshot = self.msgs;
+      const before = snapshot.reduce((n, m) => n + ((m.content || "").length), 0);
+      await this.loadMsgs();
+      const after = self.msgs.reduce((n, m) => n + ((m.content || "").length), 0);
+      if (after < before) self.msgs = snapshot;
     },
 
     /* POST SSE 流式读取：逐帧解析 data: {...} 并回调。 */
