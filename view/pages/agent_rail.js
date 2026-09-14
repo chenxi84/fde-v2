@@ -154,7 +154,8 @@ export function agentRail() {
           }
           self.scrollEnd();
         };
-        await this.streamRequest("/api/agent2/chat/stream" + self.groupQs(), { message: m, session_id: sid }, onEvent);
+        await this.streamUntilIdle("/api/agent2/chat/stream" + self.groupQs(),
+                                   { message: m, session_id: sid }, onEvent);
         // HITL：危险操作需人工确认，确认/拒绝后继续（可多轮）
         while (self.confirm) {
           const names = self.confirm.map(c => c.name).join("\n");
@@ -162,7 +163,8 @@ export function agentRail() {
             "\n\n「确定」= 确认执行；「取消」= 拒绝。");
           const decisions = self.confirm.map(c => ({ id: c.id, confirmed: ok }));
           self.confirm = null;
-          await this.streamRequest("/api/agent2/confirm" + self.groupQs(), { session_id: sid, decisions }, onEvent);
+          await this.streamUntilIdle("/api/agent2/confirm" + self.groupQs(),
+                                     { session_id: sid, decisions }, onEvent);
         }
         self.progress = "";
         this.commitLive();
@@ -190,12 +192,53 @@ export function agentRail() {
       if (after < before) self.msgs = snapshot;
     },
 
+    /* 发一条流式请求，并**跟到会话真的跑完为止**。
+     *
+     * 服务端会把这条 SSE 一直挂着（上游每 30 秒一个心跳、永不 EOF），所以「什么时候
+     * 听够了」由这里决定：轮询会话状态，一 `idle` 就主动断开。断开之后服务端靠
+     * waitress 的 client_disconnected **立刻**回收线程；内容以调用方随后的历史对账为准。
+     *
+     * 为什么不让服务端关：它只能靠超时猜。实测上游心跳 30 秒一次——超时设短了会把
+     * 还健康的流判死（httpx 的 iter_lines 在 ReadTimeout 之后无法续读，下一次 next()
+     * 直接 StopIteration，于是流被提前收掉、只带回前半段）；设长了就变成永远不关
+     * （那正是最初的 bug）。而「这一轮完没完」，前端问一次就知道。
+     */
+    async streamUntilIdle(url, payload, onEvent) {
+      const ctl = new AbortController();
+      let started = false;      // 收到过事件 = 这一轮真的跑起来了
+      let idleStreak = 0;       // 连续几次探到 idle
+      const wrapped = (evt) => { started = true; onEvent(evt); };
+      const watch = setInterval(async () => {
+        try {
+          const list = await get("/api/agent2/sessions" + self.groupQs(), { quiet: true });
+          const me = (list || []).find((s) => s.session_id === self.sid);
+          if (!me) return;
+          if (me.status === "idle") {
+            idleStreak += 1;
+            // 跑起来过、又回到 idle → 这一轮完了；或者一直没动静（两次探测约 6 秒）
+            // 也收手——否则碰到完全不产事件的轮次会永远挂着。
+            if (started || idleStreak >= 2) ctl.abort();
+          } else {
+            idleStreak = 0;
+          }
+        } catch (e) { /* 查不到就继续听 */ }
+      }, 3000);
+      try {
+        await this.streamRequest(url, payload, wrapped, ctl.signal);
+      } catch (e) {
+        if (!(e && e.name === "AbortError")) throw e;   // 主动断开 = 正常收尾，不是失败
+      } finally {
+        clearInterval(watch);
+      }
+    },
+
     /* POST SSE 流式读取：逐帧解析 data: {...} 并回调。 */
-    async streamRequest(url, payload, onEvent) {
+    async streamRequest(url, payload, onEvent, signal) {
       const resp = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
+        signal,
       });
       if (!resp.ok || !resp.body) throw new Error("HTTP " + resp.status);
       const reader = resp.body.getReader();

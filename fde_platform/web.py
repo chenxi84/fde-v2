@@ -761,9 +761,17 @@ def _agent2_headers():
     return {"X-User-ID": u["username"] if u else "anon"}
 
 
-# 上游 stream 静默多久就查一次「还在跑吗」。定得短是为了让「答完了」尽快被看见——
-# 一次会话状态查询很便宜（本地 HTTP + 内存），而它换掉的是原来那个 180 秒的盲等。
-_QUIET_SECS = 3
+# 上游 stream 的读超时。**必须大于上游的心跳间隔（实测 30 秒一个裸 `:`）**。
+#
+# 这里踩过一个坑：一度把它设成 3 秒好让「答完了」尽快被发现，结果每次工具调用停顿
+# 都会触发 ReadTimeout——而 **httpx 的 iter_lines() 在 ReadTimeout 之后无法续读**，
+# 下一次 next() 直接 StopIteration，于是流被提前收掉、done 只带回前半段，
+# 后台还在跑的内容只能刷新页面才看得到。
+#
+# 现在它只是**兜底**：正常收尾由客户端决定（前端轮询会话状态，答完就主动断开），
+# 服务端这边靠 client_gone 立刻放线程；心跳行（`:`）也会顺带探一次，防止客户端异常
+# 没断干净时把流永远挂着。
+_QUIET_SECS = 180
 
 # 整轮硬上限，纯兜底：会话卡死（既不在跑也不收敛）时别把 waitress 线程吊住不放。
 _MAX_TURN_SECS = 1800
@@ -1021,6 +1029,11 @@ def api_agent2_chat_stream():
                         print(f"[agent2] 客户端已断开，提前结束本轮 sid={sid}", flush=True)
                         break
                     if not line.startswith("data:"):
+                        # 上游每 30 秒发一个裸 `:` 当心跳。把它当一次「tick」：
+                        # 顺带问一次会话还在不在跑，避免客户端异常没断干净时把流挂着
+                        # （正常收尾由前端主动断开，见 agent_rail.js 的状态轮询）。
+                        if line.strip() == ":" and _agent2_turn_finished(agent_id, sid, headers):
+                            break
                         continue
                     try:
                         evt = json.loads(line[5:].strip())
@@ -1064,6 +1077,10 @@ def api_agent2_sessions():
             item = {
                 "session_id": sess.get("id"),
                 "title": sess.get("name") or "对话",
+                # 透出会话状态：前端靠它判断「这一轮说完了没有」——服务端会把 SSE
+                # 一直挂着（上游每 30 秒一个心跳、永不 EOF），所以收尾由前端决定。
+                # running / idle / awaiting_permission / awaiting_external_result。
+                "status": s.get("status"),
             }
             # 提取 team 成员（worker session_id + agent_id + name），供前端订阅 worker 进度
             team = s.get("team")
