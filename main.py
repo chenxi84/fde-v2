@@ -25,7 +25,7 @@ try:
 except ImportError:
     pass
 
-from fde_platform.web import HOST, PORT, VERSION, app, platform  # noqa: E402
+from fde_platform.web import HOST, PORT, THREADS, VERSION, app, platform  # noqa: E402
 from fde_platform import web as _web  # noqa: E402  # 暴露组件状态给首页监控区
 
 # 启用鉴权（可插拔）：删除 fde_platform/auth.py 与 users.py 后此处 import 失败，
@@ -195,8 +195,10 @@ def main():
 
     try:
         from waitress import serve
-        print(f"使用 Waitress 启动（多线程生产模式）")
-        serve(app, host=HOST, port=PORT, threads=4)
+        # threads 决定「同时能处理几个请求」；Agent 对话是长连接会占满一个线程
+        # 直到说完，所以它约等于「同时能几个人对话」。可用 PLATFORM_THREADS 调。
+        print(f"使用 Waitress 启动（多线程生产模式，threads={THREADS}）")
+        serve(app, host=HOST, port=PORT, threads=THREADS)
     except ImportError:
         print(f"Waitress 未安装，回退 Flask 内置服务器")
         app.run(host=HOST, port=PORT, debug=False, use_reloader=False)

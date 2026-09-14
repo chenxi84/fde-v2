@@ -50,6 +50,17 @@ VERSION = "v2.2.0-beta"
 HOST = os.environ.get("PLATFORM_HOST", "127.0.0.1")
 PORT = int(os.environ.get("PLATFORM_PORT", 4000))
 
+# waitress 工作线程数。**每个请求占一个线程直到响应结束**，而 Agent 对话是 SSE
+# 长连接（一次对话从头占到尾，几十秒到几分钟），所以 `同时进行的对话轮数` 直接等于
+# 这个数——排在后面的请求不会报错，只是等。
+# 默认 16 而不是 waitress 自带的 4：这类负载几乎全是在等 LLM / 等数据库（I/O 等待），
+# 加线程代价很小；4 会让"第 5 个人开始转圈"来得非常早。
+#
+# 真要继续往上走，更彻底的做法是让 nginx 把 /api/agent2/*/stream 直接反代到
+# agent_service(:4100)，Flask 完全不碰 SSE——但身份注入（X-User-ID 由 Flask 从会话里
+# 取了加上的）得先解决，不是纯配置能改的。
+THREADS = max(1, int(os.environ.get("PLATFORM_THREADS", 16)))
+
 # 平台组件状态（main.py 启动时收集写入；首页「平台运行情况」监控区读取）
 COMPONENTS = []
 
