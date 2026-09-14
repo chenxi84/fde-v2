@@ -74,6 +74,16 @@ try:
 except ImportError:
     RULES_ADMIN_ON = False
 
+# 移动端入口 /m/（可插拔）：删除 fde_platform/mobile.py 后此处 import 失败即回落无此页。
+# 鉴权/授权一行都不用改——/m/ 不在白名单里，auth.gate 自动拦未登录并带 next 回跳。
+try:
+    from fde_platform import mobile
+
+    mobile.register(app)
+    MOBILE_ON = True
+except ImportError:
+    MOBILE_ON = False
+
 # 组件状态收集（供首页「平台运行情况」监控区展示本次启动已加载的组件）
 _web.COMPONENTS = [
     {"key": "auth", "name": "鉴权", "icon": "🔐", "loaded": AUTH_ON,
@@ -84,6 +94,8 @@ _web.COMPONENTS = [
      "desc": "配置 LLM 档案（operator 对话 / vision 视觉 / builder 构建）。未配置不影响应用清单/手工调用/MCP。"},
     {"key": "agent", "name": "Agent 后端", "icon": "🤖", "loaded": AGENT_ADMIN_ON,
      "desc": "AgentScope 多智能体编排（leader 建队派活），业务角色下沉到各组 _roles.py。"},
+    {"key": "mobile", "name": "移动端入口", "icon": "📱", "loaded": MOBILE_ON,
+     "desc": "手机浏览器打开 /m/ 即只显示数字员工对话（复用同一套登录、授权与 Agent 接口）。可插拔：删除 mobile.py 即无此入口。"},
     {"key": "knowledge", "name": "知识库", "icon": "📚", "loaded": RULES_ADMIN_ON,
      "desc": "非结构化知识文件（制度/SOP/最佳实践），经 LightRAG 索引后语义检索。"},
     {"key": "db", "name": "数据库", "icon": "🗄️", "loaded": True,

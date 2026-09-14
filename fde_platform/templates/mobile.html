@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  {# viewport-fit=cover 是 iPhone 刘海/手势条安全区的前提，配合 mobile.css 里的
+     env(safe-area-inset-*) 使用 #}
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0e1b2a">
+  <title>数字员工 · FDE 平台</title>
+  <link rel="icon" href="/favicon.ico">
+  {# styles.css 只是 @import /static/fde.css 的一行壳；agent-rail 的类全在 fde.css 里。
+     顺序要紧：mobile.css 必须在其后，覆盖才是覆盖。 #}
+  <link rel="stylesheet" href="/view/lib/styles.css">
+  <link rel="stylesheet" href="/static/mobile.css?v=20260914">
+</head>
+<body class="mbody">
+
+  <div class="mtop">
+    <span class="mbrand">✦ 数字员工</span>
+    <span class="mwho">{{ user.username if user else '' }}</span>
+    <a class="mpc" href="/">PC 版</a>
+  </div>
+
+  {# 附件上传的目标应用：agent_rail 的 resolveUploadApp() 依赖 window.__fdePage，
+     PC 上由 shell 的 bootShell 提供，独立页面要自己补（选项来自 /api/apps，
+     已按当前用户的授权过滤）。 #}
+  <div class="mtarget" x-data="mTarget()" x-init="init()">
+    <label for="m-app">附件上传到</label>
+    <select id="m-app" x-model="picked" @change="apply()">
+      <template x-for="a in apps" :key="a.value">
+        <option :value="a.value" x-text="a.label"></option>
+      </template>
+    </select>
+  </div>
+
+  {# 挂载点与平台首页的 Agent 栏逐字一致：agent_rail.js 的 scrollEnd() 会全局查
+     `.agent-rail .chatbox`，所以这层 aside 与类名不能改，且一个页面只能有一个实例。 #}
+  <aside class="agent-rail">
+    <div x-data="agentRail()" x-html="tpl"></div>
+  </aside>
+
+  <script type="module">
+    import Alpine from "/view/lib/alpine.esm.js";
+    import { agentRail } from "/view/pages/agent_rail.js";
+    import { get } from "/view/lib/api.js";
+
+    // 顺序不能反：agent_rail.js 用的是**裸全局** Alpine（不 import），
+    // 模块求值时它必须已经挂在 window 上。
+    window.Alpine = Alpine;
+    Alpine.data("agentRail", agentRail);
+
+    // 附件目标应用：把 /api/apps（已按授权过滤）转成 agent_rail 认的两个全局。
+    //   __fdeAppPages —— Set("组:应用短名")，resolveUploadApp 要 has(page)
+    //   __fdePage     —— 当前目标，"组:应用短名"
+    // 没有可见应用时两个全局都不设，附件按钮维持组件自带的 warn 提示（优雅降级）。
+    Alpine.data("mTarget", () => ({
+      apps: [],
+      picked: "",
+      async init() {
+        try {
+          // api.js 的 request() 已经把 {status,data} 拆过一层，这里拿到的是数组本身
+          const d = await get("/api/apps");
+          const list = Array.isArray(d) ? d : ((d && d.data) || []);
+          this.apps = list.map((a) => ({
+            value: a.name.replace("/", ":"),
+            label: a.name,
+          }));
+          if (this.apps.length) {
+            window.__fdeAppPages = new Set(this.apps.map((a) => a.value));
+            this.picked = this.apps[0].value;
+            window.__fdePage = this.picked;
+          }
+          // 目标条是否出现由 CSS 变量驱动（见 mobile.css），不用 x-show：
+          // 兄弟选择器去猜 Alpine 写进 style 的 display 值太脆。
+          document.body.classList.toggle("has-target", this.apps.length > 0);
+        } catch (e) {
+          /* 拿不到应用列表不影响对话，只是附件不可用 */
+        }
+      },
+      apply() {
+        window.__fdePage = this.picked;
+      },
+    }));
+
+    Alpine.start();
+  </script>
+</body>
+</html>

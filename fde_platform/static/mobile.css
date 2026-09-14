@@ -1,0 +1,87 @@
+/* 移动端入口 /m/ 的样式 —— 只做一件事：把 PC 的 Agent 右栏变成整屏。
+ *
+ * 为什么是"覆盖"而不是改 fde.css：Agent 右栏是 PC 端与平台首页**共用**的组件
+ * （view/pages/agent_rail.html + fde.css 的 .agent-rail 块），那边是 380px 侧栏的
+ * 桌面布局。在这里覆盖既不动共用组件，也让 PC 端完全不受影响。
+ *
+ * 加载顺序：本文件必须跟在 /view/lib/styles.css（→ fde.css）之后。
+ *
+ * 竖向三块：顶栏(m-top) + 附件目标(m-sel，可能为 0) + rail(撑满剩余)。
+ * 用 CSS 变量而不是兄弟选择器算偏移——后者要盯 Alpine 写进 style 的 display 值，太脆。
+ */
+
+html, body.mbody { margin: 0; padding: 0; height: 100%; }
+
+body.mbody {
+  --m-top: 48px;
+  --m-sel: 0px;                 /* 没有可见应用时，目标条整条不出现，偏移自然为 0 */
+}
+body.mbody.has-target { --m-sel: 46px; }
+
+/* ── 顶部条：品牌 + 当前用户 + 回 PC 版 ───────────────────── */
+.mtop {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 130;
+  height: calc(var(--m-top) + env(safe-area-inset-top));
+  padding: env(safe-area-inset-top) 14px 0;
+  box-sizing: border-box;
+  display: flex; align-items: center; gap: 10px;
+  background: #0e1b2a; color: #e8eef6;
+  font: 500 14px/1 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+.mtop .mbrand { flex: 1; letter-spacing: .5px; }
+.mtop .mwho { color: #8fa3bb; font-size: 12px; }
+.mtop .mpc {
+  color: #f5b04c; text-decoration: none; font-size: 12.5px;
+  border: 1px solid #2c3e55; border-radius: 999px; padding: 4px 11px;
+}
+
+/* ── 附件目标应用（agent_rail 的 resolveUploadApp 依赖它） ─── */
+.mtarget {
+  display: none;                /* 由 body.has-target 打开，避免"先闪一下再收起来" */
+  position: fixed; left: 0; right: 0; z-index: 129;
+  top: calc(var(--m-top) + env(safe-area-inset-top));
+  height: var(--m-sel); box-sizing: border-box;
+  align-items: center; gap: 8px; padding: 0 14px;
+  background: #f0f2f5; border-bottom: 1px solid #dde3eb;
+}
+body.has-target .mtarget { display: flex; }
+.mtarget label { color: #6b7a8f; font-size: 12.5px; white-space: nowrap; }
+.mtarget select {
+  /* 不写死 height：16px 字号下原生 select 的自然高度就超过 28px，
+     硬压会把文字裁掉（第一版就踩了）。给够行高、让它自己撑。 */
+  flex: 1; min-width: 0; padding: 5px 8px; line-height: 1.4;
+  font-size: 16px;              /* ≥16px：iOS 聚焦输入类控件时不自动放大 */
+  border: 1px solid #cdd5de; border-radius: 6px; background: #fff; color: #2a3a4e;
+}
+
+/* ── rail 全屏化：桌面是 380px 侧栏，手机上它就是整页 ───────── */
+aside.agent-rail {
+  position: fixed;
+  top: calc(var(--m-top) + var(--m-sel) + env(safe-area-inset-top));
+  left: 0; right: 0; bottom: 0;
+  width: auto; height: auto; flex: none;
+  border-left: none; display: flex;
+}
+
+.agent-rail-inner { padding: 10px; gap: 8px; }
+
+/* 输入区：手机上要"够大够近"，且底部避开 iPhone 手势条 */
+.agent-rail-input { gap: 6px; padding-bottom: env(safe-area-inset-bottom); }
+.agent-rail-input textarea {
+  min-height: 52px; max-height: 30vh; resize: none;
+  font-size: 16px;              /* 同上：iOS 自动放大会把页面顶乱 */
+  line-height: 1.45;
+}
+.agent-rail-actions { gap: 6px; }
+
+/* 文件面板别把输入框顶出屏幕 */
+.fp-body { max-height: 34vh; }
+
+/* 头部那枚「全屏展开」在移动端没有意义（本来就整屏），隐藏它。
+   按 title 选而不是改 agent_rail.html —— 那个文件 PC 端共用。 */
+.agent-rail-hd button[title*="展开"],
+.agent-rail-hd button[title*="缩回"] { display: none; }
+
+/* 消息区字号略大一点，手机上更好读 */
+.agent-rail .msg .b { font-size: 14px; }
+.chatbox.agent-rail-chat { padding: 10px; }
