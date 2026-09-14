@@ -42,6 +42,12 @@
   details.grant-box > summary { cursor:pointer; color:var(--accent); font-size:13px;
                                 margin-top:10px; user-select:none; }
   .scroll-x { overflow-x:auto; }
+  /* MCP 令牌明细 */
+  .tok { display:flex; align-items:center; gap:8px; margin-top:4px; font-size:12px; }
+  .tok code { background:#eef2f7; padding:1px 6px; border-radius:4px; }
+  .flash.token { background:#fffbeb; border:1px solid #fcd34d; color:#78350f;
+                 font-family:ui-monospace,Consolas,monospace; font-size:12px;
+                 word-break:break-all; user-select:all; }
 </style>
 
 <p><a href="/">← 应用组</a></p>
@@ -176,6 +182,30 @@
           {{ grant_checks(u.grants) }}
           <button>保存授权</button>
         </form>
+        <div class="muted-h">MCP 令牌 · 供远端 AI 客户端（Claude Desktop / Cursor / WorkBuddy 等）
+          经 <span class="mono">POST /mcp</span> 接入；令牌能看到的、能调动的，就是该用户在网页上
+          能看到、能调动的（同一套授权，含页面派生放行）</div>
+        {% for t in u.mcp_tokens %}
+          <div class="tok">
+            <code>{{ t.name }}</code>
+            <span class="subname">建于 {{ t.created_at }} ·
+              最后使用 {{ t.last_used_at or '从未' }}</span>
+            <form style="margin:0" method="post"
+                  action="/auth/users/{{ u.username }}/mcp_tokens/{{ t.id }}/revoke"
+                  onsubmit="return confirm('吊销令牌「{{ t.name }}」？用它的客户端会立刻失效。')">
+              <button class="btn-mini danger">吊销</button>
+            </form>
+          </div>
+        {% else %}
+          <div class="subname">（暂无令牌）</div>
+        {% endfor %}
+        <form class="inline" method="post" style="margin-top:8px"
+              action="/auth/users/{{ u.username }}/mcp_tokens">
+          <input type="text" name="name" placeholder="用途备注，如 我的 Claude Desktop"
+                 style="width:240px">
+          <button class="btn-mini">新建令牌</button>
+          <span class="subname">明文只显示一次</span>
+        </form>
       </td></tr>
     {% endfor %}
   </table>
@@ -209,6 +239,33 @@
     row.hidden = !open;
     btn.textContent = btn.textContent.replace(open ? '▸' : '▾', open ? '▾' : '▸');
   }
+  // 新建令牌后 flash 里那串明文：加个「复制」按钮（明文只这一次，别让用户手抄错）
+  (function () {
+    document.querySelectorAll('.flash.token').forEach(el => {
+      const m = el.textContent.match(/fde_mcp_[0-9a-f]{64}/);
+      if (!m) return;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn-mini';
+      btn.textContent = '复制令牌';
+      btn.style.marginLeft = '8px';
+      btn.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(m[0]);
+          btn.textContent = '已复制 ✓';
+        } catch (e) {
+          // 非 HTTPS / 无剪贴板权限：退回手动全选（样式已 user-select:all）
+          const r = document.createRange();
+          r.selectNodeContents(el);
+          getSelection().removeAllRanges();
+          getSelection().addRange(r);
+          btn.textContent = '已选中，请按 Ctrl+C';
+        }
+      };
+      el.appendChild(btn);
+    });
+  })();
+
   // 重新扫描视图注册表（新增页面文件后刷新授权清单）
   async function rescanRegistry() {
     const r = await fetch('/api/view_registry/rescan', { method: 'POST' });

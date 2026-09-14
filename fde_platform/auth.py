@@ -29,7 +29,15 @@ from fde_platform import users
 
 # ── 常量 ────────────────────────────────────────────────
 
-OPEN_PATHS = {"/login", "/logout", "/favicon.ico", "/change-password"}
+OPEN_PATHS = {"/login", "/logout", "/favicon.ico", "/change-password",
+              # 远端 MCP 端点（fde_platform/mcp_http.py）：**不是开洞**——
+              # 它自己按 `Authorization: Bearer <令牌>` 鉴权（users.verify_mcp_token），
+              # 且解出的身份照样走同一套授权过滤（is_effectively_granted）。
+              # 放行是因为会话闸门拿不到令牌语义：无 cookie 的机器对机器请求在此会被
+              # 当成「未登录」直接 401/重定向，根本到不了令牌校验。
+              # 两个写法都放：闸门按**字面路径**比对（早于路由匹配），客户端把 url 写成
+              # `https://host/mcp/` 时若只放行 `/mcp`，会在路由能容错之前就被重定向去登录页。
+              "/mcp", "/mcp/"}
 WHITELIST_PREFIXES = ("/static/",)
 
 # 这些端点的请求体会被改写 session_id（见 gate 末段，做 Agent 会话按用户隔离）

@@ -61,7 +61,8 @@ fde-v2/
 │   ├── flow.py                #   流程编排（声明式 DAG 工作流，app/<组>/_flow_*.yaml）
 │   ├── alerts.py              #   Agent 告警（platform_raise_alert）
 │   ├── llm.py / llm_admin.py  #   LLM 接入与管理（可插拔）
-│   ├── mcp_server.py          #   MCP 服务（stdio）
+│   ├── mcp_server.py          #   MCP 服务（协议分发；stdio 与 HTTP 共用）
+│   ├── mcp_http.py            #   远端 MCP 传输（POST /mcp，Streamable HTTP + Bearer）
 │   ├── platform_mcp_tools.py  #   平台管理能力开放为 MCP tools
 │   ├── scheduler.py           #   定时任务（APScheduler，可插拔）
 │   ├── auth.py / users.py     #   鉴权（可插拔，删除即回落无认证）
@@ -131,7 +132,11 @@ python -m fde_platform.agent_service        # Agent 编排进程 → :4100（AI 
 启动横幅会打印：鉴权 / 定时任务 / LLM / Agent 编排四个**可插拔**模块的开关状态，以及发现的应用清单（按组分组）。
 
 - **鉴权**：默认开启，首次登录 `admin / admin`（请尽快改密）。删除 `fde_platform/auth.py` 与 `users.py` 即回落无认证模式。
-- **MCP 服务**（stdio，另起进程）：`python -m fde_platform.mcp_server`
+- **MCP 服务**：两种传输，**协议与授权同一套**（工具面都按调用者的有效授权过滤）。
+  - **本地 stdio**（另起进程，客户端把服务当子进程拉起）：`python -m fde_platform.mcp_server [--user admin]`
+  - **远端 HTTP**（平台进程自带，供网络上的 AI 客户端接入）：`POST http://<host>:4000/mcp`，
+    头 `Authorization: Bearer <令牌>`——令牌在 **`/auth/users`** 页对某个用户「新建令牌」
+    （明文只显示一次，可随时吊销）。令牌能看到/能调动的，就是该用户在网页上能看到/能调动的。
 
 ### 从零构建一个新业务系统
 
@@ -300,6 +305,7 @@ python design-plus/前端验收样板/verify_view_e2e.py            # e2e 前端
 | 流程编排（可选增强 · 第⑪步） | `design-plus/流程编排方案.md` |
 | 迭代（修改现有应用，含读取要求） | `design-plus/迭代执行.md`（先读组文档 → 改代码+改文档 → 跑测试） |
 | 外部系统对接 | `/integration` 集成接口管理（扫描/配置/测试/跟踪） |
-| 平台 MCP 管理 | `python -m fde_platform.mcp_server --user admin` |
+| 本地 MCP（stdio） | `python -m fde_platform.mcp_server --user admin` |
+| 远端 MCP（HTTP） | `POST /mcp` + `Authorization: Bearer <令牌>`（令牌在 `/auth/users` 生成）；验收 `python scripts/verify_mcp_http.py` |
 | 部署指南 | `HOW-TO-USE.md`（本地开发 / Docker HTTP / Docker HTTPS+PG / deploy.sh 一键部署） |
 | 活的参考实现（只读） | `app/e2e/`（现行约定样板：架构 / 详设 / 前端详设 / view / 契约一应俱全） |

@@ -197,7 +197,8 @@ Windows 当**生产服务器对外服务**时，**默认不走 Docker**——直
 |---|---|---|
 | Web 控制台 | `http://127.0.0.1:4000` | 应用清单、手工调用服务、管理用户/角色、定时任务 |
 | AI Agent | 右侧常驻 Agent 栏（各页面右下侧）+ 「智能体总览」平台页 | 对话式操作应用（需配置 LLM） |
-| MCP 服务 | `python -m fde_platform.mcp_server` | 供外部 AI 工具通过 MCP 协议调用应用 |
+| MCP 服务（本地） | `python -m fde_platform.mcp_server` | 供**同一台机器上**的 AI 工具经 stdio 调用应用 |
+| MCP 服务（远端） | `POST http://<host>:4000/mcp` + `Authorization: Bearer <令牌>` | 供**网络上的** AI 客户端接入（令牌在 `/auth/users` 页生成/吊销；工具与授权和网页同源） |
 | REST API | `POST http://127.0.0.1:4000/api/apps/<应用>/call/<服务>` | 程序化调用（body = 参数 JSON） |
 
 **页面路由约定**（不是 `/psc`、`/apps`）：

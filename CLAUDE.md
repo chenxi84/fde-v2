@@ -7,7 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 python main.py                                    # 启动平台 → http://127.0.0.1:4000（默认账号 admin/admin）
 python -m fde_platform.scanner                    # 跨应用调用契约静态扫描（有问题退出码 1，可入 CI）
-python -m fde_platform.mcp_server [--user admin]  # 以 stdio MCP 服务暴露全部应用（供外部 AI 工具接入）
+python -m fde_platform.mcp_server [--user admin]  # 本地 stdio MCP 服务，暴露全部应用（供外部 AI 工具接入）
+python scripts/verify_mcp_http.py                 # 远端 MCP 端点（POST /mcp）end-to-end 验收（需 dev server 在跑）
 ```
 
 测试（每个脚本自包含、独立运行；**必须先停掉 dev server**）：
@@ -61,7 +62,8 @@ python app/<组>/tests/verify_view_<组>.py             # 组级壳/菜单/dashb
 
 - 数据库默认 SQLite；配 `DATABASE_URL` 即切 PostgreSQL，建表/SQL 方言自动翻译，应用零改动。
 - 并发：waitress 工作线程数由 `PLATFORM_THREADS` 控制（默认 64）。**每个请求占一个线程直到响应结束**，而 Agent 对话是 SSE 长连接（一次对话从头占到尾），所以这个数约等于「同时能几个人对话」，超出的排队等而不报错。翻页面这类短请求不受影响（毫秒级完成）。真实的墙通常是 LLM 速率限制而非线程数。再往上（几百并发）要把浏览器协议层下沉到 `agent_service`（`/api/agent2/chat/stream` 现在做的事：确保 leader、建会话、触发、把 AgentScope 事件翻译成前端协议、暂存 HITL 待确认），让 nginx 直接反代 SSE——那是 ~200 行代码搬移 + nginx `auth_request` 子请求解决身份注入，不是配置改动；且 agent_service 直接对外后必须只放行 `/browser/*`。
-- 平台模块「import 失败即回落」：删掉 `auth.py`/`users.py` 即回落无认证；删 scheduler / llm 模块同理，其余代码无需改动。
+- MCP 双传输：**协议分发只有一份**（`fde_platform/mcp_server.py`——`initialize/tools/list/tools/call` + 按 `is_effectively_granted` 过滤），两种传输共用它。stdio（`python -m fde_platform.mcp_server`，身份启动时绑定）与 **Streamable HTTP**（`fde_platform/mcp_http.py`，`POST /mcp` + `Authorization: Bearer` 令牌，身份**按请求**注入 `handle_as`——绝不能写 `self.user`，waitress 多线程会互相覆盖）。令牌存 `config/auth.db` 的 `mcp_tokens` 表（只存 sha256、明文仅创建时显示一次、可吊销、记 `last_used_at`），在 `/auth/users` 页按用户生成。`/mcp` 在 `auth.OPEN_PATHS` 里（无 cookie 的机器请求过不了会话闸门），**不是开洞**：端点自己校验令牌，解出的身份照样走同一套授权过滤。nginx 见 `nginx.conf` 的 `location /mcp`（显式透传 Authorization）。
+- 平台模块「import 失败即回落」：删掉 `auth.py`/`users.py` 即回落无认证；删 scheduler / llm / mcp_http 模块同理，其余代码无需改动。
 - LLM 仅运行期对话 Agent 需要（`LLM_BASE_URL/LLM_API_KEY/LLM_MODEL`）；构建流水线的设计/生成/验收步骤不依赖 LLM。
 - Agent 编排层：唯一后端 `fde_platform/agent_service.py`（AgentScope 2.0 编排，双进程 leader 自治建队，import 失败自动回落降级提示）。业务角色下沉到各组 `app/<组>/_roles.py` 声明（`fde_platform/agent_roles.py` 扫描装配），按角色过滤工具在 `fde_platform/agent_tool_filter.py`（软隔离 + 硬兜底）；**用户级**授权在 `users.is_effectively_granted`（显式 ∪ 角色 ∪ 页面派生，唯一实现；`bridge.execute`／工具面装配／`mcp_server` 三处共用），工具面按它给**组**打标（无权限的组保留名字+描述、清空工具——全貌照给、动作空间收紧）；flow 节点按它收窄，收窄到空抛 `FlowAbort` 中止整条流程（详见 `design-plus/多智能体方案.md` §5.1）；共享基座（提示词/进度/组级架构文档读取 + 应用详设按需读取）在 `fde_platform/agent_common.py`；工具桥接在 `fde_platform/agentscope_bridge.py`（含 `_platform_tool_defs`：skill 沉淀全员 + 集成/定时任务配置仅 admin，危险操作 `_meta.dangerous` 走 HITL）；智能体常驻 context 仅组级架构文档，应用级设计文档（`应用详设.md`/`README.md` 等）经 `platform_read_app_doc` **按需读取**（just-in-time，不全量灌 prompt）——各应用应提供 `应用详设.md`（BR/FUNC/数据字典）供其查询；skill 库在 `fde_platform/skills.py`（draft→approve→published，`platform_propose_skill` 提议）；告警在 `fde_platform/alerts.py`（`platform_raise_alert`）。危险操作 HITL 经 `ask_rules` 停车、`/api/agent/confirm` 确认。管理页 `/agent-admin`（`fde_platform/agent_admin.py`）。
 - 流程编排（Flow）：声明式 DAG 工作流，组级 `app/<组>/_flow_<key>.yaml` 声明（节点 `id/role/task/output/input/depends_on/when/until/max_loop`），`fde_platform/flow.py` 扫描装配并拓扑分层 + 并行 + 条件分支 + 循环执行；节点 = 轻量 ReAct（`llm.chat` + 工具）。前端「流程编排」页（画布/表单/YAML 三标签）；平台工具 `platform_list_flows/run_flow/save_flow/delete_flow/flow_progress`。格式正本见 `design-plus/智能体角色声明.md`、`design-plus/流程编排方案.md`（可选增强，九步法第⑩⑪步）。

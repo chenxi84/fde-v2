@@ -23,8 +23,10 @@
 users.html 一起删除，平台自动回落无认证模式。自带 CLI：`python -m fde_platform.users --help`。
 """
 import argparse
+import hashlib
 import logging
 import re
+import secrets
 import sqlite3
 from pathlib import Path
 
@@ -104,6 +106,18 @@ CREATE TABLE IF NOT EXISTS user_prefs (
     updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
     PRIMARY KEY (user_id, pref_key)
 );
+
+-- MCP 接入令牌（远端 MCP 客户端用；见 fde_platform/mcp_http.py）
+-- 只存 sha256 哈希，明文仅创建那一刻返回一次；吊销即删行。
+CREATE TABLE IF NOT EXISTS mcp_tokens (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name         TEXT NOT NULL,            -- 用途备注，如「我的 Claude Desktop」
+    token_hash   TEXT NOT NULL UNIQUE,     -- sha256(明文令牌)
+    created_at   TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    last_used_at TEXT                      -- 每次成功鉴权刷新，用于发现搁置/异常令牌
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_tokens_user ON mcp_tokens(user_id);
 """
 
 # users 行统一投影：LEFT JOIN roles 带出 is_admin / role_label（角色被删等异常时兜底）
@@ -658,6 +672,89 @@ def current_caller_ctx():
     return ctx_for_user(u) if u else None
 
 
+# ── MCP 接入令牌（远端 MCP 客户端鉴权）──────────────────
+#
+# 为什么是 sha256 而不是 werkzeug 的密码哈希：令牌是 256 位随机值、不是低熵口令，
+# 不需要慢哈希抗爆破；而且必须能**按哈希直接查表**（密码哈希加盐，查不了表）。
+
+MCP_TOKEN_PREFIX = "fde_mcp_"
+
+
+def _hash_mcp_token(token: str) -> str:
+    return hashlib.sha256((token or "").encode("utf-8")).hexdigest()
+
+
+def create_mcp_token(user_id: int, name: str) -> tuple:
+    """给用户新建一枚 MCP 令牌 → (明文令牌, None)；失败 → (None, 错误信息)。
+
+    **明文只在这一刻可见**（库里只有哈希），页面必须当场显示让用户复制走。
+    """
+    name = (name or "").strip()[:64] or "未命名令牌"
+    conn = get_conn()
+    row = conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None, "用户不存在"
+    token = MCP_TOKEN_PREFIX + secrets.token_hex(32)  # 32 字节 = 256 位熵
+    conn.execute(
+        "INSERT INTO mcp_tokens (user_id, name, token_hash) VALUES (?, ?, ?)",
+        (user_id, name, _hash_mcp_token(token)),
+    )
+    conn.commit()
+    conn.close()
+    return token, None
+
+
+def verify_mcp_token(token: str):
+    """令牌 → 用户行（与 get_user_by_name 同形，供授权判定）；无效返回 None。
+
+    命中即刷新 last_used_at（便于发现搁置或异常使用的令牌）。
+    """
+    if not token:
+        return None
+    conn = get_conn()
+    row = conn.execute(
+        f"SELECT {_USER_SELECT} FROM mcp_tokens t"
+        " JOIN users u ON u.id = t.user_id"
+        " LEFT JOIN roles r ON r.name = u.role"
+        " WHERE t.token_hash = ?",
+        (_hash_mcp_token(token),),
+    ).fetchone()
+    if row:
+        conn.execute(
+            "UPDATE mcp_tokens SET last_used_at = datetime('now', 'localtime')"
+            " WHERE token_hash = ?",
+            (_hash_mcp_token(token),),
+        )
+        conn.commit()
+    conn.close()
+    return dict(row) if row else None
+
+
+def list_mcp_tokens(user_id: int) -> list:
+    """某用户的令牌清单（**不含哈希**，供管理页展示）。"""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id, name, created_at, last_used_at FROM mcp_tokens"
+        " WHERE user_id = ? ORDER BY id DESC",
+        (user_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def revoke_mcp_token(user_id: int, token_id: int) -> tuple:
+    """吊销令牌（按 user_id 限定，防跨用户误删）→ (ok, msg)。"""
+    conn = get_conn()
+    cur = conn.execute(
+        "DELETE FROM mcp_tokens WHERE id = ? AND user_id = ?", (token_id, user_id)
+    )
+    conn.commit()
+    n = cur.rowcount
+    conn.close()
+    return (True, "令牌已吊销") if n else (False, "令牌不存在")
+
+
 # ── 写操作：用户 ────────────────────────────────────────
 
 
@@ -901,9 +998,12 @@ def users_page():
     for r in roles:
         r["grants"] = role_grant_keys(r["name"])      # 服务授权勾选回显
         r["pages"] = get_role_page_grants(r["name"])  # 页面授权勾选回显
+    users_list = list_users()
+    for u in users_list:
+        u["mcp_tokens"] = list_mcp_tokens(u["id"])    # MCP 令牌清单（不含哈希）
     return render_template(
         "users.html",
-        users_list=list_users(),
+        users_list=users_list,
         roles=roles,
         apps_services=_apps_services_map(),
         view_registry=view_registry.registry(),
@@ -928,6 +1028,36 @@ def users_create():
 @bp.route("/users/<username>/reset", methods=["POST"])
 def users_reset(username):
     ok, msg = reset_password(username, request.form.get("password", ""))
+    flash(msg, "ok" if ok else "error")
+    return redirect(url_for("users_mgmt.users_page"))
+
+
+@bp.route("/users/<username>/mcp_tokens", methods=["POST"])
+def users_mcp_token_create(username):
+    """新建 MCP 令牌。明文经 flash **只显示一次**（库里只有哈希，丢了只能重建）。"""
+    u = get_user_by_name(username)
+    if not u:
+        flash("用户不存在", "error")
+        return redirect(url_for("users_mgmt.users_page"))
+    token, err = create_mcp_token(u["id"], request.form.get("name", ""))
+    if err:
+        flash(f"新建令牌失败：{err}", "error")
+    else:
+        flash(
+            f"令牌已生成（仅此一次可见，请立即复制）：{token}"
+            f"　—— 客户端配置 Authorization: Bearer <此串>",
+            "token",
+        )
+    return redirect(url_for("users_mgmt.users_page"))
+
+
+@bp.route("/users/<username>/mcp_tokens/<int:token_id>/revoke", methods=["POST"])
+def users_mcp_token_revoke(username, token_id):
+    u = get_user_by_name(username)
+    if not u:
+        flash("用户不存在", "error")
+        return redirect(url_for("users_mgmt.users_page"))
+    ok, msg = revoke_mcp_token(u["id"], token_id)
     flash(msg, "ok" if ok else "error")
     return redirect(url_for("users_mgmt.users_page"))
 

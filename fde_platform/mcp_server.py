@@ -1,17 +1,25 @@
 """FDE v2 MCP 服务 —— 把全部应用的公共服务封装为 MCP tools（需求 1.3）。
 
-最小 stdio 实现（JSON-RPC 2.0，逐行 JSON），**零新增依赖**——只用标准库，
-即可被任意 MCP 客户端（Claude Desktop / 其他）经 stdio 接入。
+**协议逻辑与传输层分离**：本模块只管 JSON-RPC 分发（MCP 语义），两种传输共用它——
+- **stdio**（本文件的 `main()`）：客户端把服务当子进程拉起，身份启动时用 `--user` 绑定
+- **Streamable HTTP**（`fde_platform/mcp_http.py`）：单端点 `/mcp` + Bearer 令牌，
+  身份**按请求**注入（`handle_as`），供远端客户端接入
+
+最小实现（JSON-RPC 2.0，逐行 JSON），**零新增依赖**——只用标准库，
+即可被任意 MCP 客户端（Claude Desktop / Cursor / WorkBuddy / 其他）接入。
 
 支持的方法：
 - `initialize`               握手（返回协议版本、能力、服务信息）
 - `notifications/initialized` 通知（不回应）
 - `ping`                     心跳
 - `tools/list`               列出全部公共服务（工具名 `<应用名>__<服务名>`）
-- `tools/call`               调用某工具 → 路由到 platform.call（携带平台默认身份）
+- `tools/call`               调用某工具 → 路由到 platform.call（携带调用者身份）
 
-身份：`--user <用户名>`（或环境变量 `FDE_MCP_USER`）指定调用者身份——启动即校验存在
-（fail-closed）；非 admin 受应用授权约束（tools/list 仅暴露授权应用、越权调用被拒）；
+身份：**两种来源，一套判据**——
+- stdio：`--user <用户名>`（或环境变量 `FDE_MCP_USER`）指定，启动即校验存在（fail-closed）
+- HTTP：`handle_as(msg, user)` 按请求传入（令牌解析出的用户）
+
+非 admin 受应用授权约束（tools/list 仅暴露授权应用、越权调用被拒）；
 缺省则用平台默认身份（并在 stderr 告警）。
 
 启动：`python -m fde_platform.mcp_server [--user <用户名>]`
@@ -29,8 +37,16 @@ from fde import FdeError  # noqa: E402
 from fde_platform import builtin_tools, platform_mcp_tools, users  # noqa: E402
 from fde_platform.runtime import FdePlatform  # noqa: E402
 
-PROTOCOL_VERSION = "2024-11-05"
+# 支持的协议版本（新→旧）。streamable-http 传输是 2025-03-26 引入的，
+# initialize 时**回客户端请求的那个版本**（在集合内时），否则回最新——
+# 回老版本号会让新客户端误判服务端不支持它要用的传输。
+PROTOCOL_VERSIONS = ("2025-03-26", "2024-11-05")
+PROTOCOL_VERSION = PROTOCOL_VERSIONS[0]
 SERVER_INFO = {"name": "fde-v2-platform", "version": "0.1.0"}
+
+# 「未指定」哨兵：区分「沿用实例默认身份」与「明确要求无身份（匿名）」——
+# HTTP 请求解析出的用户若为空，不能悄悄回落到启动参数里的身份。
+_UNSET = object()
 
 
 def _log(msg: str):
@@ -38,9 +54,14 @@ def _log(msg: str):
 
 
 class McpServer:
-    def __init__(self, username: str = None):
-        self.platform = FdePlatform()
-        self.platform.load_all()
+    def __init__(self, username: str = None, platform=None):
+        # platform 可注入：HTTP 传输复用主进程已加载好的实例（见 mcp_http.py），
+        # 避免再建第二个 FdePlatform + 重复 load_all；stdio 则自建。
+        if platform is not None:
+            self.platform = platform
+        else:
+            self.platform = FdePlatform()
+            self.platform.load_all()
         users.migrate_grant_app_names(self.platform)  # 历史授权短名 → qualname（幂等）
         self._tools = self.platform.all_mcp_tools() + platform_mcp_tools.tools()
         self._by_name = {t["name"]: t for t in self._tools}
@@ -61,17 +82,38 @@ class McpServer:
         else:
             _log("[MCP] 未指定身份：以平台默认身份运行（无授权约束）。可用 --user <用户名> 指定。")
 
+    # ── 身份 ────────────────────────────────────────────────
+    def handle_as(self, msg: dict, user):
+        """以**指定用户**身份处理一条消息（HTTP 传输用），返回响应 dict / None。
+
+        **不改实例状态**——身份沿调用链显式传递（见 `handle` 的 user/ctx 参数）：
+        HTTP 服务是多线程的（waitress threads=N），把身份写到 self 上会被并发请求互相覆盖。
+        user 为 None → 以平台默认身份处理（HTTP 下不会走到：令牌校验不过直接 401）。
+        """
+        ctx = users.ctx_for_user(user) if user else None
+        return self.handle(msg, user=user, ctx=ctx)
+
     # ── JSON-RPC 分发 ───────────────────────────────────────
-    def handle(self, msg: dict):
-        """处理一条 JSON-RPC 消息；通知（无 id）返回 None。"""
+    def handle(self, msg: dict, user=_UNSET, ctx=_UNSET):
+        """处理一条 JSON-RPC 消息；通知（无 id）返回 None。
+
+        user/ctx 缺省（`_UNSET`）→ 用实例默认身份（stdio 启动参数绑定）；
+        显式传入 → 用传入的（含显式 None ＝ 匿名）。
+        """
+        if user is _UNSET:
+            user = self.user
+        if ctx is _UNSET:
+            ctx = self.ctx
         method = msg.get("method")
         msg_id = msg.get("id")
 
         if method == "initialize":
+            # 回客户端请求的版本（在支持集合内时），否则回最新
+            asked = (msg.get("params") or {}).get("protocolVersion")
             return self._result(
                 msg_id,
                 {
-                    "protocolVersion": PROTOCOL_VERSION,
+                    "protocolVersion": asked if asked in PROTOCOL_VERSIONS else PROTOCOL_VERSION,
                     "capabilities": {"tools": {"listChanged": False}},
                     "serverInfo": SERVER_INFO,
                 },
@@ -84,24 +126,24 @@ class McpServer:
             tools = self._tools
             # 非管理员角色按**有效授权**过滤（与 Web 闸门 / agent / bridge.execute 同口径，
             # 见 users.is_effectively_granted）：聚合服务须被授权；内置文件工具须有应用可见性
-            if self.user and not self.user.get("is_admin"):
+            if user and not user.get("is_admin"):
                 def _allowed(t):
                     app, svc = t["_meta"]["app"], t["_meta"]["service"]
                     if builtin_tools.is_builtin_service(svc):
-                        return users.has_app_access(self.user["id"], app)
-                    return users.is_effectively_granted(self.user, app, svc)
+                        return users.has_app_access(user["id"], app)
+                    return users.is_effectively_granted(user, app, svc)
 
                 tools = [t for t in tools if _allowed(t)]
             public = [{k: v for k, v in t.items() if k != "_meta"} for t in tools]
             return self._result(msg_id, {"tools": public})
         if method == "tools/call":
-            return self._call(msg_id, msg.get("params") or {})
+            return self._call(msg_id, msg.get("params") or {}, user, ctx)
         if msg_id is not None:
             return self._error(msg_id, -32601, f"Method not found: {method}")
         return None
 
     # ── tools/call ──────────────────────────────────────────
-    def _call(self, msg_id, params: dict):
+    def _call(self, msg_id, params: dict, user, ctx):
         name = params.get("name")
         args = params.get("arguments") or {}
         args.pop("context", None)  # 身份只由平台注入，拒绝客户端伪造（§4.1）
@@ -118,13 +160,13 @@ class McpServer:
 
         # 平台管理工具：直接路由到 handler（需 admin 身份）
         if app == "_platform":
-            if self.user and not self.user.get("is_admin"):
+            if user and not user.get("is_admin"):
                 return self._result(
                     msg_id,
                     {"content": [{"type": "text", "text": "平台管理工具仅限管理员"}], "isError": True},
                 )
             try:
-                result = platform_mcp_tools.handle_tool(name, args, self.ctx or {}, platform=self.platform)
+                result = platform_mcp_tools.handle_tool(name, args, ctx or {}, platform=self.platform)
                 text = json.dumps(result, ensure_ascii=False)
                 return self._result(msg_id, {"content": [{"type": "text", "text": text}]})
             except Exception as e:
@@ -135,12 +177,12 @@ class McpServer:
 
         # 授权检查（与 Web 闸门 / agent / bridge.execute 同口径）：聚合服务按有效授权；
         # 内置文件工具须有应用可见性
-        if self.user and not self.user.get("is_admin"):
+        if user and not user.get("is_admin"):
             if builtin_tools.is_builtin_service(service):
-                denied = not users.has_app_access(self.user["id"], app)
+                denied = not users.has_app_access(user["id"], app)
                 reason = f"无权访问应用：{app}"
             else:
-                denied = not users.is_effectively_granted(self.user, app, service)
+                denied = not users.is_effectively_granted(user, app, service)
                 reason = f"无权调用服务：{app}.{service}"
             if denied:
                 return self._result(
@@ -155,8 +197,9 @@ class McpServer:
                     self.platform.handle(app).folder, service, args
                 )
             else:
-                # ctx 取启动时绑定的身份；未指定则 None → 平台默认身份
-                result = self.platform.call(app, service, ctx=self.ctx, **args)
+                # ctx 取本次请求的身份（stdio：启动时绑定；HTTP：令牌解析所得）；
+                # None → 平台默认身份
+                result = self.platform.call(app, service, ctx=ctx, **args)
             text = json.dumps(result, ensure_ascii=False)
             return self._result(msg_id, {"content": [{"type": "text", "text": text}]})
         except FdeError as e:  # 业务失败 → isError，信息可读

@@ -74,6 +74,17 @@ try:
 except ImportError:
     RULES_ADMIN_ON = False
 
+# 远端 MCP 端点 /mcp（可插拔）：把 stdio 那套协议逻辑经 Streamable HTTP 暴露给远端
+# AI 客户端（Bearer 令牌按请求解析身份）。删除 fde_platform/mcp_http.py 后此处 import
+# 失败即回落无远端 MCP；stdio 的 python -m fde_platform.mcp_server 不受影响。
+try:
+    from fde_platform import mcp_http
+
+    mcp_http.register(app)
+    MCP_HTTP_ON = True
+except ImportError:
+    MCP_HTTP_ON = False
+
 # 移动端入口 /m/（可插拔）：删除 fde_platform/mobile.py 后此处 import 失败即回落无此页。
 # 鉴权/授权一行都不用改——/m/ 不在白名单里，auth.gate 自动拦未登录并带 next 回跳。
 try:
@@ -96,6 +107,9 @@ _web.COMPONENTS = [
      "desc": "AgentScope 多智能体编排（leader 建队派活），业务角色下沉到各组 _roles.py。"},
     {"key": "mobile", "name": "移动端入口", "icon": "📱", "loaded": MOBILE_ON,
      "desc": "手机浏览器打开 /m/ 即只显示数字员工对话（复用同一套登录、授权与 Agent 接口）。可插拔：删除 mobile.py 即无此入口。"},
+    {"key": "mcp", "name": "远端 MCP 服务", "icon": "🔗", "loaded": MCP_HTTP_ON,
+     "desc": "POST /mcp（Streamable HTTP + Bearer 令牌）供远端 AI 客户端接入，工具与授权与网页同源。"
+             "可插拔：删除 mcp_http.py 即回落仅 stdio（python -m fde_platform.mcp_server）。"},
     {"key": "knowledge", "name": "知识库", "icon": "📚", "loaded": RULES_ADMIN_ON,
      "desc": "非结构化知识文件（制度/SOP/最佳实践），经 LightRAG 索引后语义检索。"},
     {"key": "db", "name": "数据库", "icon": "🗄️", "loaded": True,
@@ -191,6 +205,9 @@ def main():
             prefix = "    - " if g is not None else "  - "
             print(f"{prefix}{name}（{n} 个对外服务）")
     print("MCP 服务 : python -m fde_platform.mcp_server  (stdio)")
+    if MCP_HTTP_ON:
+        print(f"远端 MCP : POST http://{HOST}:{PORT}/mcp  (Streamable HTTP + Bearer 令牌，"
+              f"令牌在 /auth/users 页生成)")
     print(f"{bar}\n")
 
     try:

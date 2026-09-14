@@ -12,7 +12,11 @@
 ## 必须遵守的关键规矩
 
 1. **数据操作一律走 MCP 工具 / 平台服务，禁止直接写脚本读写 `.db` 文件。**
-   - 数据导入、创建主数据、任何业务操作，通过 MCP 工具调用（先启动 `python -m fde_platform.mcp_server --user admin`，把它配进你的 MCP 客户端）。
+   - 数据导入、创建主数据、任何业务操作，通过 MCP 工具调用。两种接入方式，同一套工具与授权：
+     - **平台在本机**：启动 `python -m fde_platform.mcp_server --user admin`（stdio），把它配进你的 MCP 客户端；
+     - **平台在远端**（已部署到服务器）：客户端填 `url = https://<域名>/mcp`，
+       头 `Authorization: Bearer <令牌>`（令牌由管理员在平台 `/auth/users` 页对某个用户生成，明文只显示一次）。
+       远端接入时**工具面受该用户授权约束**——不要用别人的令牌、也不要指望用低权令牌调全量工具。
    - 工具名为 `组__应用__服务`，例如导入销量历史用 `psc__sales_history__import_batch`、创建物料用 `psc__md_material__create`。
    - 直接往 `.db` 文件 INSERT 会绕过业务校验、审计列（created_at/updated_at/created_by/updated_by）、跨应用引用校验，且与运行中的服务抢库，属于错误做法。
 2. **改代码先读文档**：`design-plus/CONVENTION.md`（后端约定）、`design-plus/VIEW_CONVENTION.md`（前端约定）、目标组的 `app/<组>/architecture.md` 与各应用 `应用详设.md`（可按需用 `platform_read_app_doc` 工具读取）。
