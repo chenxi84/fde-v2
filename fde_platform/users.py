@@ -429,7 +429,8 @@ def page_derived_services(user_id: int) -> set[tuple[str, str]]:
     return out
 
 
-def is_effectively_granted(user, app_name: str, service: str) -> bool:
+def is_effectively_granted(user, app_name: str, service: str,
+                           page_derived=None) -> bool:
     """无头请求（agent / MCP / CLI）的**有效授权**判据——唯一实现，三处共用。
 
         有效授权 = 显式服务授权 ∪ 角色授权 ∪ 页面派生授权
@@ -442,13 +443,19 @@ def is_effectively_granted(user, app_name: str, service: str) -> bool:
     标志豁免，本身 `service_grants` 是空的（实测 admin 对任何应用
     `has_app_access` 都为 False），漏了它会把 admin 的全部权限清空。
     与 `bridge.execute` 的豁免口径逐字对齐。
+
+    `page_derived` 是**热路径上的性能开关**：算一次要扫一遍页面注册表，
+    逐个服务判会把整片工具面拖成几十秒。批量场景请用 `effective_service_names`
+    或把 `page_derived_services()` 的结果传进来，别在这里反复重算。
     """
     if user is None or user.get("is_admin"):
         return True
     if is_service_granted(user["id"], app_name, service):
         return True
+    if page_derived is None:
+        page_derived = page_derived_services(user["id"])
     short = app_name.rsplit("/", 1)[-1]
-    return (short, service) in page_derived_services(user["id"])
+    return (short, service) in page_derived
 
 
 def effective_service_names(user, app_name: str, all_services,

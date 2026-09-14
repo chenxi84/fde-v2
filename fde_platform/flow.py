@@ -40,6 +40,7 @@ import yaml
 from fde import FdeError
 from fde_platform import agent_roles
 from fde_platform import agentscope_bridge as bridge
+from fde_platform import agent_surface
 from fde_platform import builtin_tools
 from fde_platform import llm
 from fde_platform import users
@@ -278,8 +279,13 @@ def _check_condition(cond, state: dict) -> bool:
     return True
 
 
-def _node_tool_usable(user, meta: dict) -> bool:
-    """单个工具对调用者是否可调（口径与 `bridge.execute` 一致）。"""
+def _node_tool_usable(user, meta: dict, page_derived=None) -> bool:
+    """单个工具对调用者是否可调（口径与 `bridge.execute` 一致）。
+
+    批量场景（`_node_tools`）走 `agent_surface.app_surface` 的**按应用批量版**：
+    逐服务调这个函数会退化成 N 次授权查询 + N 次页面注册表扫描（实测把权限视图
+    页拖到 60 秒）。这里保留单件判据，供回归测试逐条核对工具面与执行侧同口径。
+    """
     app = meta.get("app", "")
     service = meta.get("service", "")
     if app == "__platform__":
@@ -287,10 +293,11 @@ def _node_tool_usable(user, meta: dict) -> bool:
     if builtin_tools.is_builtin_service(service):
         return (user is None or user.get("is_admin")
                 or users.has_app_access(user["id"], app))
-    return users.is_effectively_granted(user, app, service)
+    return users.is_effectively_granted(user, app, service, page_derived)
 
 
-def _node_tools(platform, user, role: str, node_id: str = "") -> list[dict]:
+def _node_tools(platform, user, role: str, node_id: str = "",
+                defs: list | None = None, page_derived=None) -> list[dict]:
     """该节点的工具：先按**角色**收窄，再按调用者**有效授权**收窄。
 
     两步都是"收窄"，方向一致：节点是脚本化执行者，本就已收窄到该角色的最小可用集，
@@ -300,13 +307,23 @@ def _node_tools(platform, user, role: str, node_id: str = "") -> list[dict]:
     收窄到空**必须报错**。从前这里返回空列表，`_run_node` 就拿着一无所有的工具面
     去调 LLM，模型只能回一段文字，节点照样算"成功"——整条流程跑完、一个动作没做、
     不报错。宁可不跑，也不要产出一段零动作的"结论"。
+
+    `defs` 可由调用方预算好传进来（预检、权限视图都要按节点调很多次，
+    每次都重建全量工具面会退化成几十秒）。
     """
-    defs = bridge.tool_schemas(platform, user)
+    if defs is None:
+        defs = bridge.tool_schemas(platform, user)
     if role in agent_roles.ROLE_APPS:
         allowed = agent_roles.allowed_tools_for_role(role, defs)
         defs = [t for t in defs if t["function"]["name"] in allowed]
 
-    usable = [t for t in defs if _node_tool_usable(user, t["_meta"])]
+    # 按应用**批量**算可用集：口径与 `_node_tool_usable` 同一份（agent_surface），
+    # 但一次查询/一次注册表扫描覆盖整个应用，而不是逐服务各来一遍。
+    surface = {r["app"]: set(r["usable"])
+               for r in agent_surface.app_surface(defs, user, page_derived)}
+    usable = [t for t in defs
+              if t["_meta"]["app"] == "__platform__"
+              or t["_meta"].get("service", "") in surface.get(t["_meta"]["app"], ())]
     if usable:
         return usable
 
@@ -319,7 +336,8 @@ def _node_tools(platform, user, role: str, node_id: str = "") -> list[dict]:
         "流程已中止——继续跑只会产出一段零动作的结论。")
 
 
-def _preflight(nodes: list[dict], platform, user) -> list[str]:
+def _preflight(nodes: list[dict], platform, user, defs: list | None = None,
+               page_derived=None) -> list[str]:
     """预检：**确定会跑**的 agent 节点必须有可用工具。
 
     只看没有 `when` 的节点：带条件的节点可能本来就会被跳过，不该因为一个
@@ -327,12 +345,17 @@ def _preflight(nodes: list[dict], platform, user) -> list[str]:
 
     放在开跑前而不是跑到一半，是为了别让人等几分钟才发现跑不动。
     """
+    if defs is None:
+        defs = bridge.tool_schemas(platform, user)
+    if page_derived is None and user is not None and not user.get("is_admin"):
+        page_derived = users.page_derived_services(user["id"])
     problems = []
     for n in nodes:
         if n.get("type", "agent") != "agent" or n.get("when"):
             continue
         try:
-            _node_tools(platform, user, n.get("role", ""), n.get("id", ""))
+            _node_tools(platform, user, n.get("role", ""), n.get("id", ""),
+                        defs, page_derived)
         except FdeError as e:
             problems.append(str(e))
     return problems

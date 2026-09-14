@@ -39,6 +39,7 @@ from agentscope.tool import FunctionTool, ToolChunk, ToolGroup
 
 from fde_platform import agentscope_bridge as bridge
 from fde_platform import agent_roles
+from fde_platform import agent_surface
 from fde_platform import agent_tool_filter
 from fde_platform import builtin_tools
 from fde_platform import users
@@ -317,19 +318,10 @@ def _app_group_desc(app: str) -> str:
     return f"{short}（{label}域）" if label else short
 
 
-def _split_by_app(defs: list) -> dict[str, list]:
-    """把工具定义按 `_meta.app` 分组，跳过平台工具。**分组口径的唯一实现**。
-
-    工厂与回归测试都调这个函数——两边各写一份迟早对不上，
-    而「对不上」正是这次事故的形态（工厂少发工具，测试却以为一切正常）。
-    """
-    by_app: dict[str, list] = {}
-    for t in defs:
-        app = t["_meta"]["app"]
-        if app == "__platform__":
-            continue
-        by_app.setdefault(app, []).append(t)
-    return by_app
+# 分组与「按授权收窄」的口径已抽到 agent_surface：权限视图页（跑在 Flask 进程）
+# 也要用同一份，而它不该为此把 AgentScope 拉进主进程。这里保留同名别名，
+# 装配侧与回归测试仍按这个名字调它。
+_split_by_app = agent_surface.split_by_app
 
 
 # 懒加载下模型可能同时开多个组，工具面就叠加回去了。
@@ -358,10 +350,32 @@ _NO_GRANT_INSTRUCTIONS = (
 _PARTIAL_NOTE = "｜本组你只能调用："
 
 
+def _group_plan(keep, user, page_derived=None) -> list[dict]:
+    """按应用算出「每组留哪些服务」——分组与打标口径的**唯一实现**。
+
+    两个消费方：`_make_tool_groups`（装配真实工具面）与权限视图页（`/agent-admin/permission`
+    展示"这个人的数字员工实际能调什么"）。两边各写一份的后果见 `_split_by_app` 的说明——
+    这次要修的 bug 本身就是"两处口径对不上"。
+
+    每项：`{app, all, usable, fts, desc, instructions}`
+    """
+    plan: list[dict] = []
+    for row in agent_surface.app_surface(keep, user, page_derived):
+        app, all_svcs, usable = row["app"], row["all"], row["usable"]
+        desc = _app_group_desc(app)
+        instructions = _GROUP_INSTRUCTIONS
+        if not usable:
+            desc += _NO_GRANT_NOTE
+            instructions = _NO_GRANT_INSTRUCTIONS
+        elif len(usable) < len(all_svcs):
+            desc += _PARTIAL_NOTE + "、".join(sorted(usable))
+        plan.append({"app": app, "all": all_svcs, "usable": usable,
+                     "fts": row["fts"], "desc": desc, "instructions": instructions})
+    return plan
+
+
 def _make_tool_groups(keep, user, mk_ft):
     """业务工具 → 按应用分组的 ToolGroup，并按调用者**有效授权**打标。
-
-    三种标（判据见 `users.effective_service_names`）：
 
       · 全可用   → 原描述、工具全留
       · 部分可用 → 描述追加「本组你只能调用：a、b、c」，**组内只留可用的那些**
@@ -377,36 +391,13 @@ def _make_tool_groups(keep, user, mk_ft):
 
     返回 `(groups, marked)`，marked = 被打成"不可用"的组数，供日志可见性。
     """
-    page_derived = None
-    if user is not None and not user.get("is_admin"):
-        # 页面派生集算一次传给每个应用，避免逐个服务判时退化成 N 次查询
-        page_derived = users.page_derived_services(user["id"])
-
-    groups: list = []
-    marked = 0
-    for app, fts in sorted(_split_by_app(keep).items()):
-        svc_of = [(t, t["_meta"].get("service", "")) for t in fts]
-        all_svcs = {s for _t, s in svc_of}
-        # 内置文件工具走应用级 has_app_access（与 bridge.execute 同口径），
-        # 不参与服务级授权判定——它们的可见性已在 tool_schemas 里定过
-        business = [s for s in all_svcs if not builtin_tools.is_builtin_service(s)]
-        usable = set(users.effective_service_names(user, app, business, page_derived))
-        if user is None or user.get("is_admin") \
-                or users.has_app_access(user["id"], app):
-            usable |= {s for s in all_svcs if builtin_tools.is_builtin_service(s)}
-
-        desc = _app_group_desc(app)
-        instructions = _GROUP_INSTRUCTIONS
-        if not usable:
-            marked += 1
-            desc += _NO_GRANT_NOTE
-            instructions = _NO_GRANT_INSTRUCTIONS
-        elif len(usable) < len(all_svcs):
-            desc += _PARTIAL_NOTE + "、".join(sorted(usable))
-        groups.append(ToolGroup(
-            name=app.split("/")[-1], description=desc, instructions=instructions,
-            tools=[mk_ft(t) for t, s in svc_of if s in usable]))
-    return groups, marked
+    plan = _group_plan(keep, user)
+    groups = [ToolGroup(
+        name=p["app"].split("/")[-1], description=p["desc"],
+        instructions=p["instructions"],
+        tools=[mk_ft(t) for t in p["fts"] if t["_meta"].get("service", "") in set(p["usable"])])
+        for p in plan]
+    return groups, sum(1 for p in plan if not p["usable"])
 
 
 # leader system_prompt 里的组标记（供工具工厂按组收窄业务工具）

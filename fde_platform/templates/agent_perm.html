@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}智能体权限视图 · FDE 平台{% endblock %}
+
+{% block content %}
+<style>
+  table.mgr { margin:0; }
+  table.mgr th, table.mgr td { vertical-align:top; }
+  table.mgr tr:hover { background:#f8fafc; }
+  .badge { display:inline-block; border-radius:12px; padding:1px 10px; font-size:11px;
+           vertical-align:1px; white-space:nowrap; }
+  .b-full { background:#dcfce7; color:#166534; }
+  .b-part { background:#fef3c7; color:#92400e; }
+  .b-none { background:#e5e7eb; color:#4b5563; }
+  .svc { display:inline-block; margin:1px 6px 1px 0; font-size:12px; }
+  .svc code { background:var(--prime-soft); color:var(--prime-deep);
+              padding:1px 6px; border-radius:4px; }
+  .src { color:var(--muted); font-size:11px; margin-left:2px; }
+  .src-page { color:#7c3aed; }
+  .src-admin { color:#b91c1c; }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:10px;
+           overflow:hidden; margin-bottom:16px; }
+  .kpis { display:flex; gap:26px; padding:14px 18px; border-bottom:1px solid var(--line);
+          background:#fafbfc; }
+  .kpi b { font-size:20px; }
+  .kpi span { color:var(--muted); font-size:12px; margin-left:6px; }
+  .flowrow td:first-child { white-space:nowrap; }
+  .node { display:inline-block; margin:2px 10px 2px 0; font-size:12px; }
+  .node.bad code { background:#fee2e2; color:#991b1b; }
+  .why { color:#991b1b; font-size:12px; margin-top:4px; }
+</style>
+
+<p><a href="/agent-admin">← Agent 后端</a></p>
+
+<h2 style="margin:6px 0 2px">智能体权限视图</h2>
+<p class="muted" style="margin-bottom:14px">
+  数字员工<b>不持有自己的权限</b>，它借用调用者的权限。这一页把口径摊开：
+  <b>有效授权 = 显式服务授权 ∪ 角色授权 ∪ 页面派生授权</b>。
+  网页上能做的，智能体就能做；网页上不能做的，智能体看不到、也调不动。
+</p>
+
+<form method="get" class="panel" style="padding:12px 18px">
+  <label class="muted">以谁的身份看：</label>
+  <select name="user" onchange="this.form.submit()">
+    <option value="" {% if not current %}selected{% endif %}>（平台默认身份 · 无鉴权模式，全通）</option>
+    {% for u in users %}
+      <option value="{{ u.username }}" {% if u.username == current %}selected{% endif %}>
+        {{ u.username }} · {{ u.role }}{% if u.is_admin %}（管理员）{% endif %}
+      </option>
+    {% endfor %}
+  </select>
+  <noscript><button type="submit">查看</button></noscript>
+</form>
+
+{% if target %}
+<p class="muted">当前：<b>{{ target.username }}</b> · 角色 <b>{{ target.role }}</b>
+  {% if target.is_admin %}· <span class="badge b-full">管理员，全通</span>{% endif %}</p>
+{% else %}
+<p class="muted">当前：<b>平台默认身份</b> · <span class="badge b-full">全通</span>
+  （未登录 / 无鉴权模式下的口径）</p>
+{% endif %}
+
+<!-- ══ 工具面 ══ -->
+<div class="section-title">智能体的工具面（{{ summary.groups }} 个应用组）</div>
+<div class="panel">
+  <div class="kpis">
+    <div class="kpi"><b>{{ summary.groups }}</b><span>应用组（系统全貌，恒为全量）</span></div>
+    <div class="kpi"><b>{{ summary.marked }}</b><span>组被标为「无权调用」</span></div>
+    <div class="kpi"><b>{{ summary.tools }}</b><span>实际可调服务</span></div>
+  </div>
+  <table class="tbl mgr">
+    <tr><th>应用组</th><th>状态</th><th>智能体可调的服务（来源）</th></tr>
+    {% for r in rows %}
+      <tr>
+        <td><code>{{ r.app }}</code></td>
+        <td>
+          {% if r.status == 'full' %}<span class="badge b-full">全部可用</span>
+          {% elif r.status == 'partial' %}<span class="badge b-part">{{ r.usable|length }}/{{ r.total }} 可用</span>
+          {% else %}<span class="badge b-none">无权限</span>{% endif %}
+        </td>
+        <td>
+          {% for s in r.usable %}
+            <span class="svc"><code>{{ s.name }}</code><span class="src {% if s.source == '页面' %}src-page{% elif s.source == 'admin' %}src-admin{% endif %}">{{ s.source }}</span></span>
+          {% else %}
+            <span class="muted">组内工具已清空——模型看得到这个应用存在，但没有任何可调的工具</span>
+          {% endfor %}
+        </td>
+      </tr>
+    {% endfor %}
+  </table>
+</div>
+<p class="muted" style="font-size:12px;margin-top:-6px">
+  来源：<b>admin</b> 管理员全通 ｜ <b>授权</b> 显式勾选或角色授权 ｜
+  <span class="src-page" style="color:#7c3aed"><b>页面</b></span> 由已授权的页面派生
+  （页面上用到哪些服务，就放行哪些）。
+</p>
+
+<!-- ══ 流程预检 ══ -->
+<div class="section-title">流程预检（这个身份跑得动吗）</div>
+<div class="panel">
+  <table class="tbl mgr">
+    <tr><th>流程</th><th>结果</th><th>各节点可用工具</th></tr>
+    {% for f in flows %}
+      <tr class="flowrow">
+        <td><b>{{ f.name }}</b></td>
+        <td>
+          {% if f.ok %}<span class="badge b-full">可跑</span>
+          {% else %}<span class="badge b-none">开跑前拦截</span>
+            <div class="why">{{ f.detail }}</div>{% endif %}
+        </td>
+        <td>
+          {% for n in f.nodes %}
+            <span class="node {% if n.count == 0 %}bad{% endif %}">
+              <code>{{ n.id }}</code>
+              {% if n.count is none %}<span class="src">{{ n.note }}</span>
+              {% else %}<span class="src">{{ n.count }} 个</span>{% endif %}
+            </span>
+          {% endfor %}
+        </td>
+      </tr>
+    {% endfor %}
+  </table>
+</div>
+<p class="muted" style="font-size:12px;margin-top:-6px">
+  预检用的是<b>开跑前那道同一份判定</b>（<code>flow._preflight</code>），
+  所以这里显示"可跑"，真去跑就一定不会被拦——展示与执行不会各说各话。
+  收窄到 0 个工具的节点会让整条流程在开跑前中止，而不是跑完给一段零动作的结论。
+</p>
+
+{% endblock %}
