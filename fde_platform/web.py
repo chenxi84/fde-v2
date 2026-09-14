@@ -946,7 +946,17 @@ def api_agent2_chat_stream():
                 "agent_id": agent_id, "session_id": sid, "input": msg,
             }, headers=headers, timeout=60)
             if r.status_code >= 400:
-                yield "data: " + json.dumps({"event": "error", "data": f"HTTP {r.status_code}"}, ensure_ascii=False) + "\n\n"
+                # 409 = agent_service 的「单会话同时只跑一轮」闸门（防重复提交）。
+                # 典型触发：上一轮还在跑，用户刷新了页面（前端状态清零、按钮又可点了）
+                # 再发一条。这是**正确的防护**，但状态码不该原样甩给用户——
+                # 「HTTP 409」既说不清原因，也看不出该怎么办（重试还是 409）。
+                if r.status_code == 409:
+                    hint = ("这条会话上一条还在处理中，同时只能跑一轮。"
+                            "等它跑完再发，或点「＋ 新」开一条新对话——"
+                            "上一条的结果不会丢，刷新页面就能看到。")
+                else:
+                    hint = f"HTTP {r.status_code}"
+                yield "data: " + json.dumps({"event": "error", "data": hint}, ensure_ascii=False) + "\n\n"
                 return
             # 订阅 stream 并翻译。**收敛判据是「会话还在不在跑」，不是墙钟**：
             #
@@ -1004,8 +1014,13 @@ def api_agent2_chat_stream():
                         return  # HITL 停车，等 confirm 续跑
         except httpx.ReadTimeout:
             pass  # 静默超时：leader 已收敛
-        except Exception:
-            yield "data: " + json.dumps({"event": "error", "data": "agent_service 调用失败"}, ensure_ascii=False) + "\n\n"
+        except Exception as e:
+            # 带上异常类型与原文：原来只回一句「调用失败」，出了问题根本没法查
+            # （连是超时、连接被拒还是别的什么都不知道）。
+            print(f"[agent2] 本轮异常 sid={sid} {type(e).__name__}: {e}", flush=True)
+            yield "data: " + json.dumps(
+                {"event": "error", "data": f"agent_service 调用失败（{type(e).__name__}）"},
+                ensure_ascii=False) + "\n\n"
         finally:
             yield "data: " + json.dumps({"event": "done", "data": full_text["v"]}, ensure_ascii=False) + "\n\n"
 
