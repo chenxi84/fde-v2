@@ -53,13 +53,16 @@ PORT = int(os.environ.get("PLATFORM_PORT", 4000))
 # waitress 工作线程数。**每个请求占一个线程直到响应结束**，而 Agent 对话是 SSE
 # 长连接（一次对话从头占到尾，几十秒到几分钟），所以 `同时进行的对话轮数` 直接等于
 # 这个数——排在后面的请求不会报错，只是等。
-# 默认 16 而不是 waitress 自带的 4：这类负载几乎全是在等 LLM / 等数据库（I/O 等待），
-# 加线程代价很小；4 会让"第 5 个人开始转圈"来得非常早。
 #
-# 真要继续往上走，更彻底的做法是让 nginx 把 /api/agent2/*/stream 直接反代到
-# agent_service(:4100)，Flask 完全不碰 SSE——但身份注入（X-User-ID 由 Flask 从会话里
-# 取了加上的）得先解决，不是纯配置能改的。
-THREADS = max(1, int(os.environ.get("PLATFORM_THREADS", 16)))
+# 默认 64 而不是 waitress 自带的 4：这类负载几乎全是在等 LLM / 等数据库（I/O 等待），
+# 线程本身很便宜（主要是虚拟栈，实际占用很小），4 会让"第 5 个人开始转圈"来得非常早。
+# 真实的墙通常不在这里，而是 LLM 的速率限制与响应速度——64 个人同时问，模型那边先
+# 排队的概率更大。
+#
+# 再往上走（几百并发）就不是调线程能解决的了，得把浏览器协议层下沉到
+# agent_service、让 nginx 直接反代 SSE、Flask 完全不碰长连接；那是 ~200 行代码搬移，
+# 不是配置改动，详见 design-plus。
+THREADS = max(1, int(os.environ.get("PLATFORM_THREADS", 64)))
 
 # 平台组件状态（main.py 启动时收集写入；首页「平台运行情况」监控区读取）
 COMPONENTS = []

@@ -5,7 +5,8 @@ services:
       - PLATFORM_HOST=0.0.0.0
       # 同时处理几个请求。Agent 对话是 SSE 长连接、一次对话占满一个线程，
       # 所以这个数约等于「同时能几个人对话」（超出的排队等，不报错）。
-      - PLATFORM_THREADS=16
+      # 线程很便宜（主要是虚拟栈），真实的墙通常是 LLM 的速率限制。
+      - PLATFORM_THREADS=64
       - DATABASE_URL=postgresql://fde:fde@postgres:5432/fdev2
       - AGENT_SERVICE_URL=http://agent-service:4100
       - FDE_EMBED_URL=http://embed:9800
