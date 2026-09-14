@@ -82,13 +82,14 @@ class McpServer:
             return self._result(msg_id, {})
         if method == "tools/list":
             tools = self._tools
-            # 非管理员角色按服务级授权过滤：聚合服务须被授权；内置文件工具须有应用可见性
+            # 非管理员角色按**有效授权**过滤（与 Web 闸门 / agent / bridge.execute 同口径，
+            # 见 users.is_effectively_granted）：聚合服务须被授权；内置文件工具须有应用可见性
             if self.user and not self.user.get("is_admin"):
                 def _allowed(t):
                     app, svc = t["_meta"]["app"], t["_meta"]["service"]
                     if builtin_tools.is_builtin_service(svc):
                         return users.has_app_access(self.user["id"], app)
-                    return users.is_service_granted(self.user["id"], app, svc)
+                    return users.is_effectively_granted(self.user, app, svc)
 
                 tools = [t for t in tools if _allowed(t)]
             public = [{k: v for k, v in t.items() if k != "_meta"} for t in tools]
@@ -132,13 +133,14 @@ class McpServer:
                     {"content": [{"type": "text", "text": f"平台工具异常：{e}"}], "isError": True},
                 )
 
-        # 授权检查（与 Web 闸门对齐）：聚合服务须被授权；内置文件工具须有应用可见性
+        # 授权检查（与 Web 闸门 / agent / bridge.execute 同口径）：聚合服务按有效授权；
+        # 内置文件工具须有应用可见性
         if self.user and not self.user.get("is_admin"):
             if builtin_tools.is_builtin_service(service):
                 denied = not users.has_app_access(self.user["id"], app)
                 reason = f"无权访问应用：{app}"
             else:
-                denied = not users.is_service_granted(self.user["id"], app, service)
+                denied = not users.is_effectively_granted(self.user, app, service)
                 reason = f"无权调用服务：{app}.{service}"
             if denied:
                 return self._result(

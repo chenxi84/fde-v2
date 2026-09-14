@@ -558,13 +558,17 @@ def execute(platform, user, tool_name: str, args: dict) -> str:
             return json.dumps({"error": f"系统错误：{type(e).__name__}"}, ensure_ascii=False)
         return json.dumps(result, ensure_ascii=False)
 
-    # 服务级授权校验（与 Web 闸门 / 旧 agent 一致）
-    if user is not None and not user.get("is_admin"):
-        if builtin_tools.is_builtin_service(service):
-            if not users.has_app_access(user["id"], app):
-                return json.dumps({"error": f"无权访问应用：{app}"}, ensure_ascii=False)
-        elif not users.is_service_granted(user["id"], app, service):
-            return json.dumps({"error": f"无权调用服务：{app}.{service}"}, ensure_ascii=False)
+    # 服务级授权校验（与 Web 闸门 / MCP 同口径，见 users.is_effectively_granted）。
+    # 业务服务用「有效授权」= 显式 ∪ 角色 ∪ 页面派生——**必须与工具面同一条线**：
+    # 工具面按有效授权放宽而这里不收，就会出现「看得到、调不动」，
+    # 而且拒的是用户明明在网页上做过的事，比不收窄更说不通。
+    # 内置文件工具仍按应用级 has_app_access 判（读的是应用目录，敏感面不同）。
+    if builtin_tools.is_builtin_service(service):
+        if not (user is None or user.get("is_admin")
+                or users.has_app_access(user["id"], app)):
+            return json.dumps({"error": f"无权访问应用：{app}"}, ensure_ascii=False)
+    elif not users.is_effectively_granted(user, app, service):
+        return json.dumps({"error": f"无权调用服务：{app}.{service}"}, ensure_ascii=False)
 
     try:
         if builtin_tools.is_builtin_service(service):

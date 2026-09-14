@@ -80,18 +80,19 @@ def _implicit_page_grant(user, app_name: str, service: str) -> bool:
     且 ① 该用户角色获授此页、② 页面源码派生的服务边含 (app, service) → 放行。
 
     防伪：声明的页仍要过角色授权校验——声明未授权页 → 拒；声明已授权页 → 放行的
-    服务必在该页派生集内（授权的自然延伸）。无头请求（MCP/Agent/CLI/裸 curl）不享受
-    隐式放行，仍按显式授权判定。派生表由 view_registry 扫描生成（svc() 字面量）。"""
+    服务必在该页派生集内（授权的自然延伸）。派生表由 view_registry 扫描生成
+    （svc() 字面量）。
+
+    **只看"当前页"**——这是本函数的防伪机制，浏览器请求才有页上下文。
+    无头请求（agent/MCP/CLI/裸 curl）没有"当前页"，走
+    `users.page_derived_services()` 取该用户**全部被授页**的并集。
+    """
     page_id = (request.headers.get("X-Fde-Page") or "").strip()
     if not page_id:
         return False
     if not users.is_page_granted(user["id"], page_id):
         return False
-    from fde_platform import view_registry  # 惰性导入，避免顶层耦合
-
-    # 页面派生边按短名记录（页内 svc() 用短名、属页面所在组）；请求 app_name 为 qualname，取短名比对
-    short = app_name.rsplit("/", 1)[-1]
-    return (short, service) in view_registry.page_services(page_id)
+    return users.page_derives(page_id, app_name, service)
 
 
 # ── 单一闸门 ────────────────────────────────────────────

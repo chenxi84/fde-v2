@@ -225,6 +225,68 @@ def main():
     check("角色绑定的应用都有 HOWTOUSE.md", not missing_howto,
           f"缺：{missing_howto}" if missing_howto else "全部就位")
 
+    # ── ⑧ 权限打标（防「把有权限的人一起标了」与「口径没接通」）──
+    #
+    # 这组断言盯两个真实踩过的坑：
+    #   ① admin 本身 service_grants 是空的，判据一旦漏掉 is_admin 豁免，
+    #      它**全部业务组都会被清空**——那是演示当天才发现级别的错。
+    #   ② 工具面若按「显式授权」判而不含**页面派生**授权，只被授了页面的用户
+    #      （planner01 / warehouse01）会被告知「无权调用」，而他在网页上明明
+    #      刚操作过同一个页面。判据必须与 bridge.execute 同一条线。
+    print("\n⑧ 权限打标（工具面 = 这个人真能调的）")
+    keep_all = [t for t in defs if t["_meta"]["app"] != "__platform__"]
+
+    def _surface(user):
+        groups, marked = A._make_tool_groups(keep_all, user, lambda t: t)
+        return groups, marked, {g.name: g for g in groups}
+
+    for label, u in (("admin", users.get_user_by_name("admin")),
+                     ("平台默认身份(None)", None)):
+        _g, marked, _m = _surface(u)
+        check(f"{label} 一个组都不该被打标（豁免口径）", marked == 0,
+              f"被打标 {marked} 组" if marked else "0 组")
+
+    _g, marked, by_name = _surface(users.get_user_by_name("planner01"))
+    check("planner01 有被授页面，不该全军覆没", marked < len(_g),
+          f"{marked}/{len(_g)} 组被打标")
+
+    mp = by_name.get("master_plan")
+    check("planner01 的 master_plan 组未被打标（页面派生授权生效）",
+          bool(mp) and "没有权限" not in mp.description,
+          mp.description[-40:] if mp else "找不到该组")
+    if mp:
+        svcs = sorted(t["_meta"]["service"] for t in mp.tools)
+        check("该组只留他真能调的（页面派生：get/import_plan/list）",
+              set(svcs) <= {"get", "import_plan", "list"},
+              f"实际：{svcs}")
+
+    rv = users.get_user_by_name("reviewer01")
+    _g, _marked, by_name_r = _surface(rv)
+    sf = by_name_r.get("strategy_fitting")
+    check("reviewer01 的角色授权组未被打标（角色授权生效）",
+          bool(sf) and "没有权限" not in (sf.description if sf else ""),
+          (sf.description[-40:] if sf else "找不到该组"))
+
+    # 内部一致性：组内工具必须全部通过**执行侧那个判据函数**——
+    # 「看得到的」与「调得动的」任何一处对不上，都会退化成撞墙或静默失败。
+    # 这里刻意 import flow 的判据而不是在本脚本里复刻一份：复刻正是
+    # 这类漂移的来源（测试与工厂各写一份，对不上时两边都以为自己对）。
+    from fde_platform import flow as _flow
+    drift = []
+    for label, u in (("planner01", users.get_user_by_name("planner01")),
+                     ("reviewer01", rv),
+                     ("warehouse01", users.get_user_by_name("warehouse01"))):
+        _g, _mm, m = _surface(u)
+        for gname, g in m.items():
+            for t in g.tools:
+                meta = t["_meta"]
+                if meta["app"] == "__platform__":
+                    continue
+                if not _flow._node_tool_usable(u, meta):
+                    drift.append(f"{label}/{gname}.{meta.get('service')}")
+    check("组内工具全部可调（工具面与执行侧同口径）", not drift,
+          f"不一致：{drift[:6]}" if drift else "无漂移")
+
     # ── 汇总 ──────────────────────────────────────────────────
     print("\n" + "=" * 74)
     print(f"  结果：{len(PASS)} 项通过，{len(FAIL)} 项失败")

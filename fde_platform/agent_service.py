@@ -40,6 +40,7 @@ from agentscope.tool import FunctionTool, ToolChunk, ToolGroup
 from fde_platform import agentscope_bridge as bridge
 from fde_platform import agent_roles
 from fde_platform import agent_tool_filter
+from fde_platform import builtin_tools
 from fde_platform import users
 from fde_platform.runtime import FdePlatform
 
@@ -339,6 +340,74 @@ _GROUP_INSTRUCTIONS = (
     "避免同时挂着多组工具——同时激活的工具越多，选错工具的概率越高。"
 )
 
+# ── 权限前置：按调用者授权给「组」打标 ──────────────────────────
+#
+# 为什么打在组上、而不是把工具面收窄掉：
+#   ResetTools 的动态 schema 把**每个组的名字+描述**常驻呈现给模型，这是它判断
+#   「系统有什么能力」的唯一依据（= 全貌）；组内工具 schema 只在激活后才进上下文
+#   （= 动作空间）。所以「全貌」与「动作空间」本来就在两层上——组描述正是声明
+#   边界的地方：全貌照给，无授权的组把工具清空，模型既看得到、又不会去撞墙。
+#
+# 为什么清空工具而不是只在描述里提醒：放了也调不动（bridge.execute 会拒），
+#   只会让模型白烧 ReAct 轮次，还可能把「无权调用」当成业务结论写进回答。
+_NO_GRANT_NOTE = "｜**你没有权限调用本组工具**，仅供了解系统能力"
+_NO_GRANT_INSTRUCTIONS = (
+    "本组工具对当前用户不可用：你没有调用本组任何工具的授权。"
+    "不要尝试调用本组工具，直接说明缺少哪一项权限即可。"
+)
+_PARTIAL_NOTE = "｜本组你只能调用："
+
+
+def _make_tool_groups(keep, user, mk_ft):
+    """业务工具 → 按应用分组的 ToolGroup，并按调用者**有效授权**打标。
+
+    三种标（判据见 `users.effective_service_names`）：
+
+      · 全可用   → 原描述、工具全留
+      · 部分可用 → 描述追加「本组你只能调用：a、b、c」，**组内只留可用的那些**
+      · 全不可用 → 描述追加「你没有权限调用本组工具」，组内清空
+
+    **组内工具一律 = 该用户真能调的**。不保留调不动的工具：留着只会让模型去试、
+    撞 execute 的拒绝、白烧 ReAct 轮次；而"这个应用还有哪些能力"由组名+描述承载，
+    全貌不受影响。
+
+    admin / `user is None` 时 `effective_service_names` 直接返回全部 → 不打标，
+    与改动前逐字一致（这是最容易写错的地方：admin 本身 `service_grants` 是空的，
+    实测 `has_app_access` 对任何应用都为 False，一旦按它判就会把 admin 权限清空）。
+
+    返回 `(groups, marked)`，marked = 被打成"不可用"的组数，供日志可见性。
+    """
+    page_derived = None
+    if user is not None and not user.get("is_admin"):
+        # 页面派生集算一次传给每个应用，避免逐个服务判时退化成 N 次查询
+        page_derived = users.page_derived_services(user["id"])
+
+    groups: list = []
+    marked = 0
+    for app, fts in sorted(_split_by_app(keep).items()):
+        svc_of = [(t, t["_meta"].get("service", "")) for t in fts]
+        all_svcs = {s for _t, s in svc_of}
+        # 内置文件工具走应用级 has_app_access（与 bridge.execute 同口径），
+        # 不参与服务级授权判定——它们的可见性已在 tool_schemas 里定过
+        business = [s for s in all_svcs if not builtin_tools.is_builtin_service(s)]
+        usable = set(users.effective_service_names(user, app, business, page_derived))
+        if user is None or user.get("is_admin") \
+                or users.has_app_access(user["id"], app):
+            usable |= {s for s in all_svcs if builtin_tools.is_builtin_service(s)}
+
+        desc = _app_group_desc(app)
+        instructions = _GROUP_INSTRUCTIONS
+        if not usable:
+            marked += 1
+            desc += _NO_GRANT_NOTE
+            instructions = _NO_GRANT_INSTRUCTIONS
+        elif len(usable) < len(all_svcs):
+            desc += _PARTIAL_NOTE + "、".join(sorted(usable))
+        groups.append(ToolGroup(
+            name=app.split("/")[-1], description=desc, instructions=instructions,
+            tools=[mk_ft(t) for t, s in svc_of if s in usable]))
+    return groups, marked
+
 
 # leader system_prompt 里的组标记（供工具工厂按组收窄业务工具）
 _GROUP_MARK = re.compile(r"<!--FDE_GROUP:(\w+)-->")
@@ -413,12 +482,8 @@ async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str):
                 continue
             if t["function"]["name"] in allowed:
                 keep.append(t)
-        tool_groups = [
-            ToolGroup(name=a.split("/")[-1], description=_app_group_desc(a),
-                      instructions=_GROUP_INSTRUCTIONS, tools=[_mk_ft(t) for t in fts])
-            for a, fts in sorted(_split_by_app(keep).items())
-        ]
-        _log_surface(f"worker/{role}", basic, tool_groups)
+        tool_groups, marked = _make_tool_groups(keep, user, _mk_ft)
+        _log_surface(f"worker/{role}", basic, tool_groups, marked)
         return (basic, tool_groups)
 
     # ── leader：按组收窄业务工具（从 system_prompt 的 FDE_GROUP 标记提取组）──
@@ -437,23 +502,22 @@ async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str):
                 basic.append(_mk_ft(t))
             continue
         keep.append(t)
-    tool_groups = [
-        ToolGroup(name=a.split("/")[-1], description=_app_group_desc(a),
-                  instructions=_GROUP_INSTRUCTIONS, tools=[_mk_ft(t) for t in fts])
-        for a, fts in sorted(_split_by_app(keep).items())
-    ]
-    _log_surface(f"leader/{group or 'all'}", basic, tool_groups)
+    tool_groups, marked = _make_tool_groups(keep, user, _mk_ft)
+    _log_surface(f"leader/{group or 'all'}", basic, tool_groups, marked)
     return (basic, tool_groups)
 
 
-def _log_surface(who: str, basic: list, tool_groups: list) -> None:
+def _log_surface(who: str, basic: list, tool_groups: list, marked: int = 0) -> None:
     """记录本次装配的工具面。
 
     「单次呈现 schema 数」是这套收敛方案的验收指标（见 宣传/工具面收敛方案.md §七），
     没有这行日志就只能靠猜——出事那次（工具静默消失）正是因为没有可见性。
+
+    `marked` = 被打成"你无权调用"的组数。它也必须可见：改判据时最容易出的错就是把
+    有权限的人（尤其 admin）一起标了，那种错在日志里一眼能看出来，不看就得上演示才发现。
     """
-    _logger.info("工具装配 [%s]：常驻 %d + 懒加载 %d 组 %s",
-                 who, len(basic), len(tool_groups),
+    _logger.info("工具装配 [%s]：常驻 %d + 懒加载 %d 组（无权限打标 %d）%s",
+                 who, len(basic), len(tool_groups), marked,
                  {g.name: len(g.tools) for g in tool_groups} or "—")
 
 

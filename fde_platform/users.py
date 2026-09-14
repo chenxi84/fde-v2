@@ -399,6 +399,77 @@ def is_service_granted(user_id: int, app_name: str, service: str) -> bool:
     return row is not None
 
 
+def page_derives(page_id: str, app_name: str, service: str) -> bool:
+    """某页面是否派生出这条 (应用, 服务) 边。
+
+    **短名口径的唯一实现**——页面派生边按短名记录（页内 svc() 用短名、属页面
+    所在组），而请求侧的 app_name 是 `组/应用` 的 qualname，比对前要取短名。
+    `auth._implicit_page_grant`（浏览器，看当前页）与 `page_derived_services`
+    （无头，看全部被授页）都走这里，避免两处各写一份比对再漂移。
+    """
+    from fde_platform import view_registry  # 惰性导入，避免顶层耦合
+
+    return (app_name.rsplit("/", 1)[-1], service) in view_registry.page_services(page_id)
+
+
+def page_derived_services(user_id: int) -> set[tuple[str, str]]:
+    """该用户**全部被授页面**派生出的 (应用短名, 服务名) 并集。
+
+    网页路径按 `X-Fde-Page` 只看"当前页"（那是防伪：声明未授权页即拒）；
+    而 agent / MCP 这类**无头请求没有"当前页"上下文**，取并集才是他在网页上
+    能触达的服务全集——这正是「网页上能做的，智能体也能做」。
+
+    短名口径与 `auth._implicit_page_grant` 一致（页面派生的边按短名记录）。
+    """
+    from fde_platform import view_registry  # 惰性导入，避免顶层耦合
+
+    out: set[tuple[str, str]] = set()
+    for page_id in get_user_page_grants(user_id):
+        out |= view_registry.page_services(page_id)
+    return out
+
+
+def is_effectively_granted(user, app_name: str, service: str) -> bool:
+    """无头请求（agent / MCP / CLI）的**有效授权**判据——唯一实现，三处共用。
+
+        有效授权 = 显式服务授权 ∪ 角色授权 ∪ 页面派生授权
+
+    为什么不只看 `is_service_granted`：只被授了页面、没被授服务的用户（如
+    planner01），在网页上能正常操作该页，agent 却会被判无权——同一件事两个
+    说法。**「看得到的边界」和「调得动的边界」必须是同一条。**
+
+    `user is None` 或 `is_admin` → 全通。**这一句不能省**：admin 靠 is_admin
+    标志豁免，本身 `service_grants` 是空的（实测 admin 对任何应用
+    `has_app_access` 都为 False），漏了它会把 admin 的全部权限清空。
+    与 `bridge.execute` 的豁免口径逐字对齐。
+    """
+    if user is None or user.get("is_admin"):
+        return True
+    if is_service_granted(user["id"], app_name, service):
+        return True
+    short = app_name.rsplit("/", 1)[-1]
+    return (short, service) in page_derived_services(user["id"])
+
+
+def effective_service_names(user, app_name: str, all_services,
+                            page_derived=None) -> list[str]:
+    """该用户在某应用下**实际可调用**的服务名（`is_effectively_granted` 的批量版）。
+
+    批量版的意义是省查询：`page_derived_services` 每次要查一次被授页面，
+    逐个服务判会退化成 N 次查询。组装整个工具面时，调用方把 `page_derived`
+    算一次传进来即可（agent_service 就是这么用的）。
+    """
+    if user is None or user.get("is_admin"):
+        return list(all_services)
+    uid = user["id"]
+    if page_derived is None:
+        page_derived = page_derived_services(uid)
+    short = app_name.rsplit("/", 1)[-1]
+    granted = set(granted_services(uid, app_name))
+    granted |= {s for (a, s) in page_derived if a == short}
+    return [s for s in all_services if s in granted]
+
+
 def has_app_access(user_id: int, app_name: str) -> bool:
     """该应用下是否有≥1 有效授权服务（决定能否进入该应用）。"""
     conn = get_conn()

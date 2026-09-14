@@ -40,7 +40,9 @@ import yaml
 from fde import FdeError
 from fde_platform import agent_roles
 from fde_platform import agentscope_bridge as bridge
+from fde_platform import builtin_tools
 from fde_platform import llm
+from fde_platform import users
 
 _ROOT = Path(__file__).resolve().parents[1]
 _APPS_DIR = _ROOT / "app"
@@ -49,6 +51,16 @@ _PROGRESS_DB = _ROOT / "config" / "flow_runs.db"
 _MAX_ROUNDS = 10  # 单节点 ReAct 最大轮次（防失控）
 
 _MAX_RUNS = 50  # 运行历史最多保留条数（协同总览时间线用）
+
+
+class FlowAbort(FdeError):
+    """流程级中止：不是"这个节点这次没跑成"，而是"这条流程在当前条件下就不该跑"。
+
+    与普通节点异常**刻意分开**：普通异常记进 state 继续跑（一个节点失败不该拖垮
+    整条链，见 `_run_ready`）；而工具面为空这类问题继续跑没有任何意义——下游拿到的
+    是零动作的输入，最后产出一段"看着像结论"的东西，还没人看得出它是空的。
+    `_run_ready` 只对它放行向上抛。
+    """
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS flow_runs (
@@ -266,21 +278,72 @@ def _check_condition(cond, state: dict) -> bool:
     return True
 
 
-def _node_tools(platform, user, role: str) -> list[dict]:
-    """该节点的工具：业务角色按 allowed_tools_for_role 过滤；否则全量。"""
+def _node_tool_usable(user, meta: dict) -> bool:
+    """单个工具对调用者是否可调（口径与 `bridge.execute` 一致）。"""
+    app = meta.get("app", "")
+    service = meta.get("service", "")
+    if app == "__platform__":
+        return True  # 平台工具另有下发白名单与 execute 内的 admin 判定
+    if builtin_tools.is_builtin_service(service):
+        return (user is None or user.get("is_admin")
+                or users.has_app_access(user["id"], app))
+    return users.is_effectively_granted(user, app, service)
+
+
+def _node_tools(platform, user, role: str, node_id: str = "") -> list[dict]:
+    """该节点的工具：先按**角色**收窄，再按调用者**有效授权**收窄。
+
+    两步都是"收窄"，方向一致：节点是脚本化执行者，本就已收窄到该角色的最小可用集，
+    不存在「需要看全貌」的场景——所以这里直接过滤，而不是像对话智能体那样
+    "保留组、清空工具"。
+
+    收窄到空**必须报错**。从前这里返回空列表，`_run_node` 就拿着一无所有的工具面
+    去调 LLM，模型只能回一段文字，节点照样算"成功"——整条流程跑完、一个动作没做、
+    不报错。宁可不跑，也不要产出一段零动作的"结论"。
+    """
     defs = bridge.tool_schemas(platform, user)
     if role in agent_roles.ROLE_APPS:
         allowed = agent_roles.allowed_tools_for_role(role, defs)
-        return [t for t in defs if t["function"]["name"] in allowed]
-    return defs
+        defs = [t for t in defs if t["function"]["name"] in allowed]
+
+    usable = [t for t in defs if _node_tool_usable(user, t["_meta"])]
+    if usable:
+        return usable
+
+    apps = sorted({t["_meta"]["app"] for t in defs
+                   if t["_meta"].get("app") != "__platform__"})
+    who = (user or {}).get("username") or "平台默认身份"
+    raise FlowAbort(
+        f"节点「{node_id or role}」在角色「{role}」下没有可用工具："
+        f"调用者 {who} 缺少这些应用的授权（{'、'.join(apps) or '无'}）。"
+        "流程已中止——继续跑只会产出一段零动作的结论。")
 
 
-def _run_node(platform, user, role: str, task: str) -> str:
+def _preflight(nodes: list[dict], platform, user) -> list[str]:
+    """预检：**确定会跑**的 agent 节点必须有可用工具。
+
+    只看没有 `when` 的节点：带条件的节点可能本来就会被跳过，不该因为一个
+    不会执行的分支把整条流程拦下——那种留到它真跑到时报。
+
+    放在开跑前而不是跑到一半，是为了别让人等几分钟才发现跑不动。
+    """
+    problems = []
+    for n in nodes:
+        if n.get("type", "agent") != "agent" or n.get("when"):
+            continue
+        try:
+            _node_tools(platform, user, n.get("role", ""), n.get("id", ""))
+        except FdeError as e:
+            problems.append(str(e))
+    return problems
+
+
+def _run_node(platform, user, role: str, task: str, node_id: str = "") -> str:
     """轻量 ReAct 循环：带该角色工具的 LLM，多轮调工具，返回最终文本结论。"""
     prov = llm.get_provider("operator")
     if isinstance(prov, llm.NotConfiguredProvider):
         return "（LLM 未配置，无法执行该节点）"
-    defs = _node_tools(platform, user, role)
+    defs = _node_tools(platform, user, role, node_id)
     tools = [{"type": "function", "function": t["function"]} for t in defs]
     label = agent_roles.role_label(role) or "编排节点"
     messages = [
@@ -374,7 +437,8 @@ def _execute_node(node: dict, state: dict, platform, user, group: str = ""):
             result = _execute_skill_node(node, state, platform, user)
         else:  # agent（默认，向后兼容旧 YAML 无 type）
             task = _fill(str(node.get("task", "")), state, node.get("input"))
-            result = _run_node(platform, user, node.get("role", ""), task)
+            result = _run_node(platform, user, node.get("role", ""), task,
+                               node.get("id", ""))
         if output_key:
             state[output_key] = result  # 先写 output，供 until 判断
         until = node.get("until")
@@ -397,6 +461,8 @@ def _run_ready(nids: list[str], node_by_id: dict, state: dict, platform, user, g
             nid = futures[fut]
             try:
                 results[nid] = fut.result()
+            except FlowAbort:
+                raise  # 流程级问题：不降级成文本，交给 run_flow 中止整条流程
             except Exception as e:  # 单节点失败不影响其他节点
                 results[nid] = f"（节点执行失败：{e}）"
     return results
@@ -412,6 +478,14 @@ def run_flow(name: str, platform, user) -> dict:
     node_by_id = {n.get("id"): n for n in nodes if n.get("id")}
     deps = {nid: set(node_by_id[nid].get("depends_on") or []) for nid in node_by_id}
     total = len(node_by_id)
+
+    # 预检放在开跑前：跑不动要立刻知道，别等几分钟后才发现产出是空的
+    problems = _preflight(nodes, platform, user)
+    if problems:
+        msg = "；".join(problems)
+        _report_progress(name, "error", 0, total, "", msg[:2000])
+        return {"error": "流程预检未通过：" + msg}
+
     state: dict = {}
     done: set = set()
     _report_progress(name, "running", 0, total, "")
@@ -419,7 +493,12 @@ def run_flow(name: str, platform, user) -> dict:
         ready = [nid for nid in deps if nid not in done and deps[nid] <= done]
         if not ready:
             break  # 循环依赖或缺失上游：终止，避免死循环
-        for nid, result in _run_ready(ready, node_by_id, state, platform, user, group).items():
+        try:
+            batch = _run_ready(ready, node_by_id, state, platform, user, group)
+        except FlowAbort as e:
+            _report_progress(name, "error", len(done), total, "", str(e)[:2000])
+            return {"error": f"流程中止：{e}"}
+        for nid, result in batch.items():
             node = node_by_id[nid]
             if result is None:
                 continue  # when 跳过：output 不写 state
