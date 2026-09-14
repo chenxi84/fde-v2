@@ -27,6 +27,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -37,12 +38,25 @@ from fde import FdeError  # noqa: E402
 from fde_platform import builtin_tools, platform_mcp_tools, users  # noqa: E402
 from fde_platform.runtime import FdePlatform  # noqa: E402
 
-# 支持的协议版本（新→旧）。streamable-http 传输是 2025-03-26 引入的，
-# initialize 时**回客户端请求的那个版本**（在集合内时），否则回最新——
-# 回老版本号会让新客户端误判服务端不支持它要用的传输。
-PROTOCOL_VERSIONS = ("2025-03-26", "2024-11-05")
-PROTOCOL_VERSION = PROTOCOL_VERSIONS[0]
+# MCP 用日期串做版本号：2024-11-05 → 2025-03-26（引入 Streamable HTTP）→
+# 2025-06-18 → 2025-11-25 → …，每次修订都是向后兼容的增补。
+KNOWN_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
+# 兜底值：客户端没报版本 / 报了个不合形的串时用它（我们传输层实现所依据的那版）。
+PROTOCOL_VERSION = "2025-03-26"
 SERVER_INFO = {"name": "fde-v2-platform", "version": "0.1.0"}
+_VERSION_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def negotiate_version(asked):
+    """版本协商：**客户端报什么版本就回什么版本**（合形即可）。
+
+    MCP 规范要求「服务端支持该版本就必须回同一个」，否则回一个自己支持的版本，
+    而**客户端拿到不认识的版本会直接断开**。新修订都是增补式的，而我们只实现 tools
+    能力（capabilities 里也只声明它，不声明 resources/prompts/sampling/tasks），
+    这部分跨版本稳定——所以「回老版本号」只会把新客户端顶掉，没有任何好处。
+    （2025-03-26 引入的 Streamable HTTP 是我们真正依赖的那条底线，仍兜底。）
+    """
+    return asked if isinstance(asked, str) and _VERSION_RE.match(asked) else PROTOCOL_VERSION
 
 # 「未指定」哨兵：区分「沿用实例默认身份」与「明确要求无身份（匿名）」——
 # HTTP 请求解析出的用户若为空，不能悄悄回落到启动参数里的身份。
@@ -108,12 +122,11 @@ class McpServer:
         msg_id = msg.get("id")
 
         if method == "initialize":
-            # 回客户端请求的版本（在支持集合内时），否则回最新
             asked = (msg.get("params") or {}).get("protocolVersion")
             return self._result(
                 msg_id,
                 {
-                    "protocolVersion": asked if asked in PROTOCOL_VERSIONS else PROTOCOL_VERSION,
+                    "protocolVersion": negotiate_version(asked),
                     "capabilities": {"tools": {"listChanged": False}},
                     "serverInfo": SERVER_INFO,
                 },

@@ -34,12 +34,20 @@ streamable-http 是当前标准、单端点、更简单。真有客户端只认�
 import json
 import logging
 import secrets
+import sys
 import threading
 import time
 
 from flask import Blueprint, Response, jsonify, request
 
+from fde_platform.mcp_server import negotiate_version as _negotiate
+
 _logger = logging.getLogger(__name__)
+
+
+def _log(msg: str):
+    """直写 stderr：本项目未配置 logging（INFO 级默认无声），而接入排查全靠这几行。"""
+    print(msg, file=sys.stderr, flush=True)
 
 # Streamable HTTP 要求客户端声明同时能收 JSON 与 SSE（我们只回 JSON，但仍按规范校验）
 REQUIRED_ACCEPT = ("application/json", "text/event-stream")
@@ -150,6 +158,17 @@ def mcp_post():
             continue
         if m.get("method") == "initialize":
             saw_initialize = True
+            # 握手时把「对面是谁、报的什么版本」记下来：接入排查全靠这一行
+            # （客户端只会在初始化报错时丢一句「连接失败」，看不出它到底发了什么）。
+            p = m.get("params") or {}
+            _log(
+                f"[mcp] 握手 ← {p.get('clientInfo', {}).get('name', '?')}"
+                f" {p.get('clientInfo', {}).get('version', '')}"
+                f" | 请求版本 {p.get('protocolVersion')}"
+                f" | 回版本 {_negotiate(p.get('protocolVersion'))}"
+                f" | UA {request.headers.get('User-Agent', '')[:60]}"
+                f" | 用户 {user['username']}"
+            )
         try:
             resp = server.handle_as(m, user)
         except Exception as e:      # 单条炸掉不能带走整批

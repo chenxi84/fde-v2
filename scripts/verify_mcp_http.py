@@ -119,6 +119,11 @@ def main():
         st, js, _ = rpc(admin_tok, "initialize", {"protocolVersion": "2024-11-05"})
         check("老客户端请求 2024-11-05 也照回",
               js["result"]["protocolVersion"] == "2024-11-05", js["result"]["protocolVersion"])
+        # 关键：新客户端报的版本我们**照回**，不能顶回老版本号（客户端会直接断开）
+        for v in ("2025-06-18", "2025-11-25"):
+            st, js, _ = rpc(admin_tok, "initialize", {"protocolVersion": v})
+            check(f"新版本 {v} 照回（不顶回老版本）",
+                  js["result"]["protocolVersion"] == v, js["result"]["protocolVersion"])
 
         print("\n④ 通知 / 不支持的方法")
         r = requests.post(MCP, headers={**JSON_H, **ACCEPT_OK,
