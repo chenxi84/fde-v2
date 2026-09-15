@@ -862,9 +862,12 @@ def run_one(case, verbose=True, judge=None, no_judge=False):
             if run["error"]:
                 break
     except Exception as e:
-        return {"id": cid, "tag": tag, "status": "FAIL", "question": turns[0], "gt": gt,
-                "why": f"驱动对话失败：{type(e).__name__}: {e}",
-                "checks": [], "answer": "", "tool_names": [], "elapsed": 0}
+        # 登录/建会话失败是**环境或平台**的问题，不是「答得不对」。记 FAIL 既冤枉被验收方，
+        # 也会把平台缺陷混进「答案质量」的统计里——C1 就撞上了：非 admin 用户建会话被上游 404。
+        return {"id": cid, "tag": tag, "status": "SKIP", "question": turns[0], "gt": gt,
+                "why": f"对话没能跑起来（环境/平台问题，不是答案质量）：{type(e).__name__}: {e}",
+                "checks": [], "failed": [], "rubric_verdicts": [],
+                "answer": "", "tool_names": [], "elapsed": 0}
 
     checks = check_case(case, gt, run, strict_read_only=case.get("read_only", True))
 
@@ -998,8 +1001,9 @@ def main():
             mark = {"PASS": _c("ok", "✓ PASS"), "FAIL": _c("bad", "✗ FAIL"),
                     "SKIP": _c("warn", "— SKIP")}[r["status"]]
             print(f"  {mark}  {r.get('elapsed', 0)}s  {r.get('question', '')[:40]}")
-            if r["status"] == "SKIP":
-                print(f"        skipped: {r['why']}")
+            if r.get("why"):
+                label = "skipped" if r["status"] == "SKIP" else "reason"
+                print(f"        {label}: {r['why']}")
             for okc, layer, note in r.get("checks", []):
                 if not okc:
                     print(_c("bad", f"        ✗ [{layer}] {note}"))
@@ -1042,7 +1046,7 @@ def main():
         print("\n  失败明细（期望 → 实际）：")
         for r in failed:
             print(f"    {r['id']} {r.get('tag', '')}")
-            for okc, layer, note in r["failed"]:
+            for okc, layer, note in r.get("failed", []):
                 print(f"      [{layer}] {note}")
 
     if not args.no_env_findings:
