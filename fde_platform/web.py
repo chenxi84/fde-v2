@@ -753,7 +753,9 @@ def _leader_prompt(group: str = "") -> str:
         "<architecture>\n" + arch + "\n</architecture>"
     ) if arch else ""
     # 追加已发布 skill 库（经人工审批的巡检流程等），leader 匹配触发条件时按固定步骤执行
-    return base + arch_block + skills.agent_prompt()
+    # 工作纪律也带给 leader：它是派活的人，若没这条，它会把「先去刷新一下确保数据最新」
+    # 当成合理步骤派给 worker（实测就是这么发生的：分析类提问触发了 refresh/decide）。
+    return base + arch_block + skills.agent_prompt() + agent_roles.AGENT_DISCIPLINE
 
 
 def _agent2_headers():
