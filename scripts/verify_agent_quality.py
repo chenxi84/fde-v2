@@ -23,15 +23,23 @@
    （`refresh_batch` / `scan_alert` / `import_*` 这些会改数据，而且 `demand_pool` 无去重、
    重复调用会重复建补货单）——见 `WRITE_SERVICES`。
 
-三层断言（失败时要能知道错在哪一层）
+四层断言（失败时要能知道错在哪一层）
 -----------------------------------
 - **L1 工具轨迹**：该查的查了没（`must_call_any`）、不该碰的碰了没（`must_not_call`）、
-  是不是真查了而不是凭记忆答（`min_tool_calls`）。L1 绿而 L3 红 → 推理/表达问题；
-  L1 红 → 工具面/参数/契约问题。
+  是不是真查了而不是凭记忆答（`min_tool_calls`）。L1 绿而 L3/L4 红 → 推理/表达问题；
+  L1 红 → 工具面/参数/契约问题。**「一次工具都没调」通常意味着它在凭印象编**。
 - **L2 事实**：答案里的关键数字/料号是否对得上现算的权威值（`numbers_must_appear` /
   `gt_set_from`）。抓"漏看"与"编造"。
-- **L3 结论**：判定与归因是否正确（`must_include_all/any`、`must_not_match`）。
-  本版全部是**确定性**判据，不引入 LLM 裁判（那是下一批 B 类场景的事）。
+- **L3 结论**：判定与归因是否正确（`must_include_all/any`、`must_not_match`）——确定性判据。
+- **L4 裁判**（只对带 `rubric` 的 B 类场景）：开放题的要点没法用集合比对，交给裁判
+  逐条判「是否满足」。三条纪律：
+    1. **要点清单由人写死**，裁判只做符合性二值判断，不让它自由发挥（它是唯一的不确定源）；
+    2. **要点全中才 PASS**；出现 `no` → FAIL；**只有 `unsure` → SKIP**——「裁判拿不准」是
+       *工具*的不确定，记成 FAIL 就是冤枉被验收方；
+    3. 裁判失效（没回 JSON、条数对不上）→ SKIP 并说清原因，**绝不因为裁判坏了就判 FAIL**。
+  裁判模型：`FDE_JUDGE_BASE_URL` / `FDE_JUDGE_API_KEY` / `FDE_JUDGE_MODEL` 另配一个最客观；
+  没配则回落 `operator`（**自己判自己**），报告会显式标注这一点。`--no-judge` 只跑确定性层。
+  每个要点引用的事实都出自 `x_b_facts`（现算的权威事实包），失败时可逐条人工复核裁判。
 
 已知能力边界（如实记录，不假装覆盖）
 ----------------------------------
@@ -50,6 +58,8 @@
     python scripts/verify_agent_quality.py --dry            # 只算 ground truth，不打扰模型
     python scripts/verify_agent_quality.py --repeat 3       # 每条跑 3 次，报告通过率
     python scripts/verify_agent_quality.py --list           # 只列场景
+    python scripts/verify_agent_quality.py --no-judge       # B 类不调裁判（只跑确定性层）
+    python scripts/verify_agent_quality.py --skip-tag 越权写入被挡住   # 跳过会诱使写数据的场景
 
 前置（都要在跑之前就绪）：`python main.py`、`python -m fde_platform.agent_service`、
 `/llm` 里配好 operator 模型、以及一套造好的 PSC 数据（`宣传/demo_build.py` +
@@ -260,6 +270,42 @@ def x_projection_min(args):
     return {"balance": lo["balance"], "biz_date": lo["biz_date"], "rows": len(rows)}
 
 
+def x_breaches(args):
+    """有预警的物料 + 各自首次预警日 + 最差余额（A2 用）。"""
+    rows = _items(call("inventory_projection", "list", size=1000))
+    breach = [r for r in rows if r["alert_type"] in ("缺货", "击穿最低", "击穿安全")]
+    first = {}
+    for r in breach:            # list 按日期升序 → 首次出现即最早那天
+        first.setdefault(r["material_no"], r["biz_date"])
+    worst = min(breach, key=lambda r: r["balance"]) if breach else {}
+    return {"materials": sorted(first), "first_breach": first,
+            "worst_balance": worst.get("balance"), "worst_date": worst.get("biz_date"),
+            "shortage": sorted({r["material_no"] for r in breach if r["alert_type"] == "缺货"})}
+
+
+def x_b_facts(args):
+    """B 类共用的权威事实包：要点里引用的每个数字都出自这里，便于人工复核裁判。"""
+    dp = _items(call("demand_pool", "list", status="待下达", size=200))
+    brk = next((r for r in dp if r["material_no"] == "BYD-HAN-BRK"), {})
+    plan = next((p for p in _items(call("outbound_plan", "list", size=200))
+                 if p["material_no"] == "BYD-HAN-BRK"), {})
+    iv = {r["material_no"]: r for r in
+          _items(call("inventory_strategy", "list", version_no="202610", size=200))}
+    mp = _items(call("master_plan", "list", size=200))
+    brk_iv = iv.get("BYD-HAN-BRK") or {}
+    top = sorted(((m, (r.get("upper") or 0)) for m, r in iv.items()), key=lambda kv: -kv[1])[:3]
+    return {"brk_qty": brk.get("replenish_qty"), "brk_type": brk.get("replenish_type"),
+            "brk_required": brk.get("required_inbound"),
+            "brk_out_date": plan.get("out_date"), "brk_out_qty": plan.get("qty"),
+            "brk_hedge": brk_iv.get("hedge_tool"), "brk_min_level": brk_iv.get("min_level"),
+            "brk_upper": brk_iv.get("upper"),
+            "top_upper_1": top[0][1] if top else None,
+            "top_upper_material": top[0][0] if top else None, "top_upper": top,
+            "mp_dates": sorted({r["latest_inbound_date"] for r in mp if r["latest_inbound_date"]}),
+            "mp_materials": [r["material_no"] for r in mp],
+            "dp_count": len(dp), "dp_types": {r["material_no"]: r["replenish_type"] for r in dp}}
+
+
 def x_planner_surface(args):
     """planner01 的**有效授权**集合（与 /agent-admin/permission 同源）+ 未授权应用清单。
 
@@ -327,21 +373,34 @@ def preflight(client):
 
     try:
         ctx = env_context()
-        if ctx["materials"] != 7:
-            problems.append(f"不是演示环境：物料 {ctx['materials']} 个（应 7）。"
+        if ctx["missing_materials"]:
+            problems.append(f"不是演示环境：缺少设计中的物料 {ctx['missing_materials']}。"
                             f"请跑 宣传/demo_build.py")
         if ctx["replenishments"] < 1:
             problems.append("没有待下达的补库单：数据未推进到「补库已生成」状态，"
                             "请跑 宣传/demo_prerun.py 并跑一次产销协同链")
+        if ctx["breaches"] < 1:
+            problems.append("推移表没有任何击穿/缺货预警：推演未按版本开库日刷新过，"
+                            "或水位策略未算。请重跑产销协同链")
     except Exception as e:
         problems.append(f"数据自检失败：{type(e).__name__}: {e}")
     return (not problems), problems
 
 
+# 演示设计里的 7 个物料：按**身份**校验，不按数量——
+# 「凌晨同步新料」是演示里的一环，跑过之后物料数就该是 8（多出 BYD-HAN-FB27）。
+# 用数量卡会把「环境更完整了」判成「环境不对」。
+DEMO_MATERIALS = ("BYD-HAN-BRK", "BYD-HAN-FB25", "BYD-HAN-FB26", "BYD-HAN-RB26",
+                  "BYD-HAN-SPARM", "BYD-HAN-WIR", "M9-BEAM")
+
+
 def env_context():
+    mats = [m["material_no"] for m in _items(call("md_material", "list", size=200))]
     return {
-        "materials": len(_items(call("md_material", "list", size=200))),
+        "materials": len(mats),
+        "missing_materials": [m for m in DEMO_MATERIALS if m not in mats],
         "replenishments": x_replenishments({})["count"],
+        "breaches": len(x_breaches({})["materials"]),
         "active_version": call("md_monthly_version", "get_active"),
     }
 
@@ -548,6 +607,67 @@ def _final_answer(msgs):
     return ""
 
 
+# ── 裁判（B 类 rubric：判定权在人，裁判只做符合性二值判断）──────
+
+JUDGE_SYS = (
+    "你是验收裁判。输入：一个业务问题、一份**期望要点清单**、以及待验收的回答。\n"
+    "逐条判断该回答**是否满足**该要点，只输出 JSON，不要任何前后缀：\n"
+    '{"verdicts":[{"point":1,"verdict":"yes"|"no"|"unsure","reason":"<一句话，引用回答里的原话>"}]}\n'
+    "判定纪律：\n"
+    "1) 回答明确满足要点 → yes；换个说法但实质到位也算 yes。\n"
+    "2) 没提到、说得含糊、或说反了 → no。\n"
+    "3) 你拿不准（信息不足、或要点本身有歧义）→ unsure。**不要猜** —— unsure 会被单独处理，"
+    "不算被验收方答错。\n"
+    "4) 回答写得漂亮不代表满足要点；只判要点本身。\n"
+    "5) 数字写法不同（5180.93 / 5,180.9 / 约 5181 / 负号写法）不影响判定。"
+)
+
+
+def judge_provider():
+    """裁判模型：优先用 FDE_JUDGE_* 另配（避开「自己判自己」的盲点）；
+    没配则回落 operator，并在报告里标注「同模型自判」。返回 (provider, 名字, 是否同模型)。"""
+    from fde_platform import llm
+    base = (os.environ.get("FDE_JUDGE_BASE_URL") or "").strip()
+    key = (os.environ.get("FDE_JUDGE_API_KEY") or "").strip()
+    model = (os.environ.get("FDE_JUDGE_MODEL") or "").strip()
+    if base and key and model:
+        return llm.OpenAICompatProvider(base, key, model, temperature=0.0), model, False
+    # 判定「有没有可用模型」用 effective_source（库内配置 ∪ 环境变量回退），
+    # 别自己拼 profile 字段——我第一版按 prof["enabled"] 判，字段名不对，
+    # 于是「模型明明配了」却把 B 类全判成未配置、静默 SKIP。
+    if llm.effective_source("operator") == "none":
+        return None, None, False
+    prof = llm.load_profile("operator") or {}
+    return llm.get_provider("operator"), (prof.get("model") or "?"), True
+
+
+def judge_rubric(provider, question, points, answer):
+    """逐要点判定 → [{point, text, verdict, reason}]。
+
+    裁判失效（没回 JSON / 条数对不上）时**抛异常**，由调用方转成 SKIP —— 绝不因为裁判坏了
+    就判被验收方 FAIL（那会把「工具不可靠」记成「答案不对」）。
+    """
+    items = "\n".join(f"{i}. {p}" for i, p in enumerate(points, 1))
+    r = provider.chat([
+        {"role": "system", "content": JUDGE_SYS},
+        {"role": "user", "content": f"【业务问题】\n{question}\n\n【期望要点】\n{items}\n\n"
+                                    f"【待验收的回答】\n{answer}"}])
+    text = (r.get("content") or "").strip()
+    m = re.search(r"\{.*\}", text, re.S)
+    if not m:
+        raise ValueError(f"裁判没回 JSON：{text[:120]}")
+    data = json.loads(m.group(0))
+    got = {int(v.get("point") or 0): v for v in (data.get("verdicts") or [])}
+    out = []
+    for i, p in enumerate(points, 1):
+        v = got.get(i) or {}
+        verdict = v.get("verdict")
+        out.append({"point": i, "text": p,
+                    "verdict": verdict if verdict in ("yes", "no", "unsure") else "unsure",
+                    "reason": (v.get("reason") or "裁判未给出该条判定")})
+    return out
+
+
 # ── 断言 ────────────────────────────────────────────────
 
 _NUM = re.compile(r"-?\d+(?:[.,]\d+)?")
@@ -580,6 +700,18 @@ def num_present(text, value, tol=0.01):
     return False
 
 
+def _date_forms(iso: str):
+    """一个 ISO 日期的常见写法（答案里怎么写的都得认）。"""
+    y, m, d = str(iso).split("-")
+    mi, di = str(int(m)), str(int(d))
+    return (f"{y}-{m}-{d}", f"{y}年{mi}月{di}日", f"{y}年{mi}月{di}",
+            f"{m}-{d}", f"{mi}-{di}", f"{mi}月{di}日", f"{mi}月{di}")
+
+
+def date_present(text, iso):
+    return any(f in (text or "") for f in _date_forms(iso))
+
+
 def flat_numbers(gt, keys):
     """从 ground truth 里取出待校验的数值（支持 list / 嵌套 dict）。"""
     out = []
@@ -605,6 +737,12 @@ def check_case(case, gt, run, strict_read_only=True):
         hit = sorted(tools & set(any_of))
         res.append((bool(hit), "L1", f"调用了预期工具 {hit or '（一个都没有）'}"
                                      f"；实际 {sorted(tools)[:6]}"))
+    for grp in (exp.get("must_call_groups") or []):
+        # 每组里至少调一个：用于「这题的命门就是必须去查 X」——OR 语义的 must_call_any 会放过去
+        hit = sorted(tools & set(grp))
+        res.append((bool(hit), "L1",
+                    f"这组里至少要调一个 {grp}（实际 {sorted(tools)}）" if not hit
+                    else f"这组已覆盖 {hit}"))
     neg = exp.get("must_not_call")
     if neg:
         bad = sorted(tools & set(neg))
@@ -624,6 +762,12 @@ def check_case(case, gt, run, strict_read_only=True):
     if need:
         for v in flat_numbers(gt, need):
             res.append((num_present(ans, v), "L2", f"答案里应出现权威值 {v}"))
+    for key in (exp.get("date_must_appear") or []):
+        # 日期断言**必须取自现算的权威值**：写死日期会在数据一变就变成假红
+        # （A11 原来写死 2026-10-10，重跑一遍数据后权威值成了 2026-10-01）
+        v = gt.get(key)
+        res.append((bool(v) and date_present(ans, str(v)), "L2",
+                    f"答案里应出现权威日期 {v}"))
     setkey = exp.get("gt_set_from")
     if setkey:
         want = gt.get(setkey) or []
@@ -678,7 +822,7 @@ def load_cases():
     return out
 
 
-def run_one(case, verbose=True):
+def run_one(case, verbose=True, judge=None, no_judge=False):
     """跑一条场景 → 结果 dict。SKIP 与 FAIL 严格分开。"""
     cid, tag = case["id"], case.get("tag", "")
     turns = case.get("turns") or [case["question"]]
@@ -736,8 +880,39 @@ def run_one(case, verbose=True):
                                    f"{before['demand_pool']} 补库单）"))
 
     bad = [c for c in checks if not c[0]]
-    return {"id": cid, "tag": tag, "status": "PASS" if not bad else "FAIL",
+
+    # ── L4 裁判（B 类）：要点全中才 PASS；出现 no → FAIL；只有 unsure → SKIP ──
+    # 「裁判拿不准」与「答得不对」必须分开：前者是**工具**的不确定，记成 FAIL 就是冤枉被验收方。
+    rubric = case.get("rubric") or []
+    verdicts, judge_err = [], None
+    if rubric:
+        if no_judge:
+            judge_err = "本轮 --no-judge：rubric 未判定（只跑了确定性层）"
+        elif judge is None:
+            judge_err = "B 类需要裁判，但 operator 模型未配置"
+        else:
+            try:
+                verdicts = judge_rubric(judge, " / ".join(turns), rubric, run["answer"])
+            except Exception as e:
+                judge_err = f"裁判失效（{type(e).__name__}: {e}）"
+
+    unsure = [v for v in verdicts if v["verdict"] == "unsure"]
+    if bad:
+        status = "FAIL"
+    elif judge_err:
+        status = "SKIP"
+    elif any(v["verdict"] == "no" for v in verdicts):
+        status = "FAIL"
+    elif unsure:
+        status = "SKIP"
+    else:
+        status = "PASS"
+    why = judge_err or ("裁判拿不准（不算答错）：" + "；".join(
+        f"要点 {v['point']}：{v['reason']}" for v in unsure) if unsure else None)
+
+    return {"id": cid, "tag": tag, "status": status,
             "question": turns[0], "gt": gt, "checks": checks, "failed": bad,
+            "rubric_verdicts": verdicts, "why": why,
             "answer": run["answer"], "tool_names": run["tool_names"],
             "tool_calls": run["tool_calls"], "confirm": run["confirm"],
             "error": run["error"], "elapsed": run["elapsed"], "events": len(run["events"])}
@@ -754,6 +929,8 @@ def main():
     ap.add_argument("--list", action="store_true", help="只列场景")
     ap.add_argument("--no-env-findings", action="store_true")
     ap.add_argument("--show-answer", action="store_true", help="打印每条场景的原始回答与工具轨迹")
+    ap.add_argument("--no-judge", action="store_true",
+                    help="不调裁判（B 类只跑确定性层，rubric 记 SKIP 并说明）")
     args = ap.parse_args()
 
     cases = load_cases()
@@ -799,12 +976,24 @@ def main():
         print("\nVERIFY_RESULT: ENV_NOT_READY")
         return 2
 
+    # 裁判只解析一次（B 类共用）：优先外部模型，没配回落 operator 并显式标注「自己判自己」
+    judge, judge_model, same_model = (None, None, False) if args.no_judge else judge_provider()
+    if any(c.get("rubric") for c in cases):
+        if judge is None:
+            print(_c("warn", "裁判：未配置（B 类会 SKIP）——operator 模型没配？"))
+        else:
+            print(f"裁判：{judge_model}" + (
+                _c("warn", "（⚠ 与考生同一模型；要客观版请配 "
+                           "FDE_JUDGE_BASE_URL / FDE_JUDGE_API_KEY / FDE_JUDGE_MODEL）")
+                if same_model else "（外部模型）"))
+
+    start_fp = fingerprint()
     results = []
     for c in cases:
         for k in range(max(1, args.repeat)):
             tag = f" (第 {k + 1}/{args.repeat} 次)" if args.repeat > 1 else ""
             print(f"\n[{c['id']}] {c.get('tag', '')}{tag}")
-            r = run_one(c)
+            r = run_one(c, judge=judge, no_judge=args.no_judge)
             results.append(r)
             mark = {"PASS": _c("ok", "✓ PASS"), "FAIL": _c("bad", "✗ FAIL"),
                     "SKIP": _c("warn", "— SKIP")}[r["status"]]
@@ -814,6 +1003,12 @@ def main():
             for okc, layer, note in r.get("checks", []):
                 if not okc:
                     print(_c("bad", f"        ✗ [{layer}] {note}"))
+            for v in r.get("rubric_verdicts", []):
+                mark = {"yes": _c("ok", "✓"), "no": _c("bad", "✗"),
+                        "unsure": _c("warn", "?")}[v["verdict"]]
+                print(f"        {mark} [L4要点{v['point']}] {v['text'][:52]}")
+                if v["verdict"] != "yes" or args.show_answer:
+                    print(f"             └ {v['verdict']}: {v['reason'][:150]}")
             if args.show_answer or r["status"] == "FAIL":
                 if r.get("tool_names"):
                     print(f"        工具轨迹: {r['tool_names']}")
@@ -855,6 +1050,24 @@ def main():
         print("环境发现（与 agent 对错无关，但会解释上面的跳过，且本身就是信号）：")
         for f in env_findings():
             print(f"  ! {f}")
+
+    # 整轮完整性：智能体有可能自己调写服务（A2 就真实发生过——它为了「确保数据最新」
+    # 去 refresh + calc_batch，把当月版本的水位和补库单都造了出来）。单条 L0 已能抓到，
+    # 这里再给一次全局结论，并把还原命令写清楚。
+    try:
+        diff = {k: (start_fp[k], fingerprint()[k]) for k in start_fp
+                if start_fp[k] != fingerprint()[k]}
+        if diff:
+            print(_c("warn", "\n⚠ 跑完这一轮，业务数据已被改动（智能体调了写服务）："))
+            for k, v in diff.items():
+                print(f"    {k}: {v[0]} → {v[1]}")
+            print("  还原：python 宣传/demo_build.py  →  ERP 同步导 FB27  →  "
+                  "python 宣传/demo_prerun.py  →  python 宣传/_run_flow_once.py")
+        else:
+            print(f"\n业务数据整轮未被改动（{start_fp['materials']} 物料 / "
+                  f"{start_fp['demand_pool']} 补库单）")
+    except Exception as e:
+        print(f"\n整轮完整性检查失败：{type(e).__name__}: {e}")
 
     print("=" * 78)
     if failed:
