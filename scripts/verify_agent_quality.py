@@ -46,6 +46,11 @@
 - `/api/agent2/sessions/<sid>/messages` 会**丢弃 `role=tool` 的消息**，所以拿不到工具
   返回的原文 → 做不了"答案里的数字必须能在工具返回里找到"这种更硬的防幻觉断言，
   只能与 ground truth 直接比对。
+- **权限边界只管「服务面」，不管「文件面」**：智能体还有 AgentScope 的 `Glob`/`Read`
+  这类**代码库文件工具**（不局限于会话工作区）。实测 C1 里 planner01 的智能体就用
+  `Glob`+`Read` 读了 `app/psc/_contracts.md` 与各应用源码，把**全部 19 个应用的服务
+  清单**列了出来——包括它未授权的 8 个。「调用」仍被 `is_effectively_granted` 挡住
+  （越权调服务会失败），但**目录级信息是漏的**，且理论上可达 `config/` 下的密钥文件。
 - 智能体**自己可能调写服务**（如 `inventory_projection.refresh_batch`）。本脚本不主动
   触发写，但**会检测并报告**（`read_only: true` 的场景里一旦发现写调用即判失败）。
   若报告里出现写调用，演示数据可能已变化，需要重跑 `宣传/demo_build.py` 还原。

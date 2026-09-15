@@ -711,8 +711,8 @@ def api_agent2_proxy(path):
 # ── agent_service 适配层（多智能体 leader，协议与前端 agent_rail / agent 页对接）────────
 # 后端封装 agent_service 细节：credential/agent 初始化、chat 触发+SSE 翻译、HITL 缓存。
 
-_AGENT2_CRED = None
-_AGENT2_AGENTS: dict[str, str] = {}  # group -> leader agent_id（"" = 总编排 / 首页跨组）
+_AGENT2_CRED: dict[str, str] = {}              # 用户名 -> credential_id
+_AGENT2_AGENTS: dict[tuple, str] = {}          # (用户名, 组) -> leader agent_id（"" = 总编排 / 首页跨组）
 _AGENT2_MODEL = None
 _AGENT2_PENDING = {}  # session_id -> {"reply_id": str, "tool_calls": [ToolCallBlock]}
 
@@ -826,15 +826,22 @@ def _agent2_group() -> str:
 
 
 def _ensure_agent2(group: str = "") -> str | None:
-    """确保 credential + 对应组的 leader agent 存在，返回 agent_id（幂等，按组缓存）。
+    """确保**当前用户**的 credential + 该组的 leader agent 存在，返回 agent_id。
 
-    credential / model 全局共享（只建一次）；leader 按组各建一个（组收窄业务部分）。
+    幂等，缓存键是 **(用户名, 组)**。
+
+    **为什么按用户分**：上游 agent_service 用 `X-User-ID` 做租户隔离，credential 与
+    agent 都是**租户内资源**。原先 credential 只建一次全局共享、leader 按组缓存，
+    于是资源建在「第一个触发者」的租户下；后来者拿着别人的 id 去建会话，上游按租户
+    找不到 → **404**，前端只显示「会话创建失败」——即**除第一个用过该组的用户，其他人
+    根本用不了 Agent 对话**（实测：admin 建会话 201，planner01 立刻 404）。
     """
-    global _AGENT2_CRED, _AGENT2_MODEL
-    if not _AGENT2_CRED:
-        u = users.session_user()
-        if u is None:
-            return None
+    global _AGENT2_MODEL
+    u = users.session_user()
+    if u is None:
+        return None
+    who = u["username"]
+    if who not in _AGENT2_CRED:
         from fde_platform import llm
         p = llm.load_profile("operator")
         if not p:
@@ -847,35 +854,47 @@ def _ensure_agent2(group: str = "") -> str | None:
                 "base_url": p["base_url"],
             }}, headers=headers, timeout=30)
             r.raise_for_status()
-            _AGENT2_CRED = r.json()["credential_id"]
+            _AGENT2_CRED[who] = r.json()["credential_id"]
             _AGENT2_MODEL = p["model"]
         except Exception:
-            _AGENT2_CRED = None
+            _AGENT2_CRED.pop(who, None)
             return None
-    if group not in _AGENT2_AGENTS:
+    key = (who, group)
+    if key not in _AGENT2_AGENTS:
         headers = _agent2_headers()
         name = f"leader_{group}" if group else "leader"
-        # 优先复用已有 leader（按 name 查），避免进程重启后 agent_id 变化导致历史会话查不到
+        # 优先复用已有 leader（按 name 查，查的是**本租户**内的 agent），
+        # 避免进程重启后 agent_id 变化导致历史会话查不到
         try:
             r = httpx.get(f"{AGENT2_BASE}/agent/", headers=headers, timeout=30)
             r.raise_for_status()
             for a in r.json().get("agents") or []:
                 data = a.get("data") or {}
                 if data.get("name") == name and a.get("id"):
-                    _AGENT2_AGENTS[group] = a["id"]
-                    return _AGENT2_AGENTS[group]
+                    _AGENT2_AGENTS[key] = a["id"]
+                    return _AGENT2_AGENTS[key]
         except Exception:
             pass
-        # 没找到：新建
+        # 没找到：在本租户里新建
         try:
             r = httpx.post(f"{AGENT2_BASE}/agent/", json={
                 "name": name, "system_prompt": _leader_prompt(group),
             }, headers=headers, timeout=30)
             r.raise_for_status()
-            _AGENT2_AGENTS[group] = r.json()["agent_id"]
+            _AGENT2_AGENTS[key] = r.json()["agent_id"]
         except Exception:
             return None
-    return _AGENT2_AGENTS[group]
+    return _AGENT2_AGENTS[key]
+
+
+def _agent2_cred(group: str = "") -> str | None:
+    """当前用户的 credential_id（没有就先建）。"""
+    u = users.session_user()
+    if u is None:
+        return None
+    if u["username"] not in _AGENT2_CRED and _ensure_agent2(group) is None:
+        return None
+    return _AGENT2_CRED.get(u["username"])
 
 
 def _agent2_new_session(group: str = "") -> str | None:
@@ -889,7 +908,7 @@ def _agent2_new_session(group: str = "") -> str | None:
             "agent_id": agent_id,
             "name": "对话",
             "chat_model_config": {
-                "type": "deepseek_credential", "credential_id": _AGENT2_CRED,
+                "type": "deepseek_credential", "credential_id": _agent2_cred(group),
                 "model": _AGENT2_MODEL or "deepseek-v4-pro",
                 "parameters": {},
             },
@@ -1337,7 +1356,7 @@ def api_agent_schedule_create():
         "timezone": _local_timezone(),
         "agent_id": agent_id,
         "chat_model_config": {
-            "type": "deepseek_credential", "credential_id": _AGENT2_CRED,
+            "type": "deepseek_credential", "credential_id": _agent2_cred(),
             "model": _AGENT2_MODEL or "deepseek-v4-pro", "parameters": {},
         },
         "enabled": bool(data.get("enabled", True)),
