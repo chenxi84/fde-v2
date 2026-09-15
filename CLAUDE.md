@@ -9,6 +9,7 @@ python main.py                                    # 启动平台 → http://127.
 python -m fde_platform.scanner                    # 跨应用调用契约静态扫描（有问题退出码 1，可入 CI）
 python -m fde_platform.mcp_server [--user admin]  # 本地 stdio MCP 服务，暴露全部应用（供外部 AI 工具接入）
 python scripts/verify_mcp_http.py                 # 远端 MCP 端点（POST /mcp）end-to-end 验收（需 dev server 在跑）
+python scripts/verify_agent_quality.py            # 与平台智能体真对话，校验分析/决策结论是否等于权威值（需平台+agent_service+LLM 在跑，对着真实演示数据）
 ```
 
 测试（每个脚本自包含、独立运行；**必须先停掉 dev server**）：
