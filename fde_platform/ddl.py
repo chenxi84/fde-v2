@@ -54,7 +54,94 @@ def build_ddl(sql_text: str, dialect: str = "sqlite") -> list:
     return [e.sql(dialect=dialect) for e in exprs]
 
 
-def execute_schema(conn, sql_text: str, dialect: str = "sqlite") -> None:
-    """对连接执行 schema.sql 的全部建表语句。"""
+def declared_columns(sql_text: str) -> dict:
+    """schema.sql 声明的 {表名: [列定义表达式]}（含平台注入的审计列）。"""
+    exprs = parse_schema(sql_text)
+    for e in exprs:
+        _inject_audit_columns(e)
+    out = {}
+    for e in exprs:
+        if not (isinstance(e, exp.Create) and e.kind == "TABLE"):
+            continue
+        schema = e.this
+        if not isinstance(schema, exp.Schema):
+            continue
+        table = schema.this
+        name = getattr(table, "name", None) or str(table)
+        out[str(name)] = [c for c in schema.expressions if isinstance(c, exp.ColumnDef)]
+    return out
+
+
+def _existing_columns(conn, table: str, dialect: str) -> set:
+    """现有表已有哪些列（小写）。表不存在 → 空集合。"""
+    if dialect == "postgres":
+        cur = conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
+            (table,),
+        )
+    else:
+        cur = conn.execute(f'PRAGMA table_info("{table}")')
+    rows = cur.fetchall() or []
+    names = set()
+    for r in rows:
+        # sqlite 走 PRAGMA 时第 1 列是列名；PG 查询就是列名本身。
+        # 行可能是 tuple 也可能是 Row/dict（平台各连接工厂不同），两种都兼容。
+        v = None
+        try:
+            v = r[1] if dialect != "postgres" else r[0]
+        except Exception:
+            v = None
+        if v is None:
+            try:
+                v = r["name"] if dialect != "postgres" else r["column_name"]
+            except Exception:
+                v = None
+        if v is not None:
+            names.add(str(v).lower())
+    return names
+
+
+def reconcile_columns(conn, sql_text: str, dialect: str = "sqlite") -> list:
+    """**对账补列**：把已有表补齐到 schema.sql 的声明（缺哪列补哪列）。
+
+    为什么需要它：`CREATE TABLE IF NOT EXISTS` 只在**表**不存在时生效，表已存在就整句
+    跳过——所以往 schema.sql 里加一列，对**已有库**毫无作用，之后任何读写该列都会
+    `no such column`。而重跑建库脚本也补不上（演示环境的重置是清空行、不删库文件）。
+
+    只做加法（补列），**绝不删列/删表**——少一列报错是显式的，删一列丢数据是静默的。
+
+    返回补过的列（`["表.列", ...]`），供调用方记日志。不可补的情况（如 NOT NULL 且
+    无默认值/主键列）**直接报错**，不做"悄悄降级成可空"——那会让库与声明长期不一致。
+    """
+    added = []
+    for table, cols in declared_columns(sql_text).items():
+        have = _existing_columns(conn, table, dialect)
+        if not have:            # 表刚建好（或根本不存在）→ 无需对账
+            continue
+        for col in cols:
+            name = col.name
+            if not name or name.lower() in have:
+                continue
+            stmt = f'ALTER TABLE "{table}" ADD COLUMN {col.sql(dialect=dialect)}'
+            try:
+                conn.execute(stmt)
+            except Exception as e:
+                raise RuntimeError(
+                    f"[ddl] 表 {table} 缺列 {name}，但无法自动补：{type(e).__name__}: {e}。"
+                    f"该列声明为 NOT NULL 却没有默认值（或它是主键/唯一约束的一部分）——"
+                    f"这种列在已有表上补不了。请给它一个 DEFAULT，或手工迁移该表。"
+                ) from e
+            added.append(f"{table}.{name}")
+    return added
+
+
+def execute_schema(conn, sql_text: str, dialect: str = "sqlite", reconcile: bool = True) -> list:
+    """对连接执行 schema.sql 的全部建表语句，并把已有表补到与声明一致。
+
+    返回补过的列列表（`["表.列", ...]`）；无变化时为空。
+    """
     for stmt in build_ddl(sql_text, dialect):
         conn.execute(stmt)
+    if not reconcile:
+        return []
+    return reconcile_columns(conn, sql_text, dialect)

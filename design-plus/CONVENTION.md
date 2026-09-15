@@ -149,7 +149,12 @@ result = self.fde.call("forecast", "latest", month="2026-08")
 
 - **`schema.sql`**：每个聚合根目录内**必须**放置的 DDL 文件（与 `<应用>.py` 同级），用 SQLite 方言纯 SQL
   声明本应用的全部表与索引（`CREATE TABLE IF NOT EXISTS ...` + `CREATE [UNIQUE] INDEX ...`）。这是应用声明自身数据结构的唯一地方。
-- **平台加载时建表**：平台读取 `schema.sql`，经 DDL 引擎（`fde_platform/ddl.py`）解析——① 注入 `created_at/updated_at/created_by/updated_by` 四个审计列；② 按方言生成 DDL（SQLite 原样 / PostgreSQL transpile）；③ 建表建索引。
+- **平台加载时建表**：平台读取 `schema.sql`，经 DDL 引擎（`fde_platform/ddl.py`）解析——① 注入 `created_at/updated_at/created_by/updated_by` 四个审计列；② 按方言生成 DDL（SQLite 原样 / PostgreSQL transpile）；③ 建表建索引；④ **对账补列**（见下）。
+- **加列 ✓ / 删列 ✗（schema 演进）**：`CREATE TABLE IF NOT EXISTS` 只在**表**不存在时生效，表已存在就整句跳过——所以**往 `schema.sql` 里加一列，对已有库毫无作用**，之后读写该列会 `no such column`（且重跑建库脚本也补不上：演示环境的"重置"是清空行、不删库文件）。
+  为此加载时会**对账**：读现有表的列 → 与 `schema.sql` 声明比对 → 缺的列 `ALTER TABLE ADD COLUMN`（同时补平台审计列）。补了哪些列会记 `INFO` 日志（不静默）。
+  - **只做加法，绝不删列/删表**：少一列报错是显式的，自动删一列丢数据是静默的。
+  - **不可补的列直接报错**（如 `NOT NULL` 且无 `DEFAULT`、或主键/唯一约束列）——SQLite 在非空表上加不了这种列。报错信息会说明"给它一个 DEFAULT 或手工迁移"，**不做"悄悄降级成可空"**（那会让库与声明长期不一致）。所以：**新增列请给 `DEFAULT`**。
+  - 验收：`python scripts/verify_ddl_reconcile.py`（老库补列、幂等、新库空操作、不可补报错、只加不删）。
 - **DDL 子集白名单**：仅支持 `CREATE TABLE`（类型 `TEXT/INTEGER/REAL/DATETIME/TIMESTAMP`，列级/表级 `PRIMARY KEY`、`NOT NULL`、`UNIQUE`、`DEFAULT`、`CHECK`）与 `CREATE [UNIQUE] INDEX`。触发器/视图/存储过程/外键不在子集内。
 - **应用不再写 `_init_db`**：建表逻辑从代码抽离到 `schema.sql`，应用类里无 `_init_db` 方法。
 - **平台自动审计**：`schema.sql` 里的 `CREATE TABLE`，平台自动追加 4 个审计列；应用 `INSERT`/`UPDATE` 里平台自动注入当前时间与 `self.ctx["userno"]` 到对应审计列——应用零感知。

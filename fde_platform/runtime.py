@@ -10,6 +10,7 @@
 4. **跨应用路由**：`self.fde.call` 按名运行期解析，`ctx` 自动透传且**不可伪造**（§4.1/§5）。
 """
 import importlib.util
+import logging
 import sqlite3
 import time
 from fde_platform import db, ddl
@@ -18,6 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from fde import FdeError
+
+_logger = logging.getLogger(__name__)
 from fde_platform import builtin_tools, introspect
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -222,8 +225,12 @@ class FdePlatform:
         conn = db.get_connection(qn, db_path)
         conn._fde_ctx = dict(self.default_ctx)
         try:
-            ddl.execute_schema(conn, schema_sql, dialect)
+            # 建表 + 与声明对账（已有表缺的列在这里补上——CREATE TABLE IF NOT EXISTS
+            # 对已存在的表整句跳过，加列不会生效）。补了列要让它**可见**，不静默。
+            added = ddl.execute_schema(conn, schema_sql, dialect)
             conn.commit()
+            if added:
+                _logger.info("应用 %s 的库与 schema.sql 对账：补列 %s", qn, "、".join(added))
         finally:
             conn.close()
 
