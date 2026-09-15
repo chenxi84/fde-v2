@@ -360,10 +360,10 @@ def env_findings():
             out.append(
                 f"推移表 {len(proj)} 行**全部标「无预警」**，却有 {len(neg)} 行余额为负"
                 f"（最差 {lo['material_no']} {lo['biz_date']} 余额 {lo['balance']}）。"
-                f"原因：`refresh` 的 biz_date 缺省为**当天**，而 `_version_no_from_date(当天)`"
-                f" 推出的版本没有水位策略 → `_load_water_level` 返回 None → 全标「无」；"
-                f"`scan_alert` 抛的「库存策略记录不存在」被 refresh_batch 静默吞掉。"
-                f"**调用方传错日期不会有任何报错**。→ 本环境里「会不会缺料」不能靠 alert 列回答。")
+                f"**这是修复前写下的陈旧数据**：这些行是 refresh 按错误的 biz_date"
+                f"（缺省当天 → 推出的当月版本没有水位策略）算出来的。该静默降级路径已在"
+                f" BR-12 改成 fail-closed（现在会直接报错、一行不写）。"
+                f"要让数据自洽：按**版本开库日**重跑一次推演，或重跑 宣传/demo_prerun.py + 产销协同链。")
 
         hedge = x_hedge_groups({"version_no": "202610"})
         if hedge["count"] and "速度" not in hedge["groups"]:
@@ -372,10 +372,9 @@ def env_findings():
             out.append(
                 f"7 个物料的水位策略**全是「库存对冲」，没有一个是「速度对冲」**，"
                 f"而业务设计里 BYD-HAN-BRK（高价值+2+1 天）应当是速度对冲。"
-                f"原因：`inventory_strategy.calc_batch` 逐物料调 `_calc_one(..., None)`"
-                f"——**customer_no 传的是 None**，于是判定式 `(生产+物流) <= (线边+调拨提前期)`"
-                f" 里右边恒为 0 → 永远落在「库存对冲」。即**批量路径永远出不了速度对冲**"
-                f"（单物料 `calc(customer_no=...)` 才可能）。本组高价值物料 {hi}。")
+                f"**同样是陈旧数据**：这些行由修复前的 calc_batch 算得（那时它一律传"
+                f" customer_no=None，判定式右边恒为 0）。BR-11 现在会带**主要客户**，"
+                f"重跑 inventory_strategy.calc_batch(version_no=...) 即可看到高价值件{hi}转成速度对冲。")
 
         act = call("md_monthly_version", "get_active")
         if not act:

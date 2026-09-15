@@ -10,6 +10,7 @@
 4. `history_sequence` — 只要数量序列时用它（传单物料或断点链的 `material_nos` + `customer_no`）
 5. `history_series` — 需要「**哪一期**多少量」时用它，返回 `[{period, qty}]`
 6. `purchasing_customers` — 取某物料的历史采购客户集
+7. `main_customer` — 取某物料的**主要客户**（历史出货量最大者；无历史返回 None）。库存策略批量算水位时靠它拿客户缓冲参数
 
 ## 前置条件与禁忌
 

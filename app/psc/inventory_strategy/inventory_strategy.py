@@ -17,7 +17,14 @@ class InventoryStrategy:
         return self._calc_one(version_no, material_no, customer_no)
 
     def calc_batch(self, version_no: str):
-        """整版本批量计算库存策略，逐物料计算，单个物料失败不中断其余物料。"""
+        """整版本批量计算库存策略，逐物料计算，单个物料失败不中断其余物料。
+
+        **逐物料带上它的主要客户**（历史出货量最大者，取自 sales_history.main_customer）：
+        BR-11/12 的对冲选型判的是 `(生产+物流) <= (线边库存+调拨提前期)`，右边是**客户**
+        给的缓冲。不传客户时右边恒为 0，于是「速度对冲」在批量路径**永远出不来**——
+        该分支形同虚设（演示里 BRK 这类高价值短周期件本应是速度对冲）。
+        无历史客户、或客户口径取不到时，回落为不带客户（与旧行为一致，仍是库存对冲）。
+        """
         version_no = self._validate_version(version_no)
         result = self.fde.call("md_material", "list", status="正常")
         materials = result.get("items") if isinstance(result, dict) else result
@@ -30,12 +37,18 @@ class InventoryStrategy:
                 fail += 1
                 errors.append({"material_no": "", "message": "物料号缺失"})
                 continue
+            material_no = str(material_no).strip()
             try:
-                self._calc_one(version_no, str(material_no).strip(), None)
+                customer_no = self.fde.call("sales_history", "main_customer",
+                                            material_no=material_no)
+            except FdeError:
+                customer_no = None      # 客户口径是增强项：取不到不该让这个物料算不出水位
+            try:
+                self._calc_one(version_no, material_no, customer_no)
                 success += 1
             except FdeError as e:
                 fail += 1
-                errors.append({"material_no": str(material_no).strip(), "message": str(e)})
+                errors.append({"material_no": material_no, "message": str(e)})
         return {"total": len(materials), "success": success, "fail": fail, "errors": errors}
 
     def get(self, version_no: str, material_no: str):

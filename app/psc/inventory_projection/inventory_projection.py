@@ -36,6 +36,17 @@ class InventoryProjection:
         inbound_by_date = self._collect_inbound(version_no, material_no)
         outbound_by_date = self._collect_outbound(material_no)
         water = self._load_water_level(version_no, material_no)
+        if water is None:
+            # fail-closed：没有水位策略就**不推演**，而不是产出一张「全标无预警」的表。
+            # 静默降级踩过一次：biz_date 传成当天 → 推出的版本（当月）没有水位策略
+            # （策略按版本开库日算）→ 623 行全标「无」，而余额已经负到 -1357，
+            # 调用方看不到任何异常，还以为「没有缺料风险」。
+            raise FdeError(
+                f"未找到版本 {version_no} 的库存水位策略（物料 {material_no}）：无法判定预警，"
+                f"推演已中止。请先执行 inventory_strategy.calc_batch(version_no=\"{version_no}\")；"
+                f"若该版本不对，请核对 biz_date —— 按 {start_date.strftime('%Y-%m-%d')} "
+                f"推出的是 {version_no}，而水位策略一般是按版本开库日（当月 1 日）算的"
+            )
 
         dates = self._generate_dates(start_date, self.PROJECTION_DAYS)
         start_str = dates[0].strftime("%Y-%m-%d")

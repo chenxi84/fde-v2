@@ -286,6 +286,22 @@ class SalesHistory:
             out = out[-n:]
         return out
 
+    def main_customer(self, material_no: str):
+        """该物料历史出货量最大的客户（无历史返回 None）。
+
+        用途：库存策略的**客户缓冲口径**——线边库存天数 / 调拨提前期是按客户给的，
+        判定「速度对冲 vs 库存对冲」（BR-11/12）必须知道货发给了谁。批量算水位时
+        逐物料取它，比让调用方自己传客户现实。
+        """
+        material_no = self._require(material_no, "物料号")
+        row = self.db.execute(
+            "SELECT customer_no, SUM(qty) AS total_qty FROM sales_history"
+            " WHERE material_no = ? GROUP BY customer_no"
+            " ORDER BY total_qty DESC, customer_no LIMIT 1",
+            (material_no,),
+        ).fetchone()
+        return row["customer_no"] if row else None
+
     def purchasing_customers(self, material_no: str = None):
         """历史采购客户集（去重升序，可按物料收窄），供销售预测清单客户维度。"""
         material_no = self._clean(material_no)

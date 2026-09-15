@@ -83,7 +83,9 @@ def wait_up(port, timeout=30):
     raise RuntimeError("platform 未在限定时间内启动")
 
 
-# 造数链（§0 自足字典）：md_material.create(M1) → inventory_projection.refresh(M1, "2026-08-15", opening_stock=0)
+# 造数链（§0 自足字典）：md_material.create(M1) → update 补齐水位参数 →
+# inventory_strategy.calc(202608, M1) → inventory_projection.refresh(M1, "2026-08-15", opening_stock=0)
+# （refresh 是 fail-closed 的：没有水位策略就拒绝推演，所以必须**先算水位再推演**）
 SEED_JS = r"""async () => {
   const call = async (app, svc, params) => {
     const r = await fetch(`/api/apps/psc/${app}/call/${svc}`, {
@@ -111,6 +113,17 @@ SEED_JS = r"""async () => {
     material_no: "M1",
     material_name: "测试物料A",
     status: "正常"
+  });
+  // 补齐算水位所需参数，先把 202608 的水位算出来（refresh fail-closed 的前置）
+  await call("md_material", "update", {
+    material_no: "M1",
+    service_level: 0.95,
+    prod_days: 3,
+    logistics_days: 2
+  });
+  await call("inventory_strategy", "calc", {
+    version_no: "202608",
+    material_no: "M1"
   });
   const ip = unwrap(await call("inventory_projection", "refresh", {
     material_no: "M1",

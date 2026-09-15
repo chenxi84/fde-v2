@@ -12,7 +12,7 @@
 ## 前置条件与禁忌
 
 - **用 `refresh_batch`，不要用单物料版 `refresh`**——后者是界面逐物料刷新用的，**不在你的工具表里**；逐物料调既慢，又容易只刷一半。
-- **依赖须先就绪**：预警扫描依赖 `inventory_strategy.get_water_level` 提供 A/C/B 水位，**无策略记录无法预警**（报「库存策略记录不存在，无法扫描预警」→ 先去算水位）；推演依赖 `master_plan.get_latest` 提供预计入库量。
+- **依赖须先就绪（硬前置，fail-closed）**：推演要拿 `inventory_strategy.get_water_level` 的 A/C/B 水位来判预警，**取不到水位就直接报错、一行都不写**（报「未找到版本 X 的库存水位策略（物料 Y）」→ 先 `inventory_strategy.calc_batch(version_no=X)`，或核对 `biz_date` 是不是**版本开库日**——按当天推会得到当月版本，而水位策略是按开库日算的，这是一个常见错配）。推演还依赖 `master_plan.get_latest` 提供预计入库量。
 - **预警判定**：`balance < 0` 缺货；`0 ≤ balance < A` 击穿最低；`A ≤ balance < A+C` 击穿安全；`balance > B` 超储。「呆滞」阈值未定义，当前不产出。
 - `list` 默认只显示当日及以后（历史记录隐藏不删除；指定具体历史日期可回看）。
 - 重复 `scan_alert` 幂等，但同一物料持续击穿时每次都可能重复触发补库单——**去重策略待业务确认，不要自作主张去重**。

@@ -59,12 +59,12 @@ publish(version_no*)
  "material_no": "BYD-HAN-BRK",
  "rolling_month": "N+1",
  "forecast_qty": 1629.6,
- "inventory_qty": 0.0,
- "gross_qty": 1629.6,
+ "inventory_qty": 1576.84,
+ "gross_qty": 3206.4399999999996,
  "open_order_qty": 0.0,
  "onhand_qty": 0.0,
  "in_transit_qty": 0.0,
- "net_qty": 1629.6
+ "net_qty": 3206.4399999999996
 }
 ```
 
@@ -95,7 +95,7 @@ release(replenish_no*, promised_inbound=None:string)
 ### list 返回项示例
 ```json
 {
- "replenish_no": "RP202609130001",
+ "replenish_no": "RP202609140001",
  "material_no": "BYD-HAN-BRK",
  "replenish_type": "最低库存补库",
  "replenish_qty": 151.64,
@@ -129,11 +129,11 @@ scan_alert(material_no*, version_no=None:string)
 ```json
 {
  "material_no": "BYD-HAN-BRK",
- "biz_date": "2026-10-01",
+ "biz_date": "2026-09-15",
  "inbound_qty": 0.0,
  "outbound_qty": 0.0,
  "balance": 0.0,
- "alert_type": "击穿最低"
+ "alert_type": "无"
 }
 ```
 
@@ -202,7 +202,7 @@ list(version_no=None:string, material_no=None:string, page=None:integer, size=No
  "version_no": "202610",
  "rolling_month": "N+1",
  "plan_version": 1,
- "plan_qty": 3307.2,
+ "plan_qty": 5502.55,
  "latest_inbound_date": "2026-10-31"
 }
 ```
@@ -236,7 +236,7 @@ update(bp_id*, customer_no=None:string, old_material_no=None:string, new_materia
 ### list 返回项示例
 ```json
 {
- "bp_id": 20,
+ "bp_id": 24,
  "customer_no": "BYD",
  "old_material_no": "BYD-HAN-FB25",
  "new_material_no": "BYD-HAN-FB26",
@@ -324,7 +324,7 @@ update(material_no*, material_name=None:string, status=None:string, unit_value=N
  "base_method": "AutoTheta",
  "base_params": "{\"season_length\": 12}",
  "fit_version": "202610",
- "fit_effective_at": "2026-09-13 22:07:10",
+ "fit_effective_at": "2026-09-14 12:10:30",
  "model_blob": null,
  "sigma_l": null
 }
@@ -468,10 +468,10 @@ update(plan_no*, customer_no=None:string, material_no=None:string, qty=None:stri
 ### list 返回项示例
 ```json
 {
- "plan_no": "OB202609130001",
+ "plan_no": "OB202609140002",
  "customer_no": "BYD",
- "material_no": "BYD-HAN-SPARM",
- "qty": 44.2,
+ "material_no": "BYD-HAN-FB26",
+ "qty": 1595.79,
  "out_date": "2026-10-10",
  "actual_out_no": null,
  "status": "待出库"
@@ -529,20 +529,20 @@ summarize(version_no*)
  "mape": 0.09,
  "bias": 0.03,
  "adj_qty": 1629.6,
- "base_method": null,
- "base_params": null,
- "base_qty": null,
+ "base_method": "AutoTheta",
+ "base_params": "{\"season_length\": 12}",
+ "base_qty": 1623.6435,
  "event_analysis": null,
  "event_adj": 0.0,
- "base_event_qty": null,
+ "base_event_qty": 1623.6435,
  "bp_material_no": null,
  "switch_time": null,
  "abnormal_flag": 0,
  "final_qty": 1629.6,
- "created_at": "2026-09-13 22:06:58",
- "updated_at": "2026-09-13 22:07:06",
+ "created_at": "2026-09-14 12:10:20",
+ "updated_at": "2026-09-14 12:10:57",
  "created_by": "demo",
- "updated_by": "demo"
+ "updated_by": "admin"
 }
 ```
 
@@ -561,6 +561,8 @@ import_batch(rows*)
     — 批量导入（upsert 语义）：逐行校验，合法行入库，失败行返回错误明细，不阻断其余行。
 list(material_no=None:string, customer_no=None:string, period=None:string, page=None:integer, size=None:integer)
     — 按物料/客户/期间（精确、AND、可选）筛选台账分页列表 {items, total}。
+main_customer(material_no*)
+    — 该物料历史出货量最大的客户（无历史返回 None）。
 purchasing_customers(material_no=None:string)
     — 历史采购客户集（去重升序，可按物料收窄），供销售预测清单客户维度。
 sync_external_history()

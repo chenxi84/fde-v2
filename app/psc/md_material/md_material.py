@@ -20,6 +20,13 @@ class MdMaterial:
     _BASE_METHODS = ("移动平均", "指数平滑", "阶跃检测", "借用参考",
                      "AutoTheta", "AutoARIMA", "AutoETS", "SeasonalNaive",
                      "CrostonOptimized", "TSB")
+    # import_batch 可写的列（与 _normalize_record / 建表列一一对应）。
+    # 「行里出现了哪几个键」决定更新哪几列——见 import_batch 的部分更新语义。
+    # 注意不含 sigma_l / fit_version / model_blob：那三个由 set_fit_params 独占（拟合闭环）。
+    _WRITABLE_FIELDS = ("material_name", "status", "unit_value", "value_class", "change_cost",
+                        "prod_days", "logistics_days", "change_risk", "service_level",
+                        "batch_window", "base_method", "base_params",
+                        "predecessor_material_no")
 
     def create(self, material_no: str, material_name: str, status: str = "正常",
                unit_value: float = None, value_class: str = None, change_cost: float = None,
@@ -195,7 +202,17 @@ class MdMaterial:
         return self._to_dict(self._row(material_no))
 
     def import_batch(self, rows: list):
-        """批量导入/更新（upsert）：逐行校验，成功行入库，失败行返回错误明细。"""
+        """批量导入/更新（upsert）：逐行校验，成功行入库，失败行返回错误明细。
+
+        已存在的物料按**部分更新**处理：**只有行里给出的字段会被写**，未给出的保持原值；
+        显式给 null（键在、值为 null）表示清空该字段。新物料仍按整行插入，缺的字段取默认值。
+
+        为什么必须是部分更新：外部 ERP 的物料载荷通常只带一部分字段（`_map_external_row`
+        只映射载荷里存在的字段），若按整行覆盖，**一次同步就会把没带上的
+        `base_method`/`base_params`/`predecessor_material_no`/`value_class` 等清成 NULL、
+        把 status 重置**——预测链会当场断掉。这个坑在演示里一直埋着，只是因为
+        「凌晨同步新料」每次同步的物料大多还不存在（走 insert 分支）才没炸。
+        """
         if not isinstance(rows, (list, tuple)):
             raise FdeError("导入数据须为行列表")
 
@@ -207,6 +224,7 @@ class MdMaterial:
                 fail += 1
                 errors.append({"row": idx, "field": None, "message": "行数据须为对象"})
                 continue
+            provided = [f for f in self._WRITABLE_FIELDS if f in row]
             values, row_errors = self._normalize_record(
                 row.get("material_no"), row.get("material_name"), row.get("status"),
                 row.get("unit_value"), row.get("value_class"), row.get("change_cost"),
@@ -220,7 +238,7 @@ class MdMaterial:
                 errors.append({"row": idx, "field": field, "message": message})
                 continue
             if self._exists(values["material_no"]):
-                self._update_all(values)
+                self._update_fields(values, provided)
             else:
                 self._insert(values)
             success += 1
@@ -633,18 +651,21 @@ class MdMaterial:
              values["base_params"]),
         )
 
-    def _update_all(self, values):
-        self.db.execute(
-            "UPDATE md_material SET material_name = ?, predecessor_material_no = ?, "
-            "status = ?, unit_value = ?, value_class = ?, change_cost = ?, prod_days = ?, "
-            "logistics_days = ?, change_risk = ?, service_level = ?, batch_window = ?, "
-            "base_method = ?, base_params = ? WHERE material_no = ?",
-            (values["material_name"], values["predecessor_material_no"], values["status"],
-             values["unit_value"], values["value_class"], values["change_cost"],
-             values["prod_days"], values["logistics_days"], values["change_risk"],
-             values["service_level"], values["batch_window"], values["base_method"],
-             values["base_params"], values["material_no"]),
+    def _update_fields(self, values, provided):
+        """部分更新：只写 `provided` 里的列，**不碰**其它列。
+
+        `provided` 为空（只给了主键）时不产生任何 UPDATE——这比「无字段可更也写一遍」
+        安全：后者会把整行按默认值刷掉，正是上面要防的事。
+        """
+        cols = [c for c in provided if c in values]
+        if not cols:
+            return 0
+        sets = ", ".join(f"{c} = ?" for c in cols)
+        cur = self.db.execute(
+            f"UPDATE md_material SET {sets} WHERE material_no = ?",
+            tuple(values[c] for c in cols) + (values["material_no"],),
         )
+        return cur.rowcount
 
     def _check_status(self, value):
         v = self._clean(value) or "正常"

@@ -522,8 +522,15 @@ def run_part(call, step, expect_err, record):
 
     step("TC-ERR-35 推移表批量刷新（refresh_batch）")
     try:
+        # 前置：水位策略。refresh 现在 fail-closed——没有策略就拒绝推演，
+        # **不再**产出一张全标「无预警」的表（历史上那种静默降级）
+        call("inventory_strategy", "calc_batch", version_no=V202608)
         r = call("inventory_projection", "refresh_batch", biz_date="2026-08-15")
-        assert r is not None, r
+        assert r.get("success", 0) >= 1, r
+        # 本组有一批「非常规参数」的物料（无满足率等）算不出水位：它们必须被**明确报出**
+        # 并说明原因，而不是静默地在推演表里留一张全「无」的表
+        for e in (r.get("errors") or []):
+            assert "水位策略" in e["message"], e
         record(True)
     except Exception as e:
         record(False, f"{e}")
@@ -657,6 +664,11 @@ def run_part(call, step, expect_err, record):
 
     step("TC-OP-10 库存推移表消费出库计划（预计出库量）")
     try:
+        # 前置：水位策略（refresh fail-closed，先算策略再推演）。
+        # 算水位需要满足率与生产/物流天数，M6 建料时没给，这里补齐
+        call("md_material", "update", material_no=M6, service_level=0.95,
+             prod_days=3, logistics_days=2, value_class="低")
+        call("inventory_strategy", "calc", version_no=V202608, material_no=M6)
         call("inventory_projection", "refresh", material_no=M6,
              biz_date="2026-08-20", opening_stock=0)
         r = call("inventory_projection", "get", material_no=M6, biz_date="2026-09-20")
@@ -684,6 +696,70 @@ def run_part(call, step, expect_err, record):
         # 合法值可经 update 回填
         r = call("md_customer", "update", customer_no=C001, credit_code="91350100M000100C4G")
         assert r.get("credit_code") == "91350100M000100C4G", r
+        record(True)
+    except Exception as e:
+        record(False, f"{e}")
+
+    # ══════════ §3.7 迭代补测：fail-closed、部分更新、主要客户口径 ══════════
+
+    step("TC-ERR-40 无水位策略 → 推移表刷新 fail-closed（拒绝产出全「无预警」的表）")
+    try:
+        # 202612 没算过水位策略：必须**报错并说清怎么办**，而不是推演出一张全标「无」的表
+        # （历史上正是这种静默降级：623 行全「无」，而余额已经负到四位数）
+        before = call("inventory_projection", "list", material_no=M6, size=500).get("total")
+        expect_err(lambda: call("inventory_projection", "refresh", material_no=M6,
+                                biz_date="2026-12-01", opening_stock=0), "未找到版本 202612")
+        # 且**先查前置再写**：失败的那次不该动到任何一行
+        after = call("inventory_projection", "list", material_no=M6, size=500).get("total")
+        assert before == after, f"fail-closed 之前不该写库：{before} → {after} 行"
+        record(True)
+    except Exception as e:
+        record(False, f"{e}")
+
+    step("TC-ERR-41 import_batch 部分更新：只更传入字段，不碰其它字段")
+    try:
+        # 回归的正是那个雷：ERP 稀疏载荷（只带 7 个字段）过去会把
+        # base_method / base_params / predecessor_material_no 等一并清成 NULL
+        before = call("md_material", "get", material_no=M1)
+        r = call("md_material", "import_batch", rows=[{"material_no": M1, "material_name": "只改名"}])
+        assert r.get("success") == 1, r
+        after = call("md_material", "get", material_no=M1)
+        assert after["material_name"] == "只改名", after
+        for f in ("unit_value", "prod_days", "logistics_days", "service_level",
+                  "batch_window", "base_method", "base_params",
+                  "predecessor_material_no", "value_class", "change_risk", "status"):
+            assert after.get(f) == before.get(f), \
+                f"{f} 被误改：{before.get(f)!r} → {after.get(f)!r}"
+        # 键在、值为 null → 显式清空（这一条要保留，否则就没法清字段了）。
+        # 注意 material_name 是**必填**：任何行都得给，缺了照样拦（校验与部分更新无关）
+        r = call("md_material", "import_batch",
+                 rows=[{"material_no": M1, "material_name": "只改名", "change_risk": None}])
+        assert r.get("success") == 1, r
+        assert call("md_material", "get", material_no=M1).get("change_risk") is None
+        record(True)
+    except Exception as e:
+        record(False, f"{e}")
+
+    step("TC-ERR-42 主要客户（main_customer）：取出货量最大的客户")
+    try:
+        call("sales_history", "upsert", material_no=M6, customer_no=C003, period="2026-06", qty=100)
+        call("sales_history", "upsert", material_no=M6, customer_no=C002, period="2026-06", qty=10)
+        assert call("sales_history", "main_customer", material_no=M6) == C003, "应取量大的 C003"
+        assert call("sales_history", "main_customer", material_no="M-不存在") is None
+        record(True)
+    except Exception as e:
+        record(False, f"{e}")
+
+    step("TC-ERR-43 BR-11/12 速度对冲：批量路径带上主要客户后可达")
+    try:
+        # 高价值 + 生产物流(3+2) ≤ 客户线边+调拨(3+2) → 速度对冲，且只留 A（C=B=0）
+        call("md_customer", "update", customer_no=C003, line_stock_days=3, transfer_lead_days=2)
+        call("md_material", "update", material_no=M6, value_class="高",
+             prod_days=3, logistics_days=2, service_level=0.95)
+        call("inventory_strategy", "calc_batch", version_no=V202608)
+        r = call("inventory_strategy", "get", version_no=V202608, material_no=M6)
+        assert r.get("hedge_tool") == "速度", r
+        assert r.get("safety_level") == 0 and r.get("batch_level") == 0, r
         record(True)
     except Exception as e:
         record(False, f"{e}")
