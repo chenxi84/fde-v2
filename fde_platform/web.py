@@ -18,6 +18,7 @@
 按安全约束，本地 DEMO 只绑回环地址 127.0.0.1（由 main.py 指定 host）。
 """
 import json
+import logging
 import os
 import re
 import time
@@ -865,6 +866,7 @@ def _ensure_agent2(group: str = "") -> str | None:
     if key not in _AGENT2_AGENTS:
         headers = _agent2_headers()
         name = f"leader_{group}" if group else "leader"
+        want = _leader_prompt(group)
         # 优先复用已有 leader（按 name 查，查的是**本租户**内的 agent），
         # 避免进程重启后 agent_id 变化导致历史会话查不到
         try:
@@ -874,19 +876,47 @@ def _ensure_agent2(group: str = "") -> str | None:
                 data = a.get("data") or {}
                 if data.get("name") == name and a.get("id"):
                     _AGENT2_AGENTS[key] = a["id"]
+                    _sync_agent_prompt(a["id"], data, want, headers)
                     return _AGENT2_AGENTS[key]
         except Exception:
             pass
         # 没找到：在本租户里新建
         try:
             r = httpx.post(f"{AGENT2_BASE}/agent/", json={
-                "name": name, "system_prompt": _leader_prompt(group),
+                "name": name, "system_prompt": want,
             }, headers=headers, timeout=30)
             r.raise_for_status()
             _AGENT2_AGENTS[key] = r.json()["agent_id"]
         except Exception:
             return None
     return _AGENT2_AGENTS[key]
+
+
+def _sync_agent_prompt(agent_id: str, data: dict, want: str, headers: dict) -> None:
+    """复用的 agent 若提示词与**代码当前版本**不一致，就地 PATCH 同步过去。
+
+    为什么需要：复用是按**名字**做的（为了保历史会话），而上游存的那份 `system_prompt`
+    是「建它那一刻」的文本——于是**改了 `_leader_prompt`（角色清单 / 组级架构文档 /
+    skill 库提示 / 工作纪律）对已存在的 agent 不生效**，而且没有任何提示：你会困惑
+    「改了怎么没效果」。实测：改了提示词再重启平台，agent 列表还是同一个 id、内部还是旧文本。
+    上游支持 `PATCH /agent/{id}`，所以在这里比对一次、不一致就同步——
+    **提示词改动即刻生效，历史会话照旧**（agent_id 不变）。
+
+    正本在**代码**：平台不提供界面编辑提示词（`/agent-admin` 没有这个入口，只有只读展示）。
+    若将来加了界面编辑，需先重新定义"谁是正本"，否则这里会把手改的覆盖掉。
+    """
+    if (data.get("system_prompt") or "") == want:
+        return
+    try:
+        r = httpx.patch(f"{AGENT2_BASE}/agent/{agent_id}", json={"system_prompt": want},
+                        headers=headers, timeout=30)
+        r.raise_for_status()
+        logging.getLogger(__name__).info(
+            "[agent2] 提示词已同步到当前代码版本：%s（%d 字）", data.get("name"), len(want))
+    except Exception as e:
+        # 同步失败不该挡住对话（继续用旧提示词），但要留痕，别让它静默
+        logging.getLogger(__name__).warning(
+            "[agent2] 提示词同步失败（继续用上游旧版）：%s %s", data.get("name"), e)
 
 
 def _agent2_cred(group: str = "") -> str | None:
