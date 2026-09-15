@@ -350,6 +350,12 @@ class SalesForecast:
         self._require_draft(version_no)
         self._require_rolling_month(rolling_month)
 
+        # 人工定稿优先：定过的行**原样返回、不再自动重算**。
+        # 不这么做的后果是实打实的：计划员在界面上定完稿，任何人（或链、或智能体）
+        # 再点一次「批量决策」，定稿就被写成 None、汇总归零，而且没有任何提示。
+        if self._is_settled(version_no, material_no, customer_no, rolling_month):
+            return self._get_line(version_no, material_no, customer_no, rolling_month)
+
         line = self._get_line(version_no, material_no, customer_no, rolling_month)
 
         mape = None
@@ -416,11 +422,37 @@ class SalesForecast:
             """,
             (clean_final, version_no, material_no, customer_no, rolling_month),
         )
+        # 同时落「人工定稿台账」——decide 靠它认人工作过的行，从而不再覆盖。
+        # 重复定稿即覆盖（先删后插，避免依赖 ON CONFLICT 的方言差异）。
+        settled_by = (self.ctx or {}).get("userno") or ""
+        self.db.execute(
+            "DELETE FROM sales_forecast_settle WHERE version_no = ? AND material_no = ?"
+            " AND customer_no = ? AND rolling_month = ?",
+            (version_no, material_no, customer_no, rolling_month),
+        )
+        self.db.execute(
+            "INSERT INTO sales_forecast_settle (version_no, material_no, customer_no,"
+            " rolling_month, final_qty, settled_by) VALUES (?, ?, ?, ?, ?, ?)",
+            (version_no, material_no, customer_no, rolling_month, clean_final, settled_by),
+        )
         return self._get_line(version_no, material_no, customer_no, rolling_month)
+
+    def _is_settled(self, version_no, material_no, customer_no, rolling_month):
+        """该行是否已被人工定稿（定过的行决定不再被自动决策覆盖）。"""
+        row = self.db.execute(
+            "SELECT 1 FROM sales_forecast_settle WHERE version_no = ? AND material_no = ?"
+            " AND customer_no = ? AND rolling_month = ?",
+            (version_no, material_no, customer_no, rolling_month),
+        ).fetchone()
+        return row is not None
 
     def decide_batch(self, version_no: str, material_no: str = None, customer_no: str = None):
         """批量决策：遍历版本内全部处理行（可按物料/客户收窄）逐行 decide，单行失败跳过。
-        返回 {version_no, computed, failed, abnormal}，abnormal 为标记异常的行数。"""
+
+        返回 `{version_no, computed, failed, abnormal, settled_skipped, settled_rows}`：
+        **已人工定稿的行会被跳过并报出来**（`settled_skipped` 计数、`settled_rows` 明细），
+        不再被自动重算覆盖——否则界面上一次「批量决策」就会把人工定稿静默清掉。
+        """
         version_no = self._require(version_no, "版本号")
         self._require_draft(version_no)
 
@@ -436,7 +468,13 @@ class SalesForecast:
         rows = self.db.execute(sql, tuple(params)).fetchall()
 
         computed = failed = abnormal = 0
+        settled_rows = []
         for r in rows:
+            if self._is_settled(version_no, r["material_no"], r["customer_no"], r["rolling_month"]):
+                settled_rows.append({"material_no": r["material_no"],
+                                     "customer_no": r["customer_no"],
+                                     "rolling_month": r["rolling_month"]})
+                continue
             try:
                 line = self.decide(version_no, r["material_no"], r["customer_no"], r["rolling_month"])
                 computed += 1
@@ -444,7 +482,9 @@ class SalesForecast:
                     abnormal += 1
             except FdeError:
                 failed += 1
-        return {"version_no": version_no, "computed": computed, "failed": failed, "abnormal": abnormal}
+        return {"version_no": version_no, "computed": computed, "failed": failed,
+                "abnormal": abnormal, "settled_skipped": len(settled_rows),
+                "settled_rows": settled_rows[:20]}
 
     def summarize(self, version_no: str):
         """按物料 × 滚动月度合计所有客户最终预测量，刷新汇总表。"""

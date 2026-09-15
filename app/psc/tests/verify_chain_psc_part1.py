@@ -230,6 +230,34 @@ def run_part(call, step, expect_err, record):
     except Exception as e:
         record(False, f"{e}")
 
+    step("TC-PRED-06 人工定稿优先：decide 不再覆盖已定稿行")
+    try:
+        # ① 造一行「异常」：客户预测改成 800 → 调整后 760，与基线 950 偏离 25% > 5%
+        call("sales_forecast", "fill_customer", version_no=V202608, material_no=M1,
+             customer_no=C001, rolling_month="N+1", orig_qty=800)
+        r = call("sales_forecast", "decide", version_no=V202608, material_no=M1,
+                 customer_no=C001, rolling_month="N+1")
+        assert r.get("abnormal_flag") in (1, True), r      # 双源分歧 → 异常
+        assert r.get("final_qty") is None, r               # 异常行不定稿，等人工
+        # ② 人工定稿
+        r = call("sales_forecast", "set_final", version_no=V202608, material_no=M1,
+                 customer_no=C001, rolling_month="N+1", final_qty=950)
+        assert abs((r.get("final_qty") or 0) - 950) < 0.01, r
+        # ③ 再跑一次批量决策：必须**跳过**它并报出来，定稿不能被清
+        r = call("sales_forecast", "decide_batch", version_no=V202608)
+        assert r.get("settled_skipped") == 1, r
+        assert (r.get("settled_rows") or [{}])[0].get("material_no") == M1, r
+        line = call("sales_forecast", "get", version_no=V202608, material_no=M1,
+                    customer_no=C001, rolling_month="N+1")
+        assert abs((line.get("final_qty") or 0) - 950) < 0.01, \
+            f"人工定稿被 decide 覆盖了：{line.get('final_qty')}"
+        # ④ 复原客户预测（后续用例按 final=950 断言），定稿仍在
+        call("sales_forecast", "fill_customer", version_no=V202608, material_no=M1,
+             customer_no=C001, rolling_month="N+1", orig_qty=1000)
+        record(True)
+    except Exception as e:
+        record(False, f"{e}")
+
     step("TC-MC-06 计算库存策略（三层水位）")
     try:
         call("inventory_strategy", "calc", version_no=V202608, material_no=M1, customer_no=C001)

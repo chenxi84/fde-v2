@@ -59,12 +59,12 @@ publish(version_no*)
  "material_no": "BYD-HAN-BRK",
  "rolling_month": "N+1",
  "forecast_qty": 1629.6,
- "inventory_qty": 1576.84,
- "gross_qty": 3206.4399999999996,
+ "inventory_qty": 0.0,
+ "gross_qty": 1629.6,
  "open_order_qty": 0.0,
  "onhand_qty": 0.0,
  "in_transit_qty": 0.0,
- "net_qty": 3206.4399999999996
+ "net_qty": 1629.6
 }
 ```
 
@@ -95,10 +95,10 @@ release(replenish_no*, promised_inbound=None:string)
 ### list 返回项示例
 ```json
 {
- "replenish_no": "RP202609140001",
- "material_no": "BYD-HAN-BRK",
+ "replenish_no": "RP202609150002",
+ "material_no": "BYD-HAN-FB25",
  "replenish_type": "最低库存补库",
- "replenish_qty": 151.64,
+ "replenish_qty": 70.53,
  "required_inbound": "2026-10-01",
  "promised_inbound": null,
  "status": "待下达"
@@ -129,7 +129,7 @@ scan_alert(material_no*, version_no=None:string)
 ```json
 {
  "material_no": "BYD-HAN-BRK",
- "biz_date": "2026-09-15",
+ "biz_date": "2026-10-01",
  "inbound_qty": 0.0,
  "outbound_qty": 0.0,
  "balance": 0.0,
@@ -162,16 +162,16 @@ list(version_no=None:string, material_no=None:string, hedge_tool=None:string, pa
 {
  "version_no": "202610",
  "material_no": "BYD-HAN-BRK",
- "hedge_tool": "库存",
- "min_level": 151.64,
+ "hedge_tool": "速度",
+ "min_level": 0,
  "service_factor": 1.65,
  "resp_volatility": 5.99,
- "safety_level": 9.88,
- "batch_window": 28,
- "batch_level": 1415.32,
- "basis": "物料BYD-HAN-BRK：生产2天+物流1天，满足率95%，组批窗口28天，近12期月均干净需求1516.42件，对冲工具库存",
- "lower": 161.52,
- "upper": 1576.84
+ "safety_level": 0,
+ "batch_window": 0,
+ "batch_level": 0,
+ "basis": "物料BYD-HAN-BRK：生产2天+物流1天，满足率95%，组批窗口0天，近12期月均干净需求1516.42件，对冲工具速度",
+ "lower": 0,
+ "upper": 0
 }
 ```
 
@@ -202,7 +202,7 @@ list(version_no=None:string, material_no=None:string, page=None:integer, size=No
  "version_no": "202610",
  "rolling_month": "N+1",
  "plan_version": 1,
- "plan_qty": 5502.55,
+ "plan_qty": 5209.32,
  "latest_inbound_date": "2026-10-31"
 }
 ```
@@ -236,7 +236,7 @@ update(bp_id*, customer_no=None:string, old_material_no=None:string, new_materia
 ### list 返回项示例
 ```json
 {
- "bp_id": 24,
+ "bp_id": 27,
  "customer_no": "BYD",
  "old_material_no": "BYD-HAN-FB25",
  "new_material_no": "BYD-HAN-FB26",
@@ -324,7 +324,7 @@ update(material_no*, material_name=None:string, status=None:string, unit_value=N
  "base_method": "AutoTheta",
  "base_params": "{\"season_length\": 12}",
  "fit_version": "202610",
- "fit_effective_at": "2026-09-14 12:10:30",
+ "fit_effective_at": "2026-09-15 13:50:27",
  "model_blob": null,
  "sigma_l": null
 }
@@ -468,10 +468,10 @@ update(plan_no*, customer_no=None:string, material_no=None:string, qty=None:stri
 ### list 返回项示例
 ```json
 {
- "plan_no": "OB202609140002",
+ "plan_no": "OB202609150003",
  "customer_no": "BYD",
- "material_no": "BYD-HAN-FB26",
- "qty": 1595.79,
+ "material_no": "BYD-HAN-SPARM",
+ "qty": 84.55,
  "out_date": "2026-10-10",
  "actual_out_no": null,
  "status": "待出库"
@@ -539,8 +539,8 @@ summarize(version_no*)
  "switch_time": null,
  "abnormal_flag": 0,
  "final_qty": 1629.6,
- "created_at": "2026-09-14 12:10:20",
- "updated_at": "2026-09-14 12:10:57",
+ "created_at": "2026-09-15 13:50:15",
+ "updated_at": "2026-09-15 13:50:50",
  "created_by": "demo",
  "updated_by": "admin"
 }

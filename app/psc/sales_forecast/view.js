@@ -120,7 +120,8 @@ export default function pageSalesForecast() {
           material_no: self.fMaterial || undefined,
           customer_no: self.fCustomer || undefined,
         });
-        toast(`批量决策完成 · 决策 ${r.computed} 行 / 异常 ${r.abnormal} 行 / 跳过 ${r.failed} 行`);
+        const settled = r.settled_skipped ? ` / 保留人工定稿 ${r.settled_skipped} 行` : "";
+        toast(`批量决策完成 · 决策 ${r.computed} 行 / 异常 ${r.abnormal} 行 / 失败 ${r.failed} 行${settled}`);
         await self.list.load(self.list.page);
       } catch { /* api.js 已 toast */ } finally { self.decideBusy = false; }
     },
