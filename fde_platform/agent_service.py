@@ -516,6 +516,19 @@ def _log_surface(who: str, basic: list, tool_groups: list, marked: int = 0) -> N
 _storage = AsyncSQLAlchemyStorage(_DB_URL, create_tables=True)
 
 
+# 平台智能体**不读代码库**：封掉 AgentScope 工作区的代码/文件工具。
+#
+# 为什么必须封：这 6 个工具**不受应用授权约束**（它们操作的是工作区/文件系统，不走服务闸门）。
+# 实测 planner01（权限被收窄的用户）的 leader 用 `Glob`+`Read` 读了 `app/psc/_contracts.md`
+# 与各应用源码，把**未授权应用的完整服务清单**列了出来——「按用户收窄工具面」只覆盖
+# **服务面**，文件面是漏的；理论上还能读到 `config/` 下的 `.env`、`llm_master.key`。
+#
+# 平台智能体不需要它们：要应用设计文档用 `platform_read_app_doc`（按授权过滤，
+# 见 agent_common），要读写应用资源用平台自己的 resource 工具（限定在应用目录内）。
+# worker 走的是角色**白名单**（只列平台工具），本来就不含这些；漏的是 leader（它只按名禁）。
+_NO_CODE_TOOLS = ("PowerShell", "Edit", "Glob", "Grep", "Read", "Write")
+
+
 async def _fde_middleware_factory(
     user_id: str, agent_id: str, session_id: str, workspace=None,
 ) -> list:
@@ -538,11 +551,11 @@ async def _fde_middleware_factory(
         return [agent_tool_filter.RoleToolFilterMiddleware(role, allowed)]
     # leader：去掉平台配置工具；scheduled session 再禁 ScheduleCreate（防失控循环）。
     # 读写边界交给 AgentScope 原生 permission_mode（定时任务默认 DONT_ASK，ASK 转 DENY）。
-    extra_deny = set()
+    extra_deny = set(_NO_CODE_TOOLS)
     try:
         sess = await _storage.get_session(user_id, agent_id, session_id)
         if sess is not None and str(sess.source) == "schedule":
-            extra_deny = {"ScheduleCreate"}
+            extra_deny.add("ScheduleCreate")
     except Exception:
         pass  # 查 session 失败不阻断组装（默认不额外禁）
     return [agent_tool_filter.LeaderToolFilterMiddleware(extra_deny=extra_deny)]

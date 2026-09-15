@@ -92,7 +92,13 @@ try:  # Windows 控制台 UTF-8
 except Exception:
     pass
 
+import logging  # noqa: E402
+
 import httpx  # noqa: E402
+
+# 平台导入时会 init_logging() 把 root 设成 INFO，于是 httpx 每个请求都打一行，
+# 把报告淹掉。这里只留告警。
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 CASES = ROOT / "scripts" / "agent_quality" / "cases.jsonl"
 BASE = os.environ.get("FDE_BASE", "http://127.0.0.1:4000").rstrip("/")
