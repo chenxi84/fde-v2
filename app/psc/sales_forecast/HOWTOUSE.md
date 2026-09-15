@@ -15,6 +15,9 @@
 
 ## 前置条件与禁忌
 
+- **顺序（少一步数就不对）**：拟合回填 `base_method` → **`calc_baseline_batch` → `decide_batch` → 人工 `set_final` 定稿 → `summarize`**。
+  两个常见错位：① **先算基线后拟合**——`base_method` 还没回填，基线为空，`decide` 判不出异常（规则：base_qty 为空就不标异常），汇总会"看起来有数"；② **定稿前就汇总**——异常行的 `final_qty` 是空的，汇总就是 0，毛需求只剩库存水位、主计划失真。
+
 - **版本必须是草稿态**。发布/冻结后所有写操作被拒。做不了时先确认是否该开新版本。
 - **处理行必须先开版**：`import_orig_qty` / `calc_baseline_batch` 等都以 `version_no + material_no + customer_no + rolling_month` 定位，行不存在直接报错。
 - **用批量接口，不要逐行调**。单行版 `fill_customer` / `calc_baseline` / `decide` 只给界面用，**不在你的工具表里**；要填就整批导，要算就整批算。
