@@ -293,18 +293,30 @@ class Demand:
         return []
 
     def _get_water_level(self, version_no, material_no):
-        # 无库存策略记录时按水位 0 处理（毛需求仅含预测），不阻断整版本合成
+        """取该物料该版本的水位（A+C+B），叠进毛需求。
+
+        **取不到就报错（fail-closed），不再静默按 0 处理。** 旧行为是注释里那句
+        「不阻断整版本合成」——代价是毛需求**整层漏掉库存水位**，而调用方看不到任何异常：
+        实测跑完链后 7 个物料的 inventory_qty 全是 0（应为 95.26 / 5209.32 …），
+        毛需求只剩预测，于是主计划一路 0。这类「数字静默变 0」在推移表预警、水位策略上
+        已经各出现过一次，第三次不该再靠人盯。
+        """
         try:
             wl = self.fde.call(
                 "inventory_strategy", "get_water_level",
                 version_no=version_no, material_no=material_no,
             )
-        except FdeError:
-            return 0
-        except Exception:
-            return 0
+        except FdeError as e:
+            raise FdeError(
+                f"未找到版本 {version_no} 的库存水位策略（物料 {material_no}），无法合成毛需求：{e}。"
+                f"请先执行 inventory_strategy.calc_batch(version_no=\"{version_no}\") 再合成；"
+                f"流程里该节点必须在库存策略节点之后跑"
+            )
         if not isinstance(wl, dict):
-            return 0
+            raise FdeError(
+                f"版本 {version_no} 物料 {material_no} 的水位策略返回异常（{type(wl).__name__}），"
+                f"无法合成毛需求"
+            )
         return (
             self._num(wl.get("min_level"))
             + self._num(wl.get("safety_level"))

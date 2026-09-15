@@ -54,6 +54,7 @@ def run_part(call, step, expect_err, record):
     step("TC-DM-04 创建物料 M2（多客户通用件）")
     try:
         call("md_material", "create", material_no=M2, material_name="物料B",
+             service_level=0.95, prod_days=10, logistics_days=5,
              base_method="移动平均", base_params='{"window":6}')
         record(True)
     except Exception as e:
@@ -62,6 +63,7 @@ def run_part(call, step, expect_err, record):
     step("TC-DM-05 创建断点旧件 M3")
     try:
         call("md_material", "create", material_no=M3, material_name="旧件",
+             service_level=0.95, prod_days=10, logistics_days=5,
              base_method="移动平均", base_params='{"window":6}')
         record(True)
     except Exception as e:
@@ -70,6 +72,7 @@ def run_part(call, step, expect_err, record):
     step("TC-DM-06 创建断点新件 M4")
     try:
         call("md_material", "create", material_no=M4, material_name="新件",
+             service_level=0.95, prod_days=10, logistics_days=5,
              base_method="移动平均", base_params='{"window":6}')
         record(True)
     except Exception as e:
@@ -250,6 +253,9 @@ def run_part(call, step, expect_err, record):
 
     step("TC-MC-08 合成毛需求（每期含水位）")
     try:
+        # 前置：水位策略。build_gross 要把水位叠进毛需求，且**取不到就报错**（fail-closed），
+        # 所以必须先算策略——这也是文档里的既定顺序（水位节点在毛需求节点之前）。
+        call("inventory_strategy", "calc_batch", version_no=V202608)
         wl = call("inventory_strategy", "get_water_level", version_no=V202608, material_no=M1)
         water = (wl.get("min_level") or 0) + (wl.get("safety_level") or 0) + (wl.get("batch_level") or 0)
         r = call("demand", "build_gross", version_no=V202608)
