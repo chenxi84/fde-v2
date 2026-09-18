@@ -125,7 +125,9 @@ export default function pageMdProjectPart() {
     /* ---- 过滤 / 分页 ---- */
     search() { self.list.load(1); },
     resetFilters() {
-      self.fProject = ""; self.fMaterial = ""; self.fVeh = "";
+      // ⚠ 2026-09-17：删掉 `self.fVeh = ""` —— 车型筛选早已随「车型/份额移出映射表」
+      // （2026-08 数据治理变更）移除，重置函数里这一句是**已删字段的化石**（无任何绑定）。
+      self.fProject = ""; self.fMaterial = "";
       self.list.load(1);
     },
 

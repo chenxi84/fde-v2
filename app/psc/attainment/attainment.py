@@ -4,9 +4,13 @@ from fde import FdeError
 
 
 class Attainment:
-    """达成率与置信度聚合根。客户×物料粒度的 MAPE/bias 派生指标，由 ERP 统计后经
-    _load_attainment 适配器冗余回写。数据来源类型：自动参考创建——前端禁止创建入口，
-    不提供 create 服务。"""
+    """达成率与置信度聚合根。客户×物料粒度的 MAPE/bias 派生指标。数据来源类型：
+    自动参考创建——前端禁止创建入口，不提供 create 服务。
+
+    两条写入路径，别再引入第三条：
+      · 外部回写：ERP 统计后经公共方法 `upsert` 逐条冗余回写；
+      · 本地重算：`compute()`（口径A）读 `sales_history` 的 forecast_qty（F）与 qty（A）
+        单表重算 MAPE/bias 并回写。"""
 
     def upsert(self, customer_no: str, material_no: str, mape: float, bias: float):
         """ERP 统计回写 MAPE/bias：同客户+物料存在则覆盖更新，不存在则插入（幂等）。"""
@@ -137,6 +141,19 @@ class Attainment:
             mape = sum(mape_vals) / len(mape_vals)
             self.upsert(customer_no, material_no, round(mape, 4), round(bias, 4))
             computed += 1
+        if computed == 0:
+            # 与 demand BR-13、master_plan BR-10 同口径：**没有可算样本就报错，
+            # 不返回「成功但 0 组」**。旧行为是静默成功 —— 实测 2026-09-15：
+            # 返回 {'computed': 0, 'skipped': 7}，而 attainment 表毫发无损，
+            # 调用方完全看不出「这次重算什么都没干」。
+            # 最常见的成因是 forecast_qty 没被回填（见下），所以报错里直接点出来。
+            raise FdeError(
+                f"达成率重算没有任何可算样本（跳过 {skipped} 组），已中止：口径A 依赖 "
+                f"sales_history.forecast_qty（由 sales_history.sync_forecast 从**历史版本**的 "
+                f"N+1 客户预测按月回填），而它当前为空、或与台账期间对不上。"
+                f"请确认已按月开启过历史版本并填报过客户预测；若确实无样本可算，"
+                f"也不应静默返回「成功但 0 组」"
+            )
         return {"computed": computed, "skipped": skipped}
 
     def _months_int(self, value):
@@ -155,11 +172,10 @@ class Attainment:
         idx = y * 12 + (m - 1) + delta
         return f"{idx // 12:04d}-{idx % 12 + 1:02d}"
 
-    def _load_attainment(self):
-        """ERP 达成率统计适配器（外部系统，不建聚合）。
-        真实接入：从 ERP 拉取客户×物料粒度的 MAPE/bias 后逐条调用 upsert 冗余回写；
-        只换本方法实现，不动公共方法。V1 本地 stub：返回空 dict，不执行任何回写。"""
-        return {}
+    # 注：曾有 `_load_attainment`（声明"从 ERP 拉取 MAPE/bias 后逐条 upsert"）—— 已于
+    # 2026-09-15 删除。它**全仓没有调用点**：本应用实际走 `compute()`（口径A：读
+    # `sales_history` 的 forecast_qty × qty 单表重算），外部回写走公共方法 `upsert`。
+    # 留着它会让人误以为存在一条 ERP 拉取通路（而在 stub 下它完全隐形）。
 
     def _clean(self, value):
         if value is None:

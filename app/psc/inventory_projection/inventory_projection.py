@@ -33,7 +33,6 @@ class InventoryProjection:
             opening_stock = self._load_inventory(material_no)
         opening_stock = self._to_number(opening_stock, 0)
 
-        inbound_by_date = self._collect_inbound(version_no, material_no)
         outbound_by_date = self._collect_outbound(material_no)
         water = self._load_water_level(version_no, material_no)
         if water is None:
@@ -51,6 +50,10 @@ class InventoryProjection:
         dates = self._generate_dates(start_date, self.PROJECTION_DAYS)
         start_str = dates[0].strftime("%Y-%m-%d")
         end_exclusive = (dates[-1] + timedelta(days=1)).strftime("%Y-%m-%d")
+
+        # 预计入库量在**窗口首日已知之后**才收集 —— 因为它要把**过期补库单钳到首日**（BR-04 口径变更，
+        # 见 `_collect_inbound` 的说明）。放在 fail-closed 水位校验之后，保证"拒绝推演时一行不写"。
+        inbound_by_date, overdue_inbound = self._collect_inbound(version_no, material_no, start_str)
 
         # 重算 start 及之后的全部未来行（清除旧推演残留，避免多窗口拼接出现"无入出库但余额跳变"的缝），
         # 保留已结束日期（biz_date < start）的历史快照（BR-11：隐藏不删除）。
@@ -90,6 +93,8 @@ class InventoryProjection:
             "opening_stock": opening_stock,
             "generated": len(rows),
             "rows": rows,
+            # 过期补库单**明确报出**（BR-04 口径：钳到窗口首日计入，但不静默 —— 见 `_collect_inbound`）
+            "overdue_inbound": overdue_inbound,
         }
 
     def refresh_batch(self, biz_date: Optional[str] = None, material_nos=None):
@@ -111,23 +116,34 @@ class InventoryProjection:
         success = 0
         success_materials = []
         errors = []
+        alert_errors = []
+        overdue_inbound = []
         replenishments = []
 
         for m in material_nos:
             m = self._clean(m)
             try:
-                self.refresh(m, biz_date)
+                res = self.refresh(m, biz_date)
             except FdeError as e:
                 errors.append({"material_no": m, "message": str(e)})
                 continue
             success += 1
             success_materials.append(m)
-            # 逐物料独立：单物料预警失败不阻断整批
+            # 过期补库单逐物料汇总报出（BR-04 口径：钳到窗口首日计入、但不静默，见 `_collect_inbound`）
+            for item in (res.get("overdue_inbound") or []):
+                overdue_inbound.append({"material_no": m, **item})
+            # 逐物料独立：单物料预警失败不阻断整批。
+            # ⚠ **但不得静默吞掉**（2026-09-17 补）：此前这里只写 `except FdeError: pass` ——
+            # 于是「有击穿、却建不出补库单」这件事**一个字都不留**。实测（2026-10-01 演示数据）
+            # `BYD-HAN-FB25/FB26` 正是这样：余额 0 击穿最低、算出补库量 ≤ 0、`create` 抛
+            # 「补库数量必须大于0」，而调用方看到的是 `fail=0`、空错误、空补库单。
+            # 与 `errors`（**推演**失败的物料）分开报，因为两者的处置不同：
+            # 推演失败 → 该物料无推移数据；扫描/建单失败 → 有数据但**预警没落地**。
             try:
                 result = self.scan_alert(m)
                 replenishments.extend(result.get("replenishments") or [])
-            except FdeError:
-                pass
+            except FdeError as e:
+                alert_errors.append({"material_no": m, "message": str(e)})
 
         return {
             "total": total,
@@ -135,6 +151,8 @@ class InventoryProjection:
             "fail": total - success,
             "success_materials": success_materials,
             "errors": errors,
+            "alert_errors": alert_errors,
+            "overdue_inbound": overdue_inbound,
             "replenishments": replenishments,
         }
 
@@ -264,12 +282,24 @@ class InventoryProjection:
             replenish_type = self._replenish_type(breach_row["alert_type"])
             replenish_qty = self._replenish_qty(breach_row["alert_type"], breach_row["balance"], water)
             if replenish_qty > 0:
+                # ⚠ 水位入参**必须传**（2026-09-17 按 B-08 补接线）：`demand_pool._resolve_replenish_qty`
+                # 的 BR-06 分档（富余→补到组批水位 B / 紧张→补到触发线）一直是对的，但此前这里
+                # **只传了 `replenish_qty`**，于是它最后一行「未提供水位线参数时退回触发方传入的补货量」
+                # **无条件命中** ⇒ 生产上永远只补到触发线（实测 16 张单补到 B 的 **0** 张），
+                # 补库量系统性偏小 ⇒ 补货更频繁 ⇒ 切线更多，而**这正是 BR-06 要避免的**，
+                # 且全程静默（单量看着合理、界面无提示）。水位与击穿余额本就在手，只是没往下传。
+                #
+                # 产能松紧**不传**：按 BR-07 走 demand_pool 自己的默认（默认富余）。
                 created = self.fde.call(
                     "demand_pool", "create",
                     material_no=material_no,
                     replenish_type=replenish_type,
                     replenish_qty=replenish_qty,
                     required_inbound=breach_row["biz_date"],
+                    stock_on_hand=breach_row["balance"],
+                    min_level_a=water["min_level"],
+                    safety_level_c=water["safety_level"],
+                    batch_level_b=water["batch_level"],
                 )
                 replenishments.append(created)
 
@@ -287,16 +317,34 @@ class InventoryProjection:
         """取 ERP 自有仓成品库存总额（起始库存锚点）。stub 返回 0，真实接入换实现。"""
         return 0
 
-    def _load_in_transit(self, material_no):
-        """取已下工单（在途），返回 [{"inbound_date": "YYYY-MM-DD", "qty": 数量}]。stub 返回空列表。"""
-        return []
+    # 注：曾有 `_load_in_transit`（取 ERP 已下工单）—— 已于 2026-09-15 删除。
+    # 它声明了语义却**全仓没有调用点**，是旧口径的化石：本应用的「在途」按 BR-04 指的是
+    # **需求池未完成补库单**（`_collect_inbound` 走 `demand_pool.list`），而 ERP 在途工单
+    # 是 demand 的 BR-07 扣减口径 —— **同一个词在两个应用里指两个不同的东西**。
+    # 术语冲突已记入《应用详设》与 `宣传/待办.md` 第 5 项（本体 a) 的同名不同义校验）。
 
     # ---- 内部辅助（_ 前缀，不对外暴露）----
 
-    def _collect_inbound(self, version_no, material_no):
+    def _collect_inbound(self, version_no, material_no, window_start=None):
         """预计入库量 = 主计划月度需求（集中最迟入库日）+ 需求池「待下达/已下达/生产中」单据
-        （按承诺入库日，无承诺则用要求入库日；纳入待下达避免重复下单）。"""
+        （按承诺入库日，无承诺则用要求入库日；纳入待下达避免重复下单）。
+
+        返回 `(inbound_by_date, overdue)`：`overdue` 是**入库日早于推演窗口首日**的补库单明细。
+
+        ⚠ **过期补库单钳到窗口首日**（2026-09-17 按已定口径实施）：推演只统计窗口内 `[首日, 首日+90天]`
+        的日期，而一张「要求入库日已过、但仍未下达」的补库单，其入库日落在窗口**之前** ⇒
+        `inbound_by_date.get(date_str, 0)` 永远取不到它 ⇒ **对余额零贡献**（旧行为：收集了却
+        **静默丢掉**）。后果是连锁的：该物料在推演里永远等不到这笔货 → 持续击穿 → `scan_alert`
+        **再建一张单**（`demand_pool` 无去重）→ 单越滚越多。
+        口径（已定）：**按「尽快到货」算，钳到窗口首日** —— 这与 BR-04「待下达也要算进来（避免重复下单）」
+        的初衷一致；同时在返回值里**明确报出**该单已过期，而不是静默丢。
+
+        为什么**主计划**的最迟入库日不跟着钳：主计划的月度需求若属**已过去的月份**，
+        那批货按业务上应已到货（已体现在起始库存里）—— 再钳到首日会**重复计入**。
+        补库单不同：它在「待下达/已下达/生产中」三态里，**货还没到**，只是要求的日子过了。
+        """
         inbound_by_date = {}
+        overdue = []
         plan_rows = self.fde.call(
             "master_plan", "get_latest", version_no=version_no, material_no=material_no
         ) or []
@@ -320,10 +368,22 @@ class InventoryProjection:
                     continue
                 inbound_date = row.get("promised_inbound") or row.get("required_inbound")
                 qty = self._to_number(row.get("replenish_qty"), 0)
-                if inbound_date:
-                    key = str(inbound_date)
-                    inbound_by_date[key] = inbound_by_date.get(key, 0) + qty
-        return inbound_by_date
+                if not inbound_date:
+                    continue
+                key = str(inbound_date)
+                if window_start and key < window_start:
+                    overdue.append({
+                        "replenish_no": row.get("replenish_no"),
+                        "status": row.get("status"),
+                        "inbound_date": key,
+                        "replenish_qty": qty,
+                        "clamped_to": window_start,
+                        "message": f"补库单 {row.get('replenish_no')}（{row.get('status')}）的入库日 {key} "
+                                   f"已早于推演窗口首日 {window_start}，按「尽快到货」钳到窗口首日计入",
+                    })
+                    key = window_start
+                inbound_by_date[key] = inbound_by_date.get(key, 0) + qty
+        return inbound_by_date, overdue
 
     def _collect_outbound(self, material_no):
         """预计出库量 = 出库计划「待出库」单据按计划出库日期合计
@@ -361,7 +421,19 @@ class InventoryProjection:
         }
 
     def _classify_alert(self, balance, water):
-        """对照水位线判定预警级别（BR-08）。呆滞阈值 BRD 未定义，暂不产出。"""
+        """对照水位带判定预警级别（BR-08）。呆滞阈值 BRD 未定义，暂不产出。
+
+        阈值取**水位带**：下限 = A+C（补货触发线），上限 = **A+C+B**（组批封顶线）。
+
+        ⚠ **超储的阈值是「上限」A+C+B，不是裸 `B`**（2026-09-17 订正，B-10）：
+        实现此前写的是 `balance > b`，与正本 `inventory_strategy` 的 **BR-10**
+        （「上限（组批封顶线）= A + C + B；高于上限即超储」）**互相矛盾**，
+        而前端画的水位带用的正是 `A+C+B`（`get_water_level` 的 `upper`）——
+        **预警与同一屏上的带子说的不是一回事**。
+        对库存对冲件差别很小（RB26：`>898` vs `>968`），所以一直没暴露；
+        对**速度对冲件**（BR-12 规定 C=B=0）则退化成 `>0` ⇒ **手上有货就报超储**：
+        实测演示环境 279 行「超储」里有 **159 行**是 `BYD-HAN-FB25/FB26` 的误报。
+        """
         if not water:
             return "无"
         a = water["min_level"]
@@ -373,7 +445,7 @@ class InventoryProjection:
             return "击穿最低"
         if balance < a + c:
             return "击穿安全"
-        if balance > b:
+        if balance > a + c + b:
             return "超储"
         return "无"
 
@@ -385,7 +457,12 @@ class InventoryProjection:
         }.get(alert_type, "缺货补库")
 
     def _replenish_qty(self, alert_type, balance, water):
-        """补库量 = 补回触发水位线的缺口（产能紧张基线；产能富余补到 B 由 demand_pool 分档）。"""
+        """补库量 = 补回触发水位线的缺口（**产能紧张基线**）。
+
+        产能富余时补到组批水位 B —— 那一段由 `demand_pool._resolve_replenish_qty` 按 BR-06 分档，
+        触发方（`scan_alert`）负责把水位与击穿余额**传下去**（2026-09-17 补的接线，见 create 调用处）。
+        本方法算出的值只作为「水位入参缺失」时的兜底。
+        """
         a = water["min_level"]
         c = water["safety_level"]
         if alert_type == "缺货":

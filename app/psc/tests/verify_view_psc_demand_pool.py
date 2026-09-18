@@ -22,17 +22,29 @@ ROOT = _project_root()
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
 
-from fde_platform.dbguard import isolate_dbs  # noqa: E402
+from fde_platform.shadowdb import shadow_dbs, shadow_clear, shadow_clear_prefs, auth_db_path  # noqa: E402
+from fde_platform.view_watchdog import install_watchdog  # noqa: E402
 
-_iso = isolate_dbs()
-_iso.__enter__()
-atexit.register(_iso.__exit__, None, None, None)
+# 影子库：业务库与平台库**都**复制到副本 → 真库零字节接触，**不用停 dev server**。
+# config=True 是必需的：本脚本要播种 admin（写 config/auth.db），不影子化就会污染真库。
+_shadow = shadow_dbs(env=True, inprocess=False, config=True)
+_shadow.__enter__()
+# ⚠ **必须在副本上清表**（2026-09-18 加）：影子库是**真库的拷贝** —— 真演示数据
+# （e2e 的 M001/M002、PSC 的各主数据）会被一起复制进来，而本脚本自带的造数会撞主键。
+# 此前不写这句也没事，只是因为当时副本落盘在另一个目录、平台读到的其实是**新建空库**；
+# 布局修正后"副本是空的"这个隐含假设当场暴露 ⇒ 显式清表，语义与《验证门禁.md》
+# §四之二的「view e2e 起点 = 空表」一致。
+shadow_clear("psc")
+# **个人 UI 偏好也要清**：它是操作者本机状态（如"手动隐藏过某列"），
+# 不清就会让用例结果取决于谁在哪台机器上跑（实测：真库里藏了 sales_forecast 的两列）。
+shadow_clear_prefs()
+atexit.register(_shadow.__exit__, None, None, None)
 
 from fde_platform import users  # noqa: E402
 users.init_schema()
 users.seed_admin()
 try:
-    _auth_db = ROOT / "config" / "auth.db"
+    _auth_db = auth_db_path()
     if _auth_db.exists():
         _conn = sqlite3.connect(str(_auth_db))
         _conn.execute("UPDATE users SET password_changed = 1 WHERE username = 'admin'")
@@ -186,6 +198,9 @@ def main():
 
     errors = []
     ignored = []
+    # 卡住诊断（2026-09-18）：页面冻死/渲染进程崩溃时 playwright 调用不返回 ——
+    # 由这个守护线程把「最后完成的步骤 + 已收集的错误」打出来；否则超时被强杀时现场全丢。
+    install_watchdog(errors, step_getter=lambda: STEP)
 
     def attach(page):
         def on_console(msg):
@@ -234,6 +249,7 @@ def main():
             page.wait_for_selector(".rail, .menu, nav", timeout=15000)
 
             # ===================== §1 本页路由渲染（防粘滞） =====================
+            # VT-ROUTE-01 路由渲染（.kpi==0 防粘滞 + 台账三段式）
             step("§1 路由渲染")
             page.evaluate("location.hash = '#/demand_pool'")
             try:
@@ -246,6 +262,7 @@ def main():
             assert page.locator(".kpi").count() == 0, "demand_pool 页残留看板 .kpi（挂载未重建）"
             main_txt = page.locator("main").inner_text()
             assert "需求池台账" in main_txt, "主区未含「需求池台账」"
+            assert page.locator("table.tbl").count() > 0, "列表表格 table.tbl 缺失"
             assert "上一页" in main_txt and "下一页" in main_txt, "分页条缺失 上一页/下一页"
 
             # ===================== §0 造数 =====================
@@ -267,6 +284,7 @@ def main():
             page.wait_for_timeout(400)
 
             # ===================== §2 列表 =====================
+            # VT-LIST-01 列表含所造单号 + 7 列齐全
             step("§2 列表有数据")
             header_txt = page.locator("table.tbl tr").first.inner_text()
             for label in ["补库单号", "补库类型", "状态", "物料号", "补库数量", "要求入库时间", "承诺入库时间"]:
@@ -290,6 +308,17 @@ def main():
             opt.wait_for(state="visible", timeout=5000)
             opt.click()
             wait_rows(page, 7)
+            # VT-LIST-02 断言（用例 §2）：结果集行数 == 造数补库单总数（RP1–RP7）；每行 material_no 均为 M1。
+            # 本用例 §0 只造了 M1 一种物料（用例文档：「另可造 M2 以验证收敛；缺省仅 M1 即可」），
+            # 故「过滤 M1」的收敛等价于**全量保留且一行不漏、不混入别的物料**。
+            rows = page.locator("table.tbl tr.data")
+            assert rows.count() == 7, f"物料号 M1 过滤后应保留全量 7 行，实际 {rows.count()}"
+            tbl_txt = page.locator("table.tbl").inner_text()
+            for no in (RP1, RP2, RP3, RP4, RP5, RP6, RP7):
+                assert no in tbl_txt, f"物料号 M1 过滤后漏掉单号：{no}"
+            for i in range(rows.count()):
+                assert "M1" in rows.nth(i).inner_text(), \
+                    f"物料号 M1 过滤后第 {i + 1} 行 material_no 不是 M1：{rows.nth(i).inner_text()[:80]}"
             # 清空物料过滤（✕ 按钮）
             clear = page.locator('button:has-text("✕")').first
             if clear.count():
@@ -426,8 +455,17 @@ def main():
                 assert not any(f in t for t in main_btns), f"自动参考创建页不应出现「{f}」入口"
 
             # ===================== §6 0 报错红线 =====================
+            # VT-ERR-01 全程零报错
             step("§6 0报错")
             assert not errors, f"前端报错：{errors[:5]}"
+            # **豁免也要受检**（2026-09-17 补）：`ignored` 收集了却从不校验，等于给「静默吞掉」
+            # 开了口子 —— 任何新形态的 4xx/console error 都能混进来而不被任何人发现。
+            # 只认 favicon / sourcemap / 受限会话 403 三种豁免理由，其余一律报出。
+            for _item in ignored:
+                _ok = ("/favicon.ico" in _item or ".map" in _item or "403" in _item)
+                assert _ok, f"豁免理由不成立（既不是 favicon/.map，也不是 403）：{_item!r}"
+            if ignored:
+                print(f"  · 本次豁免 {len(ignored)} 条：{ignored[:3]}")
             print("VERIFY_VIEW_psc_demand_pool: PASS")
 
     finally:

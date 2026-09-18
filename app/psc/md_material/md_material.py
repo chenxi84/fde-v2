@@ -60,9 +60,15 @@ class MdMaterial:
     def list(self, material_no: str = None, material_name: str = None,
              status: str = None, page: int = None, size: int = None):
         """按物料号/名称模糊、状态精确筛选的分页列表。返回全字段，供列表自选显示列。"""
+        # ⚠ 列集要与 `get` 对齐（`_to_dict` 用固定键列表，SELECT 少取的列会**照样出现在返回里、
+        # 但恒为 None**）。唯一**刻意**不取的只有 `model_blob` —— 那是整个 pickle 序列化的
+        # statsforecast 模型（单行可达数十 KB），列表接口带上它会把响应撑爆；
+        # `sigma_l` 则必须取：安全库存 C = z × σ_L 正要用它，省略会让消费方读到 None
+        # （实测 2026-09-15：BRK 库里 sigma_l=5.99，经 list 变成 None）。
         sql = ("SELECT material_no, material_name, predecessor_material_no, status, unit_value, "
                "value_class, change_cost, prod_days, logistics_days, change_risk, service_level, "
-               "batch_window, base_method, base_params, fit_version, fit_effective_at FROM md_material")
+               "batch_window, base_method, base_params, fit_version, fit_effective_at, "
+               "sigma_l FROM md_material")
         clauses = []
         params = []
 
@@ -246,14 +252,23 @@ class MdMaterial:
         return {"total": len(rows), "success": success, "fail": fail, "errors": errors}
 
     def set_fit_params(self, material_no: str, base_method: str, base_params: str,
-                       batch_window: float, service_level: float, fit_version: str,
-                       model_blob: str = None, sigma_l: float = None):
+                       batch_window: float = None, service_level: float = None,
+                       fit_version: str = None, model_blob: str = None, sigma_l: float = None):
         """拟合参数回填（被 strategy_fitting 调用），更新方法/参数并记录版本快照。
-        sigma_l 为响应窗口预测误差标准差（供库存策略安全库存口径），可选。"""
+        sigma_l 为响应窗口预测误差标准差（供库存策略安全库存口径），可选。
+
+        ⚠ **`batch_window` / `service_level` 是"给了才更新"**（2026-09-17 改，与
+        `import_batch` 的部分更新同一语义）：这两个是**物料主数据里人工维护**的参数
+        （BRD §4.8.1「组批窗口：物料主数据（经验值）」）—— 拟合不该覆盖它们。
+        **不传 = 保持原值**，传了才校验并落库（传 None 与不传同义，不写这一列）。
+        此前签名把它们列为必填、且 `approve` 每次回填都把拟合的常量写进去，
+        等于**人工维护的设置跑一次拟合就被静默冲掉**（且看不出来：值恰好是默认的 28/0.95）。
+        """
         material_no = self._clean(material_no)
         if not material_no:
             raise FdeError("物料号不能为空")
-        if self._row(material_no) is None:
+        row = self._row(material_no)
+        if row is None:
             raise FdeError("物料记录不存在")
 
         base_method = self._clean(base_method)
@@ -261,12 +276,9 @@ class MdMaterial:
             raise FdeError("基线方法仅支持：" + "、".join(self._BASE_METHODS))
         params_norm = self._normalize_base_params(base_method, base_params)
 
-        bw = self._check_batch_window(batch_window)
-        if bw is None:
-            raise FdeError("组批窗口须大于 0")
-        sl = self._check_service_level(service_level)
-        if sl is None:
-            raise FdeError("满足率目标须在 0~1 之间")
+        # 未传 → 不更新该列，快照里记"当时主数据的值"（回滚才回得回去）
+        bw = self._check_batch_window(batch_window) if batch_window is not None else row["batch_window"]
+        sl = self._check_service_level(service_level) if service_level is not None else row["service_level"]
 
         fit_version = self._clean(fit_version)
         if not fit_version:
@@ -274,14 +286,22 @@ class MdMaterial:
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        self.db.execute(
-            "UPDATE md_material SET base_method = ?, base_params = ?, batch_window = ?, "
-            "service_level = ?, fit_version = ?, fit_effective_at = ?, model_blob = ?, "
-            "sigma_l = ? WHERE material_no = ?",
-            (base_method, params_norm, bw, sl, fit_version, now, model_blob, sigma_l, material_no),
-        )
+        # 部分更新：batch_window / service_level 只在显式传入时才写
+        sets = ["base_method = ?", "base_params = ?", "fit_version = ?",
+                "fit_effective_at = ?", "model_blob = ?", "sigma_l = ?"]
+        args = [base_method, params_norm, fit_version, now, model_blob, sigma_l]
+        if batch_window is not None:
+            sets.append("batch_window = ?")
+            args.append(bw)
+        if service_level is not None:
+            sets.append("service_level = ?")
+            args.append(sl)
+        args.append(material_no)
+        self.db.execute(f"UPDATE md_material SET {', '.join(sets)} WHERE material_no = ?",
+                        tuple(args))
 
-        # 记录参数版本快照（material_no + fit_version 唯一，重复版本覆盖更新），供回滚追溯
+        # 记录参数版本快照（material_no + fit_version 唯一，重复版本覆盖更新），供回滚追溯。
+        # 快照记**当时生效的两个值**（含从主数据读来的），回滚时才能原样还原。
         existing = self.db.execute(
             "SELECT 1 FROM md_material_param_version WHERE material_no = ? AND fit_version = ?",
             (material_no, fit_version),
@@ -674,7 +694,8 @@ class MdMaterial:
         return v
 
     def _check_predecessor(self, value, material_no):
-        """校验前序物料：可空；非空时须存在且不得指向自身。返回清洗后的值或 None。"""
+        """校验前序物料：可空；非空时须存在、不得指向自身、**且不得成环**。
+        返回清洗后的值或 None。"""
         v = self._clean(value)
         if not v:
             return None
@@ -682,6 +703,25 @@ class MdMaterial:
             raise FdeError("前序物料不能指向自身")
         if not self._exists(v):
             raise FdeError("前序物料不存在")
+        # 环检测：从 v 顺着前序链往上走，只要碰上 material_no 就是成环。
+        # 为什么必须加（2026-09-15 实测）：只拦自指时，a→b 允许、b→a 也允许 ⇒ 环真的能进库；
+        # 而读取侧 `predecessor_chain` 按 docstring 契约「成环在已访问处断链」**静默截断**——
+        # **两头都沉默**。计划员把两个物料的前序互相填错（很容易发生）就会让族谱无意义、
+        # 预测历史按截断的链拼接，而全程没有任何提示。
+        seen = set()
+        cur = v
+        while cur and cur not in seen:
+            if cur == material_no:
+                raise FdeError(
+                    f"前序物料链不能成环：{material_no} → … → {v} → {material_no}，"
+                    f"请检查是否与另一物料的前序互相指认"
+                )
+            seen.add(cur)
+            row = self.db.execute(
+                "SELECT predecessor_material_no FROM md_material WHERE material_no = ?",
+                (cur,),
+            ).fetchone()
+            cur = self._clean(row["predecessor_material_no"]) if row is not None else ""
         return v
 
     def _check_value_class(self, value):

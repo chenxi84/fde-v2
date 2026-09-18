@@ -90,7 +90,10 @@
 
 8. **简化实现说明**
    - 预测拟合已接入 statsforecast（常规 AutoTheta/AutoARIMA/AutoETS 需 ≥12 期，间歇 Croston/TSB 需 ≥4 期），cross_validation 回测以 MASE 选 winner 并出 pred_qty/pred_lo/pred_hi；数据不足（常规 <12 期 / 间歇 <4 期）pred_method 留空、abnormal_flag=true。
-   - 库存拟合仍为简化默认组合（服务系数 1.65、组批窗口 28 天），约束优化网格待接入后替换 `_inventory_fit`。
+   - **库存侧参数不由本应用计算**（2026-09-17 口径）：组批窗口 / 满足率目标由**物料主数据人工维护**，
+     拟合只回读镜像供复核（`strategy_fitting.batch_window` / `fulfill_rate`）；
+     服务系数 / 安全水位 / 库存天数 / 切线次数**本期不产出**（留空）。
+     复核通过**只回填预测侧**（base_method / base_params / model_blob / σ_L），不动主数据里那两个人工值。
    - `_load_sales_history` 已接入历史台账适配器（md_material.history_chain + sales_history.history_series），无真实台账时返回空 → 数据不足兜底。
 
 9. **权限由平台控制**：应用不做鉴权；approve/reject/rollback 仅拟合复核人可调用。

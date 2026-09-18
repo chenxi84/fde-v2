@@ -77,15 +77,18 @@ psc__attainment__list(material_no="M001", page=1, size=20)
 
 4. **无 create / 无删除 / 无编辑入口**
    - 本应用为「自动参考创建」，不提供 `create`、`delete`、`update` 服务，Agent 不应尝试调用不存在的写入工具。
-   - 写入只经 `upsert` 由 ERP 同步驱动。
+   - 写入只经 `upsert`；其**实际驱动方是 `attainment.compute`（本地重算）或外部直调** ——
+     旧文写的「由 ERP 同步驱动」对应的 `_load_attainment` 适配器已于 2026-09-15 删除。
 
 5. **列表查询行为**
    - `customer_no` 与 `material_no` 同时传入时取交集（AND 关系）；均为空时返回全部数据。
    - `page`/`size` 均为 `None` 时不分页返回全部；默认每页 20 条。
 
-6. **外部适配器 `_load_attainment`**
-   - V1 为本地 stub，返回空 dict、不执行任何回写。
-   - 真实接入时仅替换该适配器实现（从 ERP 拉取 MAPE/bias 后逐条 `upsert`），公共方法签名不变。
+6. **外部适配器：当前没有**（2026-09-15 按 B-02 删除 `_load_attainment`）
+   - 原因：它声明「从 ERP 拉取 MAPE/bias 后逐条 upsert」，而**全仓没有任何调用点** ——
+     声明了外部数据来源却永远不执行，属死适配器（与 `inventory_projection._load_in_transit` 同类）。
+   - 现状：MAPE/bias 由 `attainment.compute` 本地重算（口径A/B），或由外部直接调 `upsert` 回写。
+   - 真实接入 ERP 时再新增适配器并在**同一处**接上调用点。
 
 ---
 

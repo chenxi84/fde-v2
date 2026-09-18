@@ -21,11 +21,23 @@ ROOT = _project_root()
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
 
-from fde_platform.dbguard import isolate_dbs  # noqa: E402
+from fde_platform.shadowdb import shadow_dbs, shadow_clear, shadow_clear_prefs, auth_db_path  # noqa: E402
+from fde_platform.view_watchdog import install_watchdog  # noqa: E402
 
-_iso = isolate_dbs()
-_iso.__enter__()
-atexit.register(_iso.__exit__, None, None, None)
+# 影子库：业务库与平台库**都**复制到副本 → 真库零字节接触，**不用停 dev server**。
+# config=True 是必需的：本脚本要播种 admin（写 config/auth.db），不影子化就会污染真库。
+_shadow = shadow_dbs(env=True, inprocess=False, config=True)
+_shadow.__enter__()
+# ⚠ **必须在副本上清表**（2026-09-18 加）：影子库是**真库的拷贝** —— 真演示数据
+# （e2e 的 M001/M002、PSC 的各主数据）会被一起复制进来，而本脚本自带的造数会撞主键。
+# 此前不写这句也没事，只是因为当时副本落盘在另一个目录、平台读到的其实是**新建空库**；
+# 布局修正后"副本是空的"这个隐含假设当场暴露 ⇒ 显式清表，语义与《验证门禁.md》
+# §四之二的「view e2e 起点 = 空表」一致。
+shadow_clear("psc")
+# **个人 UI 偏好也要清**：它是操作者本机状态（如"手动隐藏过某列"），
+# 不清就会让用例结果取决于谁在哪台机器上跑（实测：真库里藏了 sales_forecast 的两列）。
+shadow_clear_prefs()
+atexit.register(_shadow.__exit__, None, None, None)
 
 # admin 账号：必须在平台子进程启动前经 users 模块建好，切勿在浏览器里调 HTTP API 建。
 from fde_platform import users  # noqa: E402
@@ -33,10 +45,10 @@ users.init_schema()
 users.seed_admin()
 
 # 首次登录强制改密（password_changed=0）绕过：把 admin 标记为已改密，否则登录后会被
-# 重定向到 /change-password，无法进入视图。auth.db 已被 dbguard 隔离成空库，此改动仅作用测试库。
+# 重定向到 /change-password，无法进入视图。auth.db 已在**副本**上（影子库），此改动仅作用测试副本、真库不受影响。
 import sqlite3  # noqa: E402
 try:
-    auth_db = ROOT / "config" / "auth.db"
+    auth_db = auth_db_path()
     if auth_db.exists():
         conn = sqlite3.connect(str(auth_db))
         conn.execute("UPDATE users SET password_changed = 1 WHERE username = 'admin'")
@@ -95,11 +107,15 @@ SEED_JS = r"""async () => {
   };
 
   // 跨应用前置：物料主数据（正常状态，供 run/run_batch 校验与 autocomplete）
+  // ⚠ 2026-09-17 口径：**组批窗口与满足率目标由物料主数据人工维护**（拟合不再自动运算、也不覆盖），
+  //    所以造数里要**像计划员那样把它们维护上** —— 否则拟合记录里这两个值是空的、详情模态显示「—」。
   await call("md_material", "create", {
-    material_no: "M1", material_name: "移动平均物料A", status: "正常", base_method: "移动平均"
+    material_no: "M1", material_name: "移动平均物料A", status: "正常", base_method: "移动平均",
+    batch_window: 28, service_level: 0.95
   });
   await call("md_material", "create", {
-    material_no: "M2", material_name: "移动平均物料B", status: "正常", base_method: "移动平均"
+    material_no: "M2", material_name: "移动平均物料B", status: "正常", base_method: "移动平均",
+    batch_window: 28, service_level: 0.95
   });
 
   // 客户 + 历史台账（24 期常规趋势+季节，供 statsforecast 出真实拟合、abnormal_flag=false）
@@ -288,6 +304,9 @@ def main():
 
     errors = []
     ignored = []
+    # 卡住诊断（2026-09-18）：页面冻死/渲染进程崩溃时 playwright 调用不返回 ——
+    # 由这个守护线程把「最后完成的步骤 + 已收集的错误」打出来；否则超时被强杀时现场全丢。
+    install_watchdog(errors, step_getter=lambda: STEP)
 
     def attach(page):
         def on_console(msg):
@@ -336,6 +355,7 @@ def main():
             page.wait_for_selector(".rail, .menu, nav", timeout=15000)
 
             # ===================== §1 本页渲染（防粘滞）=====================
+            # VT-ROUTE-01 路由渲染 + 三段式挂载（.kpi==0 防粘滞）
             step("§1 本页路由渲染 + 三段式挂载（防粘滞）")
             page.evaluate("location.hash = '#/strategy_fitting'")
             try:
@@ -370,6 +390,15 @@ def main():
             page.evaluate("location.hash = '#/strategy_fitting'")
             page.wait_for_selector("table.tbl.tight tr.data", timeout=15000)
             page.wait_for_timeout(500)
+            # 前置步计数断言（**无对应用例**）：§0 造的是 SF1–SF7 共 7 条，后面每一步（含「共 7 条」
+            # 分页条、三态全显）都以此为前提 —— 这里先钉死，失败时才指向「造数/重载」而不是被
+            # 后续某个用例的错误文案带偏。
+            page.wait_for_function(
+                "document.querySelectorAll('table.tbl.tight tr.data').length === 7", timeout=15000
+            )
+            assert page.locator("table.tbl.tight tr.data").count() == 7, (
+                f"重载后应恰 7 条（SF1–SF7），实际 {page.locator('table.tbl.tight tr.data').count()}"
+            )
 
             # ===================== §2 造数后列表有数据 =====================
             step("§2 VT-LIST-01 列表含所造单号（三态全显）")
@@ -387,12 +416,18 @@ def main():
             click_chip(page, "待复核")
             assert_rows_all_status(page, "待复核")
             assert find_row(page, "M1", "202608").count() > 0, "待复核筛选未见 SF1"
+            assert find_row(page, "M1", "202607").count() == 0, \
+                "待复核筛选不应见已生效的 SF2（M1@202607）—— 状态筛选未互斥"
             click_chip(page, "已生效")
             assert_rows_all_status(page, "已生效")
             assert find_row(page, "M1", "202607").count() > 0, "已生效筛选未见 SF2"
+            assert find_row(page, "M1", "202608").count() == 0, \
+                "已生效筛选不应见待复核的 SF1（M1@202608）—— 状态筛选未互斥"
             click_chip(page, "已否决")
             assert_rows_all_status(page, "已否决")
             assert find_row(page, "M1", "202606").count() > 0, "已否决筛选未见 SF3"
+            assert find_row(page, "M1", "202608").count() == 0, \
+                "已否决筛选不应见待复核的 SF1（M1@202608）—— 状态筛选未互斥"
 
             step("§2 VT-LIST-03 物料模糊 + 版本精确 + 异常标记 AND + 空态")
             click_chip(page, "全部")  # 清状态 chip
@@ -435,9 +470,16 @@ def main():
                        "预测参数（pred_params）", "服务系数", "安全水位", "组批窗口",
                        "满足率", "库存天数", "切线次数", "异常标记", "状态"]:
                 assert lb in txt, f"详情模态缺字段标签：{lb}"
-            for v in ["M1", "202608", "移动平均物料A", "Auto", "season_length", "1.65", "28", "95%",
+            # ⚠ 2026-09-17 口径变更：库存侧**不再自动运算**（组批窗口/满足率目标由物料主数据
+            # 人工维护，网格寻优/回放/成本折算本期不做）⇒ 由寻优才产出的四个量**留空显示「—」**，
+            # 而 `组批窗口` / `满足率` 改为**主数据人工值的镜像**。原断言里的 `1.65` 正是被
+            # 编造的常量（详见《应用详设》§3.2 的口径变更说明与 BR-20）。
+            for v in ["M1", "202608", "移动平均物料A", "Auto", "season_length", "28", "95%",
                       "正常", "待复核", "原始数据"]:
                 assert v in txt, f"详情模态缺值：{v}"
+            assert "1.65" not in txt, "服务系数本期不产出，不应再出现编造的常量 1.65"
+            # 四个"由寻优产出"的量应为空值占位「—」（与同一行的多列空值一致）
+            assert txt.count("—") >= 3, f"库存侧未产出的字段应显示「—」：{txt[:200]}"
             ft = modal.locator(".modal-ft").first.inner_text()
             assert "复核通过" in ft and "否决" in ft, "待复核页脚缺 复核通过/否决"
             assert "回滚" not in ft, "待复核页脚不应有回滚按钮"
@@ -454,6 +496,60 @@ def main():
             for forbidden in ["复核通过", "否决", "回滚"]:
                 assert ft.locator(f'button:visible:has-text("{forbidden}")').count() == 0, \
                     f"已否决页脚不应出现 {forbidden} 按钮"
+            close_modal(page, modal)
+
+            step("§3 VT-MODAL-03 拟合过程候选排名表 + 逐月曲线（detail_json）")
+            find_row(page, "M1", "202608").locator("button.b-link.mono").first.click()
+            modal = wait_modal(page)
+            bd = modal.locator(".modal-bd").first
+            # 候选非空时 x-if 才渲染 #fitChart；等它挂上来
+            bd.locator("#fitChart").first.wait_for(state="attached", timeout=10000)
+            mtxt = bd.inner_text()
+            assert "下月预测" in mtxt, "模态缺「下月预测」区块"
+            assert "拟合过程" in mtxt, "模态缺「拟合过程」区块"
+            # 空态是 x-show 隐藏（**仍在 DOM**）——必须用 :visible/is_hidden 判，不能用 has_text 判存在
+            empty_state = bd.locator('div[x-show="!fitCandidates().length"]')
+            assert empty_state.count() == 1, "缺「无拟合过程数据」空态元素（x-show 兜底）"
+            assert empty_state.first.is_hidden(), "候选非空时「无拟合过程数据」空态应隐藏（x-show）"
+            # 「下月预测」区块含 pred_qty（点预测，非「—」空值兜底）
+            pred_cell = bd.locator(
+                'xpath=.//div[contains(@class,"k") and normalize-space(.)="预测销量"]'
+                '/following-sibling::div[contains(@class,"v")][1]'
+            ).first
+            assert pred_cell.count() == 1, "「下月预测」区块缺 预测销量 单元格"
+            pred_txt = pred_cell.inner_text().strip()
+            assert pred_txt not in ("", "—") and any(ch.isdigit() for ch in pred_txt), \
+                f"「下月预测」pred_qty 未渲染数值：{pred_txt!r}"
+            # 候选排名表：表头三列 + ≥1 行（真实 Auto* 候选）+ 首行「★ 推荐」
+            cand = bd.locator('table.tbl.tight:has(th:has-text("预测方法"))').first
+            head = cand.locator("tr").first.inner_text()
+            for col in ["预测方法", "MASE", "sMAPE"]:
+                assert col in head, f"候选排名表缺列：{col}（实际 {head!r}）"
+            cand_rows = cand.locator("tr.data")
+            n_cand = cand_rows.count()
+            assert n_cand >= 1, "候选排名表无数据行（detail_json.candidates 为空）"
+            first_txt = cand_rows.first.inner_text()
+            assert "★ 推荐" in first_txt, f"候选首行应标「★ 推荐」：{first_txt!r}"
+            assert "Auto" in first_txt, f"候选方法应为真实 Auto*（不是回落文案）：{first_txt!r}"
+            # MASE / sMAPE 两列非空（td.mono 各含数字）
+            cells = cand_rows.first.locator("td.mono").all_inner_texts()
+            assert len(cells) >= 2 and all(any(ch.isdigit() for ch in c) for c in cells[:2]), \
+                f"候选行 MASE/sMAPE 未渲染：{cells!r}"
+            # #fitChart 容器存在且 echarts 已 init（曲线真的画出来了；渲染期报错由 §6 兜底）
+            page.wait_for_function(
+                "() => { const el = document.getElementById('fitChart');"
+                " return !!(el && window.echarts && window.echarts.getInstanceByDom(el)); }",
+                timeout=8000,
+            )
+            # 点非首行候选 → 选中行高亮切换（候选数 ≥2 时才有非首行）
+            print(f"  · 拟合候选 {n_cand} 个；首行：{first_txt.splitlines()[0][:48]!r}")
+            if n_cand >= 2:
+                cand_rows.nth(1).click()
+                page.wait_for_timeout(400)
+                style1 = cand_rows.nth(1).get_attribute("style") or ""
+                assert "prime-soft" in style1, f"点击候选行后未高亮：{style1!r}"
+                style0 = cand_rows.first.get_attribute("style") or ""
+                assert "prime-soft" not in style0, "选中行切换后首行不应仍高亮"
             close_modal(page, modal)
 
             # ===================== §4 表单落库回显 + 状态机操作 =====================
@@ -505,6 +601,11 @@ def main():
             page.wait_for_timeout(600)
             assert find_row(page, "M1", "202610").count() > 0, "批量拟合未落 M1@202610"
             assert find_row(page, "M2", "202610").count() > 0, "批量拟合未落 M2@202610"
+            # 用例 §4 VT-FORM-03 断言「落表且 status=待复核」——原实现只断了行存在，
+            # 「批量拟合跑出来的记录初始也是待复核」这半条没断。
+            for mat in ("M1", "M2"):
+                assert "待复核" in find_row(page, mat, "202610").first.inner_text(), \
+                    f"批量拟合新建的 {mat}@202610 初始状态应为 待复核"
 
             step("§4 VT-ACT-01 待复核 → approve 已生效（行内复核通过）")
             find_row(page, "M2", "202608").locator('.rowact button:visible:has-text("复核通过")').first.click()
@@ -524,6 +625,32 @@ def main():
             assert_toast(page, "已回滚 · M2 · 202606")
             sf6 = wait_status(page, "M2", "202606", "已否决")
             assert sf6.locator('.rowact button:visible').count() == 0, "回滚后不应有可见操作按钮"
+            # BR-15 回填上一版参数：本页 UI 不展示物料主数据的 base_method/base_params，故按本仓库
+            # 既有范式（md_breakpoint §4「软失效」）经**页面同源接口**读回，断言回填确实发生。
+            # 上一版 = fit_version < 202606 且 status=已生效 的最新一条 = M2@202605（§0 SF7）。
+            prev = page.evaluate("""async () => {
+              const r = await fetch('/api/apps/psc/strategy_fitting/call/list',
+                {method:'POST', headers:{'Content-Type':'application/json'},
+                 body: JSON.stringify({material_no: 'M2', fit_version: '202605'})});
+              const j = await r.json();
+              return (j.data && j.data.items && j.data.items[0]) || null;
+            }""")
+            mat = page.evaluate("""async () => {
+              const r = await fetch('/api/apps/psc/md_material/call/get',
+                {method:'POST', headers:{'Content-Type':'application/json'},
+                 body: JSON.stringify({material_no: 'M2'})});
+              const j = await r.json();
+              return (j.data !== undefined) ? j.data : j;
+            }""")
+            assert prev and prev.get("fit_version") == "202605", f"未取到上一版记录 SF7：{prev}"
+            assert mat and mat.get("fit_version") == "202605", (
+                "回滚未把上一版版本号回填进物料主数据（BR-15）："
+                f"fit_version={mat and mat.get('fit_version')}"
+            )
+            assert mat.get("base_method") == prev.get("pred_method"), (
+                "回滚未回填上一版预测方法："
+                f"{mat.get('base_method')} != 上一版 {prev.get('pred_method')}"
+            )
 
             step("§4 VT-ACT-04 已否决终态无按钮（行内 x-show 收敛）")
             sf3 = find_row(page, "M1", "202606").first
@@ -535,6 +662,14 @@ def main():
             # ===================== §6 0 报错红线 =====================
             step("§6 0 报错红线")
             assert not errors, f"前端报错：{errors[:5]}"
+            # **豁免也要受检**（2026-09-17 补）：`ignored` 收集了却从不校验，等于给「静默吞掉」
+            # 开了口子 —— 任何新形态的 4xx/console error 都能混进来而不被任何人发现。
+            # 只认 favicon / sourcemap / 受限会话 403 三种豁免理由，其余一律报出。
+            for _item in ignored:
+                _ok = ("/favicon.ico" in _item or ".map" in _item or "403" in _item)
+                assert _ok, f"豁免理由不成立（既不是 favicon/.map，也不是 403）：{_item!r}"
+            if ignored:
+                print(f"  · 本次豁免 {len(ignored)} 条：{ignored[:3]}")
             print("VERIFY_VIEW_psc_strategy_fitting: PASS", flush=True)
 
     finally:

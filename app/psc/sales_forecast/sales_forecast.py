@@ -359,41 +359,60 @@ class SalesForecast:
         line = self._get_line(version_no, material_no, customer_no, rolling_month)
 
         mape = None
+        bias = None
         try:
             att = self.fde.call("attainment", "get", customer_no=customer_no, material_no=material_no)
         except FdeError:
             att = None
         if att:
             mape = att.get("mape")
+            # ⚠ bias 与 mape **同源**（同一次 attainment.get）：此前 decide 只写 mape 不写 bias ⇒
+            # 「只走过 decide 的行」两个达成率字段一有一无（不对称）。一并写齐 ——
+            # fill_customer 仍会覆盖它（它按 bias 算 adj_qty），故只是把**同一份事实**写全，不改口径。
+            bias = att.get("bias")
 
         adj_qty = line.get("adj_qty")
         base_qty = line.get("base_qty")
+        base_event_qty = line.get("base_event_qty")
         # 物料级口径：该品种全部客户调整后需求合计，与基线（物料级）同口径对比
         adj_sum = self._adj_sum(version_no, material_no, rolling_month)
+
+        # BR-15 的「基线和事件合计量」。预测为负无业务含义（退坡物料的基线外推会出现负值），钳到 0。
+        base_pick = max(0.0, base_event_qty) if base_event_qty is not None else None
 
         abnormal_flag = False
         final_qty = None
 
-        if base_qty is None or adj_sum is None:
-            # 基线或合计缺失 → 无法物料级对比，不标记异常，取客户调整后值
+        if adj_sum is None:
+            # 客户侧不可用：无人填报原始预测（orig_qty 可空，BR-09）⇒ adj_qty 全空 ⇒ 偏离率无从计算。
+            # 按 BR-15「MAPE 不存在 → 默认信基线」同理，取基线和事件合计量。
+            # ⚠ 曾经的写法是取 adj_qty（即留空），而 summarize 把空当 0 ⇒ 算好的基线被静默丢弃、
+            #   毛需求只剩水位层。实测（202610）：M9-BEAM 基线 1967.71/月、SPARM 45.30/月全部丢失，
+            #   三个月合计 6025.88 件没进毛需求，且 abnormal_flag=0、界面上看不出任何异常。
+            final_qty = base_pick if base_pick is not None else adj_qty
+        elif base_qty is None:
+            # 无基线可比 → 偏离率无从计算，按 BR-14 不标异常，取客户调整后值
             final_qty = adj_qty
         else:
             deviation = self._deviation(base_qty, adj_sum)
-            if deviation > self.DEVIATION_THRESHOLD:
-                # 物料级偏离 > 阈值 → 该物料该月全部客户行标记异常，final 待人工
+            if mape is not None and deviation > self.DEVIATION_THRESHOLD:
+                # BR-14：MAPE 存在 且 偏离率 > 阈值 → 该物料该月全部客户行标记异常，final 待人工
                 abnormal_flag = True
                 final_qty = None
-            else:
-                # 不异常 → 单客户最终取各自调整后值
+            elif mape is not None and mape <= self.MAPE_THRESHOLD:
+                # BR-15：MAPE 小（客户可信）→ 取客户调整后需求数量
                 final_qty = adj_qty
+            else:
+                # BR-15：MAPE 大（客户不可信）或 MAPE 不存在 → 取基线和事件合计量（默认信基线）
+                final_qty = base_pick if base_pick is not None else adj_qty
 
         self.db.execute(
             """
                 UPDATE sales_forecast_line
-                SET mape = ?, abnormal_flag = ?, final_qty = ?
+                SET mape = ?, bias = ?, abnormal_flag = ?, final_qty = ?
                 WHERE version_no = ? AND material_no = ? AND customer_no = ? AND rolling_month = ?
             """,
-            (mape, 1 if abnormal_flag else 0, final_qty, version_no, material_no, customer_no, rolling_month),
+            (mape, bias, 1 if abnormal_flag else 0, final_qty, version_no, material_no, customer_no, rolling_month),
         )
         return self._get_line(version_no, material_no, customer_no, rolling_month)
 

@@ -20,11 +20,23 @@ ROOT = _project_root()
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
 
-from fde_platform.dbguard import isolate_dbs  # noqa: E402
+from fde_platform.shadowdb import shadow_dbs, shadow_clear, shadow_clear_prefs, auth_db_path  # noqa: E402
+from fde_platform.view_watchdog import install_watchdog  # noqa: E402
 
-_iso = isolate_dbs()
-_iso.__enter__()
-atexit.register(_iso.__exit__, None, None, None)
+# 影子库：业务库与平台库**都**复制到副本 → 真库零字节接触，**不用停 dev server**。
+# config=True 是必需的：本脚本要播种 admin（写 config/auth.db），不影子化就会污染真库。
+_shadow = shadow_dbs(env=True, inprocess=False, config=True)
+_shadow.__enter__()
+# ⚠ **必须在副本上清表**（2026-09-18 加）：影子库是**真库的拷贝** —— 真演示数据
+# （e2e 的 M001/M002、PSC 的各主数据）会被一起复制进来，而本脚本自带的造数会撞主键。
+# 此前不写这句也没事，只是因为当时副本落盘在另一个目录、平台读到的其实是**新建空库**；
+# 布局修正后"副本是空的"这个隐含假设当场暴露 ⇒ 显式清表，语义与《验证门禁.md》
+# §四之二的「view e2e 起点 = 空表」一致。
+shadow_clear("psc")
+# **个人 UI 偏好也要清**：它是操作者本机状态（如"手动隐藏过某列"），
+# 不清就会让用例结果取决于谁在哪台机器上跑（实测：真库里藏了 sales_forecast 的两列）。
+shadow_clear_prefs()
+atexit.register(_shadow.__exit__, None, None, None)
 
 # admin 登录态：在平台子进程启动前经 users 模块播种（平台无建用户端点）。
 from fde_platform import users  # noqa: E402
@@ -32,7 +44,7 @@ users.init_schema()
 users.seed_admin()
 # 标记 admin 已改密，跳过 auth gate ②.5 首次登录强制改密（否则 /api/* 收 403）
 try:
-    auth_db = ROOT / "config" / "auth.db"
+    auth_db = auth_db_path()
     if auth_db.exists():
         conn = sqlite3.connect(str(auth_db))
         conn.execute("UPDATE users SET password_changed = 1 WHERE username = 'admin'")
@@ -198,6 +210,9 @@ def main():
 
     errors = []
     ignored = []
+    # 卡住诊断（2026-09-18）：页面冻死/渲染进程崩溃时 playwright 调用不返回 ——
+    # 由这个守护线程把「最后完成的步骤 + 已收集的错误」打出来；否则超时被强杀时现场全丢。
+    install_watchdog(errors, step_getter=lambda: STEP)
 
     def attach(page):
         def on_console(msg):
@@ -247,6 +262,7 @@ def main():
             page.wait_for_selector(".rail, .menu, nav", timeout=15000)
 
             # ===================== §1 本页渲染（防粘滞）=====================
+            # VT-ROUTE-01 路由渲染 + 防粘滞（过滤条 + 表格 + 分页条三段式）
             step("§1 本页渲染")
             page.evaluate("location.hash = '#/md_part_replace'")
             try:
@@ -266,6 +282,11 @@ def main():
             assert page.locator('button:has-text("重置")').count() >= 1, "缺重置按钮"
             assert page.locator('button:has-text("＋ 新建替换关系")').count() >= 1, "缺新建替换关系按钮"
             assert page.locator('input[placeholder*="关键字"]').count() == 0, "不应有关键字搜索框（契约无 keyword）"
+            # 三段式后半：表格 table.tbl.tight + 分页条（共 N 条 / 上一页 / 下一页）
+            assert page.locator("table.tbl.tight").count() >= 1, "缺列表表格 table.tbl.tight"
+            main_txt = page.locator("main").inner_text()
+            assert "共" in main_txt and "条" in main_txt, "缺分页条「共 N 条」"
+            assert "上一页" in main_txt and "下一页" in main_txt, "缺分页条 上一页/下一页"
 
             # ===================== §0 造数（跨应用前置 + 本页主数据）=====================
             step("§0 造数")
@@ -344,22 +365,36 @@ def main():
 
             # ===================== §4 表单 =====================
             step("§4 VT-FORM-02 必填空值被拒")
+            rows_before = page.locator("table.tbl.tight tr.data").count()
             click_button(page, ["＋ 新建替换关系"])
             modal = wait_modal(page)
             click_button(modal, ["创建"])
             page.wait_for_selector('.toast.warn:has-text("请选择原物料号")', timeout=3000)
+            # 用例 §4 VT-FORM-02 断言：toast 警告 + **模态保持打开** + 不发 create（列表不新增行）
+            assert modal.is_visible(), "原物料号为空被拒后模态应保持打开"
+            assert page.locator("table.tbl.tight tr.data").count() == rows_before, \
+                "原物料号为空被拒不应新增行"
             choose_material(page, modal, "原物料号", "M3")
             click_button(modal, ["创建"])
             page.wait_for_selector('.toast.warn:has-text("请选择替换物料号")', timeout=3000)
+            assert modal.is_visible(), "替换物料号为空被拒后模态应保持打开"
+            assert page.locator("table.tbl.tight tr.data").count() == rows_before, \
+                "替换物料号为空被拒不应新增行"
             close_modal(page, modal)
 
             step("§4 VT-FORM-03 原=替换前端拦截")
+            rows_before = page.locator("table.tbl.tight tr.data").count()
             click_button(page, ["＋ 新建替换关系"])
             modal = wait_modal(page)
             choose_material(page, modal, "原物料号", "M3")
             choose_material(page, modal, "替换物料号", "M3")
             click_button(modal, ["创建"])
             page.wait_for_selector('.toast.warn:has-text("原物料号与替换物料号不能相同")', timeout=3000)
+            # 用例 §4 VT-FORM-03 断言：toast 警告「原物料号与替换物料号不能相同」+ 模态保持打开
+            # + 前端 save() 先拦（不发 create）⇒ 列表不新增行
+            assert modal.is_visible(), "原=替换被前端拦截后模态应保持打开"
+            assert page.locator("table.tbl.tight tr.data").count() == rows_before, \
+                "原=替换被前端拦截不应新增行"
             close_modal(page, modal)
 
             step("§4 VT-FORM-04 组合唯一后端拦截")
@@ -451,8 +486,17 @@ def main():
             close_modal(page, modal)
 
             # ===================== §6 0 报错 =====================
+            # VT-ERR-01 本会话 0 报错
             step("§6 0 报错")
             assert not errors, f"前端报错：{errors[:5]}"
+            # **豁免也要受检**（2026-09-17 补）：`ignored` 收集了却从不校验，等于给「静默吞掉」
+            # 开了口子 —— 任何新形态的 4xx/console error 都能混进来而不被任何人发现。
+            # 只认 favicon / sourcemap / 受限会话 403 三种豁免理由，其余一律报出。
+            for _item in ignored:
+                _ok = ("/favicon.ico" in _item or ".map" in _item or "403" in _item)
+                assert _ok, f"豁免理由不成立（既不是 favicon/.map，也不是 403）：{_item!r}"
+            if ignored:
+                print(f"  · 本次豁免 {len(ignored)} 条：{ignored[:3]}")
             print("VERIFY_VIEW_psc_md_part_replace: PASS")
 
     finally:

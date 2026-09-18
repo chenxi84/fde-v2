@@ -213,19 +213,37 @@ class DemandPool:
 
     def _resolve_replenish_qty(self, replenish_type, replenish_qty, stock_on_hand,
                                min_level_a, safety_level_c, batch_level_b, tight):
-        """BR-06 补货量分档：富余补到组批水位 B；紧张补到触发水位线（缺货补回 0）。"""
+        """BR-06 补货量分档：富余补到组批水位 B；紧张补到触发水位线（缺货补回 0）。
+
+        ⚠ **富余档的目标不得低于该档的触发水位线**（2026-09-17 补，**接线后才暴露**）：
+        BR-12 要求**速度对冲**件 `C=B=0`（不组批、不备安全库存），于是富余档的「补到 B」
+        退化成「补到 0」—— 比紧张档的「补到 A」**还少**，自相矛盾；实测（2026-10-01 演示数据）
+        `BYD-HAN-FB25/FB26`（速度对冲，A=70.53/95.26，B=0）在余额 0 击穿最低时算出 `0−0=0`，
+        `_to_positive_qty` 抛「补库数量必须大于0」，而 `refresh_batch` 把这句异常**静默吞掉**
+        ⇒ 有击穿、无补库单、无任何提示。
+        故富余档目标取 `max(B, 触发线目标)`：对**库存对冲**件（B ≫ A+C）行为**完全不变**，
+        对**速度对冲**件退回"补到触发线"（＝按速度补货，不备组批库存，语义正确）。
+        """
         sh = self._to_optional_number(stock_on_hand)
-        # 富余：一次按组批量切线上足（补到组批水位 B）
-        if not tight and batch_level_b is not None and sh is not None:
-            return float(batch_level_b) - sh
-        # 紧张：只补到触发的那条水位线
-        if tight and sh is not None:
-            if replenish_type == "缺货补库":
-                return 0.0 - sh
-            if replenish_type == "最低库存补库" and min_level_a is not None:
-                return float(min_level_a) - sh
-            if replenish_type == "安全库存补库" and min_level_a is not None and safety_level_c is not None:
-                return float(min_level_a) + float(safety_level_c) - sh
+        # 触发水位线的目标量（缺货补回 0 / 最低补到 A / 安全补到 A+C）
+        trigger_target = None
+        if replenish_type == "缺货补库":
+            trigger_target = 0.0
+        elif replenish_type == "最低库存补库" and min_level_a is not None:
+            trigger_target = float(min_level_a)
+        elif replenish_type == "安全库存补库" and min_level_a is not None and safety_level_c is not None:
+            trigger_target = float(min_level_a) + float(safety_level_c)
+
+        if sh is not None:
+            # 富余：一次按组批量切线上足（补到组批水位 B，但不低于触发线）
+            if not tight and batch_level_b is not None:
+                target = float(batch_level_b)
+                if trigger_target is not None:
+                    target = max(target, trigger_target)
+                return target - sh
+            # 紧张：只补到触发的那条水位线
+            if tight and trigger_target is not None:
+                return trigger_target - sh
         # 未提供水位线参数时，退回触发方传入的补货量
         return replenish_qty
 

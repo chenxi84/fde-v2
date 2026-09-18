@@ -21,11 +21,23 @@ ROOT = _project_root()
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
 
-from fde_platform.dbguard import isolate_dbs  # noqa: E402
+from fde_platform.shadowdb import shadow_dbs, shadow_clear, shadow_clear_prefs, auth_db_path  # noqa: E402
+from fde_platform.view_watchdog import install_watchdog  # noqa: E402
 
-_iso = isolate_dbs()
-_iso.__enter__()
-atexit.register(_iso.__exit__, None, None, None)
+# 影子库：业务库与平台库**都**复制到副本 → 真库零字节接触，**不用停 dev server**。
+# config=True 是必需的：本脚本要播种 admin（写 config/auth.db），不影子化就会污染真库。
+_shadow = shadow_dbs(env=True, inprocess=False, config=True)
+_shadow.__enter__()
+# ⚠ **必须在副本上清表**（2026-09-18 加）：影子库是**真库的拷贝** —— 真演示数据
+# （e2e 的 M001/M002、PSC 的各主数据）会被一起复制进来，而本脚本自带的造数会撞主键。
+# 此前不写这句也没事，只是因为当时副本落盘在另一个目录、平台读到的其实是**新建空库**；
+# 布局修正后"副本是空的"这个隐含假设当场暴露 ⇒ 显式清表，语义与《验证门禁.md》
+# §四之二的「view e2e 起点 = 空表」一致。
+shadow_clear("psc")
+# **个人 UI 偏好也要清**：它是操作者本机状态（如"手动隐藏过某列"），
+# 不清就会让用例结果取决于谁在哪台机器上跑（实测：真库里藏了 sales_forecast 的两列）。
+shadow_clear_prefs()
+atexit.register(_shadow.__exit__, None, None, None)
 
 # admin 账号（登录用）：隔离后空库播种，并预标记「已改密」跳过首次强制改密
 # （否则 password_changed=0 会挡登录与 /api 调用，见 fde_platform/auth.py gate ②.5）。
@@ -33,7 +45,7 @@ from fde_platform import users  # noqa: E402
 users.init_schema()
 users.seed_admin()
 try:
-    _auth_db = ROOT / "config" / "auth.db"
+    _auth_db = auth_db_path()
     if _auth_db.exists():
         _conn = sqlite3.connect(str(_auth_db))
         _conn.execute("UPDATE users SET password_changed = 1 WHERE username = 'admin'")
@@ -180,6 +192,9 @@ def main():
 
     errors = []
     ignored = []
+    # 卡住诊断（2026-09-18）：页面冻死/渲染进程崩溃时 playwright 调用不返回 ——
+    # 由这个守护线程把「最后完成的步骤 + 已收集的错误」打出来；否则超时被强杀时现场全丢。
+    install_watchdog(errors, step_getter=lambda: STEP)
 
     def attach(page):
         def on_console(msg):
@@ -232,6 +247,7 @@ def main():
             assert seed and seed.get("seeded"), f"造数失败：{seed}"
 
             # ===================== §1 本页渲染（防粘滞）=====================
+            # VT-ROUTE-01 路由渲染（含挂载防粘滞 .kpi==0）—— 2026-09-17 补标记
             STEP = "§1 路由渲染"
             page.evaluate("location.hash = '#/md_customer'")
             page.wait_for_selector("main table.tbl", timeout=10000)
@@ -256,6 +272,7 @@ def main():
             page.wait_for_timeout(300)
 
             # ===================== §2 列表有数据 + 搜索抽样 =====================
+            # VT-LIST-01 列表含所造单号（C001 行逐字段回显）—— 2026-09-17 补标记
             STEP = "§2 列表有数据"
             page.wait_for_selector('table tbody tr:has-text("C001")', timeout=10000)
             page.wait_for_timeout(400)
@@ -314,6 +331,8 @@ def main():
             page.wait_for_timeout(400)
 
             # VT-LIST-05 平台列排序（自动装饰 data-sort，点击重取：升→降→默认序）
+            # ⚠ 2026-09-17：本条**脚本里有、用例文档里没有**（用例文档少了这条）。
+            # 已回写进 `app/psc/md_customer/前端测试用例.md` §2 —— 不许"脚本测了但文档没记"。
             # 点击表头文字区（偏移定位）：「?」释义徽标自带点击行为，平台装饰对其让路（设计如此）
             STEP = "§2 列排序"
             page.wait_for_selector('main table.tbl th[data-sort="line_stock_days"]', timeout=10000)
@@ -333,6 +352,7 @@ def main():
             assert "C001" in first_row, f"默认序应为 customer_no 升序（C001 首行），实际 {first_row!r}"
 
             # ===================== §3 详情模态全字段 =====================
+            # VT-MODAL-01 详情模态（字段全集 + 头带 docno + 原始数据默认收起 + 页脚 编辑/关闭）
             STEP = "§3 详情模态"
             page.locator('table tbody tr:has-text("C001") .b-link').first.click()
             modal = open_modal(page)
@@ -463,6 +483,14 @@ def main():
             # ===================== §6 0 报错 =====================
             STEP = "§6 0 报错"
             assert not errors, f"md_customer 会话前端报错：{errors[:5]}"
+            # **豁免也要受检**（2026-09-17 补）：`ignored` 收集了却从不校验，等于给「静默吞掉」
+            # 开了口子 —— 任何新形态的 4xx/console error 都能混进来而不被任何人发现。
+            # 只认 favicon / sourcemap / 受限会话 403 三种豁免理由，其余一律报出。
+            for _item in ignored:
+                _ok = ("/favicon.ico" in _item or ".map" in _item or "403" in _item)
+                assert _ok, f"豁免理由不成立（既不是 favicon/.map，也不是 403）：{_item!r}"
+            if ignored:
+                print(f"  · 本次豁免 {len(ignored)} 条：{ignored[:3]}")
             print("VERIFY_VIEW_psc_md_customer: PASS")
 
     finally:

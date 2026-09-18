@@ -22,11 +22,23 @@ ROOT = _project_root()
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
 
-from fde_platform.dbguard import isolate_dbs  # noqa: E402
+from fde_platform.shadowdb import shadow_dbs, shadow_clear, shadow_clear_prefs, auth_db_path  # noqa: E402
+from fde_platform.view_watchdog import install_watchdog  # noqa: E402
 
-_iso = isolate_dbs()
-_iso.__enter__()
-atexit.register(_iso.__exit__, None, None, None)
+# 影子库：业务库与平台库**都**复制到副本 → 真库零字节接触，**不用停 dev server**。
+# config=True 是必需的：本脚本要播种 admin（写 config/auth.db），不影子化就会污染真库。
+_shadow = shadow_dbs(env=True, inprocess=False, config=True)
+_shadow.__enter__()
+# ⚠ **必须在副本上清表**（2026-09-18 加）：影子库是**真库的拷贝** —— 真演示数据
+# （e2e 的 M001/M002、PSC 的各主数据）会被一起复制进来，而本脚本自带的造数会撞主键。
+# 此前不写这句也没事，只是因为当时副本落盘在另一个目录、平台读到的其实是**新建空库**；
+# 布局修正后"副本是空的"这个隐含假设当场暴露 ⇒ 显式清表，语义与《验证门禁.md》
+# §四之二的「view e2e 起点 = 空表」一致。
+shadow_clear("psc")
+# **个人 UI 偏好也要清**：它是操作者本机状态（如"手动隐藏过某列"），
+# 不清就会让用例结果取决于谁在哪台机器上跑（实测：真库里藏了 sales_forecast 的两列）。
+shadow_clear_prefs()
+atexit.register(_shadow.__exit__, None, None, None)
 
 from fde_platform import users  # noqa: E402
 users.init_schema()
@@ -36,7 +48,7 @@ users.seed_admin()
 # 与 verify_view_psc 其余逐应用脚本一致，先在隔离后的 config/auth.db 置 1 放行。
 import sqlite3  # noqa: E402
 try:
-    auth_db = ROOT / "config" / "auth.db"
+    auth_db = auth_db_path()
     if auth_db.exists():
         conn = sqlite3.connect(str(auth_db))
         conn.execute("UPDATE users SET password_changed = 1 WHERE username = 'admin'")
@@ -178,6 +190,9 @@ def main():
 
     errors = []
     ignored = []
+    # 卡住诊断（2026-09-18）：页面冻死/渲染进程崩溃时 playwright 调用不返回 ——
+    # 由这个守护线程把「最后完成的步骤 + 已收集的错误」打出来；否则超时被强杀时现场全丢。
+    install_watchdog(errors, step_getter=lambda: STEP)
 
     def attach(page):
         def on_console(msg):
@@ -231,6 +246,7 @@ def main():
             assert seed and seed.get("seeded"), f"inventory_strategy 造数失败：{seed}"
 
             # ===================== §1 本页渲染（防粘滞）=====================
+            # VT-ROUTE-01 路由渲染（.kpi==0 防粘滞 + 标题「库存策略」）
             step("§1 路由渲染防粘滞")
             page.evaluate("location.hash = '#/inventory_strategy'")
             try:
@@ -372,6 +388,14 @@ def main():
             # ===================== §6 0 报错红线 =====================
             step("§6 会话 0 报错")
             assert not errors, f"inventory_strategy 会话前端报错：{errors[:5]}"
+            # **豁免也要受检**（2026-09-17 补）：`ignored` 收集了却从不校验，等于给「静默吞掉」
+            # 开了口子 —— 任何新形态的 4xx/console error 都能混进来而不被任何人发现。
+            # 只认 favicon / sourcemap / 受限会话 403 三种豁免理由，其余一律报出。
+            for _item in ignored:
+                _ok = ("/favicon.ico" in _item or ".map" in _item or "403" in _item)
+                assert _ok, f"豁免理由不成立（既不是 favicon/.map，也不是 403）：{_item!r}"
+            if ignored:
+                print(f"  · 本次豁免 {len(ignored)} 条：{ignored[:3]}")
             print("VERIFY_VIEW_psc_inventory_strategy: PASS")
 
     finally:

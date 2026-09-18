@@ -3,6 +3,8 @@
 → 详情模态全字段 → 新建落库（客户下拉 + 物料 autocomplete）+ 前端校验
 → 已关闭计划编辑延期恢复待出库 → 删除（仅待出库，confirm）→ 全程 0 console error /
 0 pageerror / 0 HTTP≥400。
+用例来源：app/psc/outbound_plan/前端测试用例.md
+（§1 VT-ROUTE-01 + §2 VT-LIST-01/02 + §3 VT-MODAL-01 + §4 VT-FORM-01/02/03 + §4 VT-EDIT-01/VT-DEL-01 + §6）。
 运行：python app/psc/tests/verify_view_psc_outbound_plan.py
 """
 import os, pathlib, socket, subprocess, sys, time, http.client, atexit, sqlite3
@@ -23,11 +25,23 @@ ROOT = _project_root()
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
 
-from fde_platform.dbguard import isolate_dbs  # noqa: E402
+from fde_platform.shadowdb import shadow_dbs, shadow_clear, shadow_clear_prefs, auth_db_path  # noqa: E402
+from fde_platform.view_watchdog import install_watchdog  # noqa: E402
 
-_iso = isolate_dbs()
-_iso.__enter__()
-atexit.register(_iso.__exit__, None, None, None)
+# 影子库：业务库与平台库**都**复制到副本 → 真库零字节接触，**不用停 dev server**。
+# config=True 是必需的：本脚本要播种 admin（写 config/auth.db），不影子化就会污染真库。
+_shadow = shadow_dbs(env=True, inprocess=False, config=True)
+_shadow.__enter__()
+# ⚠ **必须在副本上清表**（2026-09-18 加）：影子库是**真库的拷贝** —— 真演示数据
+# （e2e 的 M001/M002、PSC 的各主数据）会被一起复制进来，而本脚本自带的造数会撞主键。
+# 此前不写这句也没事，只是因为当时副本落盘在另一个目录、平台读到的其实是**新建空库**；
+# 布局修正后"副本是空的"这个隐含假设当场暴露 ⇒ 显式清表，语义与《验证门禁.md》
+# §四之二的「view e2e 起点 = 空表」一致。
+shadow_clear("psc")
+# **个人 UI 偏好也要清**：它是操作者本机状态（如"手动隐藏过某列"），
+# 不清就会让用例结果取决于谁在哪台机器上跑（实测：真库里藏了 sales_forecast 的两列）。
+shadow_clear_prefs()
+atexit.register(_shadow.__exit__, None, None, None)
 
 from fde_platform import users  # noqa: E402
 users.init_schema()
@@ -35,7 +49,7 @@ users.seed_admin()
 
 # seed_admin 落 password_changed=0 → 首登被强制改密闸门拦下（auth.py ②.5），先置 1 放行。
 try:
-    auth_db = ROOT / "config" / "auth.db"
+    auth_db = auth_db_path()
     if auth_db.exists():
         conn = sqlite3.connect(str(auth_db))
         conn.execute("UPDATE users SET password_changed = 1 WHERE username = 'admin'")
@@ -191,6 +205,9 @@ def main():
 
     errors = []
     ignored = []
+    # 卡住诊断（2026-09-18）：页面冻死/渲染进程崩溃时 playwright 调用不返回 ——
+    # 由这个守护线程把「最后完成的步骤 + 已收集的错误」打出来；否则超时被强杀时现场全丢。
+    install_watchdog(errors, step_getter=lambda: STEP)
 
     def attach(page):
         def on_console(msg):
@@ -248,6 +265,7 @@ def main():
             closed_no = seed["closed_no"]
 
             # ===================== §1 本页渲染（防粘滞）=====================
+            # §1 VT-ROUTE-01 路由渲染（防粘滞：.kpi==0 + 工具栏 + .tbl + 分页条 + chips）
             step("§1 路由渲染防粘滞")
             page.evaluate("location.hash = '#/outbound_plan'")
             try:
@@ -267,6 +285,7 @@ def main():
             page.wait_for_selector(".fchip", timeout=10000)
 
             # ===================== §2 造数后列表有数据 =====================
+            # §2 VT-LIST-01 列表含所造计划 + 状态徽章 + 删除可见性
             step("§2 LIST-01 列表含所造计划（状态徽章）")
             rows = page.locator("table.tbl tr.data")
             assert rows.count() == 2, f"造数后列表应为 2 条，实际 {rows.count()}"
@@ -282,6 +301,7 @@ def main():
             # x-show 隐藏不销毁 DOM，按可见性断言
             assert closed_row.locator('button:visible:has-text("删除")').count() == 0, "已关闭行不应有删除入口"
 
+            # §2 VT-LIST-02 状态 chips 过滤
             step("§2 LIST-02 状态 chips 过滤")
             page.locator(".fchip", has_text="已关闭").first.click()
             page.wait_for_timeout(700)
@@ -296,6 +316,7 @@ def main():
             page.wait_for_timeout(700)
 
             # ===================== §3 模态全字段 =====================
+            # §3 VT-MODAL-01 详情模态（标签齐全 + 值齐全 + 页脚【编辑】）
             step("§3 MODAL-01 详情模态全字段")
             page.locator("table.tbl tr.data .b-link", has_text=open_no).first.click()
             modal = wait_modal(page)
@@ -309,6 +330,7 @@ def main():
             close_modal(page, modal)
 
             # ===================== §4 表单 =====================
+            # §4 VT-FORM-01 新建落库（客户下拉 + 物料 autocomplete）
             step("§4 FORM-01 新建落库（客户下拉 + 物料 autocomplete）")
             click_button(page, ["+ 新建出库计划"])
             modal = wait_modal(page)
@@ -339,6 +361,7 @@ def main():
                 f"新建行回显不符：{new_txt}"
             new_no = new_row.locator(".b-link").first.inner_text().strip()
 
+            # §4 VT-FORM-02 数量缺失前端校验
             step("§4 FORM-02 数量缺失前端校验")
             click_button(page, ["+ 新建出库计划"])
             modal = wait_modal(page)
@@ -356,6 +379,7 @@ def main():
             assert modal.is_visible(), "数量缺失被拒后模态应保持打开"
             close_modal(page, modal)
 
+            # §4 VT-FORM-03 后端校验：物料不存在（直接输入非法物料号）
             step("§4 FORM-03 后端校验：物料不存在（直接输入非法物料号）")
             click_button(page, ["+ 新建出库计划"])
             modal = wait_modal(page)
@@ -371,6 +395,7 @@ def main():
             close_modal(page, modal)
 
             # ===================== §5 延期恢复 + 删除 =====================
+            # §5 VT-EDIT-01 已关闭计划编辑延期 → 恢复待出库
             step("§5 EDIT-01 已关闭计划编辑延期 → 恢复待出库")
             page.locator("table.tbl tr.data", has_text=closed_no).first.locator('button:has-text("编辑")').first.click()
             modal = wait_modal(page)
@@ -387,6 +412,7 @@ def main():
             assert "2026-11-01" in row_txt, "延期后日期应回显 2026-11-01"
             assert "待出库" in row_txt, "延期到未来后状态应恢复 待出库"
 
+            # §5 VT-DEL-01 删除待出库计划（confirm）
             step("§5 DEL-01 删除待出库计划（confirm）")
             dialogs = []
             page.on("dialog", lambda d: (dialogs.append(d.message), d.accept()))
@@ -397,8 +423,17 @@ def main():
             assert page.locator("table.tbl tr.data").count() == 2, "删除后列表应为 2 条"
 
             # ===================== §6 0 报错红线 =====================
+            # §6 0 报错红线（本会话；豁免条目逐条受检）
             step("§6 会话 0 报错")
             assert not errors, f"outbound_plan 会话前端报错：{errors[:5]}"
+            # **豁免也要受检**（2026-09-17 补）：`ignored` 收集了却从不校验，等于给「静默吞掉」
+            # 开了口子 —— 任何新形态的 4xx/console error 都能混进来而不被任何人发现。
+            # 只认 favicon / sourcemap / 受限会话 403 三种豁免理由，其余一律报出。
+            for item in ignored:
+                ok = ("/favicon.ico" in item or ".map" in item or "403" in item)
+                assert ok, f"豁免理由不成立（既不是 favicon/.map，也不是 403）：{item!r}"
+            if ignored:
+                print(f"  · 本次豁免 {len(ignored)} 条：{ignored[:3]}")
             print("VERIFY_VIEW_psc_outbound_plan: PASS")
 
     finally:

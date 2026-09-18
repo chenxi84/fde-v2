@@ -62,6 +62,21 @@ class Demand:
             if not forecast[old]:
                 forecast.pop(old, None)
 
+        # 3.5 合成范围非空校验（BR-13）：一个物料都没有时**报错**，不再「成功，共 0 个物料」。
+        # 旧行为是静默成功：`_get_summary_rows` 只在**调用抛异常**时才报错，调用成功但返回
+        # 空 / None / 无法识别的结构时一律静默返回 []，于是这里 len(forecast)==0，
+        # 接口回一句「毛需求合成成功，共 0 个物料」——**什么都没做，却声称成功**。
+        # 实测（2026-09-15）：清掉该版本的汇总行后调 build_gross，返回
+        # {'material_count': 0, 'message': '毛需求合成成功，共 0 个物料'}，调用方无从察觉。
+        # 对照 master_plan BR-10「过滤后无命中行时报错，不静默导入 0 行」——同类操作口径应一致。
+        if not forecast:
+            raise FdeError(
+                f"版本 {version_no} 没有任何可合成的物料，毛需求合成已中止：销售预测汇总为空"
+                f"（或返回了无法识别的结构）。请先执行 "
+                f"sales_forecast.summarize(version_no=\"{version_no}\") 再合成；"
+                f"若汇总存在，请核对 version_no——汇总与毛需求必须按同一版本合成"
+            )
+
         # 4. 叠加库存策略：每个滚动月度毛需求 = 销售预测 + 库存策略水位（N+1/N+2/N+3 同口径，
         #    净需求按期独立估算，未发/库存/在途按期静态扣减，不存在跨期累加），幂等写入/更新毛需求行
         for mat in sorted(forecast.keys()):

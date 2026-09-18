@@ -73,6 +73,7 @@ def run_part(call, step, expect_err, record):
 
     step("TC-ERR-07 项目零件映射引用不存在的项目")
     try:
+        # veh_model/share 已按详设 2026-08 治理变更移出映射表（见 part1 TC-DM-08 注释）
         expect_err(lambda: call("md_project_part", "create", project_no="NOTEXIST",
                                 material_no=M1, usage=1), "项目")
         record(True)
@@ -167,11 +168,21 @@ def run_part(call, step, expect_err, record):
         call("sales_forecast", "open_version", version_no=V202609)
         call("sales_forecast", "fill_customer", version_no=V202609, material_no=M2,
              customer_no=C002, rolling_month="N+1", orig_qty=1000)
+        # 先算基线：BR-23 的「基线和事件合计量」得有基线可加（M2×C002 有历史 → 算得出）
+        base = call("sales_forecast", "calc_baseline", version_no=V202609, material_no=M2,
+                    customer_no=C002, rolling_month="N+1").get("base_qty")
+        assert base is not None, "M2×C002 有历史台账，基线应算得出"
         call("sales_forecast", "adjust_event", version_no=V202609, material_no=M2,
              customer_no=C002, rolling_month="N+1", event_analysis="促销", event_adj=100)
         r = call("sales_forecast", "get", version_no=V202609, material_no=M2,
                  customer_no=C002, rolling_month="N+1")
         assert abs((r.get("event_adj") or 0) - 100) < 0.01, r
+        # BR-23 基线和事件合计量 = 基线 + 事件调整；BR-22 事件调整只作用归属期（不外推，
+        # 由 part3 的「只改一行」断言从另一侧守）
+        assert abs((r.get("base_event_qty") or 0) - (base + 100)) < 0.01, (r, base)
+        n2 = call("sales_forecast", "get", version_no=V202609, material_no=M2,
+                  customer_no=C002, rolling_month="N+2")
+        assert (n2.get("event_adj") or 0) == 0, f"事件调整不得外推到 N+2：{n2}"
         record(True)
     except Exception as e:
         record(False, f"{e}")
@@ -219,19 +230,41 @@ def run_part(call, step, expect_err, record):
 
     step("TC-ERR-20 缺货补库（产能紧张档）")
     try:
+        # 补齐分档所需的**全部**入参（原先只有 3 个 → 分档逻辑一行没执行）
+        # 缺货补库·紧张档 = 0 − 余额；余额须为负才叫缺货 → 取 -50 ⇒ 应补 50
         rp = call("demand_pool", "create", material_no=M1, replenish_type="缺货补库",
-                  replenish_qty=100, required_inbound="2026-08-20", capacity_tight=True)
+                  replenish_qty=999, required_inbound="2026-08-20",
+                  stock_on_hand=-50, min_level_a=100, safety_level_c=20,
+                  batch_level_b=300, capacity_tight=True)
         rp_no_20 = rp.get("replenish_no")
         assert rp_no_20 and rp.get("status") == "待下达", rp
+        assert abs(rp["replenish_qty"] - 50) < 0.01, f"紧张档应补回 0：0−(−50)=50，实际 {rp['replenish_qty']}"
         record(True)
     except Exception as e:
         record(False, f"{e}")
 
     step("TC-ERR-21 最低库存补库（产能富余档）")
     try:
+        # 富余档 = 组批水位 B − 余额 = 80 − 10 = 70（不是补到触发线 A=20）
+        # ⚠ 2026-09-17 订正造数：原用 `A=100, B=80` —— **组批水位低于最低水位**，本身不自洽
+        # （现实里 B 是水位带上限，必 ≥ A+C）。改用详设 BR-06 示例的那组数（A=20、C=15、B=80），
+        # 于是「富余补到 B=80」与「不低于触发线」两条规则**同时成立**，期望值仍是 70。
         rp = call("demand_pool", "create", material_no=M1, replenish_type="最低库存补库",
-                  replenish_qty=200, required_inbound="2026-08-21", capacity_tight=False)
+                  replenish_qty=999, required_inbound="2026-08-21",
+                  stock_on_hand=10, min_level_a=20, safety_level_c=15,
+                  batch_level_b=80, capacity_tight=False)
         assert rp.get("replenish_no") and rp.get("status") == "待下达", rp
+        assert rp.get("replenish_type") == "最低库存补库", rp      # BR-02/BR-04/BR-05 类型由触发档位决定
+        assert abs(rp["replenish_qty"] - 70) < 0.01, f"富余档应补到组批水位 B=80−10=70，实际 {rp['replenish_qty']}"
+        # **富余档目标不得低于触发线**（2026-09-17 补的回归）：速度对冲件按 BR-12 是 C=B=0，
+        # 若照字面「补到 B」就会算出 0−余额 ≤ 0 ⇒ 抛「补库数量必须大于0」⇒ 有击穿却建不出单
+        # （实测 BYD-HAN-FB25/FB26 就是这样静默丢单的）。此处 B=0 < A=20，应退回归到触发线 A。
+        rp2 = call("demand_pool", "create", material_no=M1, replenish_type="最低库存补库",
+                   replenish_qty=999, required_inbound="2026-08-23",
+                   stock_on_hand=10, min_level_a=20, safety_level_c=0,
+                   batch_level_b=0, capacity_tight=False)
+        assert abs(rp2["replenish_qty"] - 10) < 0.01, \
+            f"B=0（速度对冲件）时富余档应退到触发线 A=20 ⇒ 补 20−10=10，实际 {rp2['replenish_qty']}"
         record(True)
     except Exception as e:
         record(False, f"{e}")
@@ -242,6 +275,7 @@ def run_part(call, step, expect_err, record):
                   replenish_qty=300, required_inbound="2026-08-22")
         rp_no_22 = rp.get("replenish_no")
         assert rp_no_22 and rp.get("status") == "待下达", rp
+        assert rp.get("replenish_type") == "安全库存补库", rp
         record(True)
     except Exception as e:
         record(False, f"{e}")
@@ -286,6 +320,8 @@ def run_part(call, step, expect_err, record):
                  ecn_no="ECN-001")
         rel_no = r.get("rel_no")
         assert rel_no, r
+        # BR-01 原件→替换件关系落库（合并方向不能反：方向反了会把新件需求并回旧件）
+        assert r.get("old_material_no") == M3 and r.get("new_material_no") == M4, r
         rows = call("md_part_replace", "list", status="生效")
         assert rows.get("total", 0) >= 1, rows
         record(True)
@@ -318,6 +354,25 @@ def run_part(call, step, expect_err, record):
                  material_no=M4, customer_no=C001, rolling_month="N+1")
         assert r.get("bp_material_no") == M3, r
         assert r.get("switch_time") == "2026-09-01", r
+        record(True)
+    except Exception as e:
+        record(False, f"{e}")
+
+    step("TC-ERR-24d 断点停用（disable）后不再参与追溯（BR-06）")
+    try:
+        # 用**一次性**关系（M1→M2，远期切换）以免动到 TC-ERR-24c / TC-PRED-04 依赖的 M3→M4；
+        # 物料只能用此刻已存在的 M1/M2/M3/M4（M5 要到 §3.8 才建、M11 更晚）
+        r = call("md_breakpoint", "create", customer_no=C001, old_material_no=M1,
+                 new_material_no=M2, switch_time="2027-06-01", ecn_no="ECN-DIS")
+        bp_id = r.get("bp_id")
+        assert bp_id, r
+        assert r.get("disabled") in (0, False), f"新建断点应为未停用：{r}"
+        assert M1 in call("md_breakpoint", "trace", new_material_no=M2), "停用前应参与追溯"
+        d = call("md_breakpoint", "disable", bp_id=bp_id)
+        assert d.get("disabled") in (1, True), f"disable 应把 disabled 置 1（不物理删除）：{d}"
+        assert call("md_breakpoint", "get", bp_id=bp_id).get("disabled") in (1, True), "停用标记须落库"
+        assert M1 not in call("md_breakpoint", "trace", new_material_no=M2), \
+            "停用后不应再参与追溯"
         record(True)
     except Exception as e:
         record(False, f"{e}")
@@ -415,6 +470,19 @@ def run_part(call, step, expect_err, record):
         r = call("strategy_fitting", "run", material_no="M11", fit_version="202608")
         sigma = r.get("sigma_l")
         assert sigma is not None and sigma > 0, r
+        # BR-04 / BR-07 候选指标与 winner 选取：主行的 mase/smape = 候选里 mase **最小**者；
+        # BR-06 winner 的方法与参数 = 该候选的。全部**关系式现算**（不写死模型名或数值，
+        # 换模型池/换选参也不会假红）
+        import json as _json
+        det = r.get("detail_json")
+        det = _json.loads(det) if isinstance(det, str) else det
+        cands = [c for c in (det or {}).get("candidates", []) if c.get("mase") is not None]
+        assert len(cands) >= 2, f"常规序列应产出多个候选：{sorted((det or {}).keys())}"
+        best = min(cands, key=lambda c: c["mase"])
+        assert r.get("mase") == best["mase"], (r.get("mase"), best["mase"])
+        assert r.get("smape") == best["smape"], (r.get("smape"), best["smape"])
+        assert r.get("pred_method") == best["method"], (r.get("pred_method"), best["method"])
+        assert _json.loads(r["pred_params"]) == best["params"], (r.get("pred_params"), best["params"])
         call("strategy_fitting", "approve", fit_version="202608", material_no="M11")
         m = call("md_material", "get", material_no="M11")
         assert m.get("sigma_l") == sigma, m
@@ -515,7 +583,13 @@ def run_part(call, step, expect_err, record):
     step("TC-ERR-34 库存策略批量计算（calc_batch）")
     try:
         r = call("inventory_strategy", "calc_batch", version_no=V202609)
-        assert r is not None, r
+        # 文档期望是「逐物料，单个失败不中断其余」—— 不是「全成功」。
+        # M7/M8/M9 无 service_level，失败属**数据使然的合法部分失败**；
+        # 首版断言 fail==0 是我自己发明的、比文档更严的口径（假红），已按文档语义改写：
+        assert r.get("total", 0) == r.get("success", 0) + r.get("fail", 0), f"total 应= success+fail：{r}"
+        assert r.get("success", 0) > 0, f"至少 M1 应算成功：{r}"
+        for _e in r.get("errors") or []:
+            assert _e.get("material_no") and _e.get("message"), f"errors 每条应含物料与原因：{_e}"
         record(True)
     except Exception as e:
         record(False, f"{e}")
@@ -538,7 +612,7 @@ def run_part(call, step, expect_err, record):
     step("TC-ERR-36 拟合批量（run_batch）")
     try:
         r = call("strategy_fitting", "run_batch", fit_version="202609")
-        assert r is not None, r
+        assert r.get("success", 0) > 0, f"批量拟合应至少成功 1 个：{r}"
         record(True)
     except Exception as e:
         record(False, f"{e}")
@@ -546,7 +620,8 @@ def run_part(call, step, expect_err, record):
     step("TC-ERR-37 月度版本取活跃版本（get_active）")
     try:
         r = call("md_monthly_version", "get_active")
-        assert r is not None, r
+        assert r.get("version_no"), f"活跃版本应带 version_no：{r}"
+        assert r.get("lock_status") in ("草稿", "已发布"), f"活跃版本不应冻结：{r}"
         record(True)
     except Exception as e:
         record(False, f"{e}")
@@ -570,8 +645,9 @@ def run_part(call, step, expect_err, record):
 
     step("TC-OP-01 前置：创建客户 C003 + 物料 M6")
     try:
-        call("md_customer", "create", customer_no=C003, customer_name="客户C")
-        call("md_material", "create", material_no=M6, material_name="物料F")
+        c = call("md_customer", "create", customer_no=C003, customer_name="客户C")
+        m = call("md_material", "create", material_no=M6, material_name="物料F")
+        assert c["customer_no"] == C003 and m["material_no"] == M6, (c, m)
         record(True)
     except Exception as e:
         record(False, f"{e}")
@@ -725,7 +801,7 @@ def run_part(call, step, expect_err, record):
         assert r.get("success") == 1, r
         after = call("md_material", "get", material_no=M1)
         assert after["material_name"] == "只改名", after
-        for f in ("unit_value", "prod_days", "logistics_days", "service_level",
+        for f in ("unit_value", "change_cost", "prod_days", "logistics_days", "service_level",
                   "batch_window", "base_method", "base_params",
                   "predecessor_material_no", "value_class", "change_risk", "status"):
             assert after.get(f) == before.get(f), \

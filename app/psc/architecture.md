@@ -296,7 +296,7 @@
   - md_material.material_no
 
 跨应用调用（self.fde.call）：无
-外部适配器：MAPE/bias 由 ERP 统计，经 _load_attainment 适配器冗余回后 upsert（非跨应用调用）
+数据来源：MAPE/bias 由 `attainment.compute` 本地重算（口径A 读 `sales_history.forecast_qty`、口径B 读台账）后写 `attainment`；**无外部适配器** —— 旧文写的 `_load_attainment` 已于 2026-09-15 按 B-02 删除（全仓无调用点），此处口径随之更正
 
 状态机：无
 ```

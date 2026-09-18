@@ -41,9 +41,15 @@ class StrategyFitting:
         # 预测拟合（statsforecast 统计模型池回测，MASE 选 winner + 出预测值 + 响应窗口预测误差 σ_L）
         r = self._predict_fit(history, lead_days=lead_days, periods=periods)
 
-        # 库存拟合（实际干净需求回放，BR-02/BR-11 约束优化）
-        (service_factor, safety_level, batch_window,
-         fulfill_rate, inv_days, changeover_cnt) = self._inventory_fit(history)
+        # 库存侧参数（**取主数据当前值，不做自动运算**）
+        # ⚠ 2026-09-17 按业务口径改（详见《应用详设》§3.2.8~12 的订正）：**组批窗口与满足率目标
+        # 由物料主数据人工维护**（BRD §4.8.1「组批窗口：物料主数据（经验值）」）—— 判断"该不该组批"
+        # 是计划员的决定，不需要系统算。此前这里会跑一遍"简化库存拟合"并**把常量 28 天 / 0.95
+        # 回填进主数据**，等于**人工维护的设置跑一次拟合就被静默冲掉**；而那几个数值
+        # （服务系数/安全水位/库存天数/切线次数）本来就是为"网格寻优"服务的，寻优本期不做 ⇒ 一并留空。
+        # 现在只**如实镜像**主数据的两个人工值，供复核页展示"这一版拟合所依据的库存参数"。
+        batch_window, fulfill_rate = self._inventory_params(material)
+        service_factor = safety_level = inv_days = changeover_cnt = None
 
         import json
         detail_json = json.dumps(r["detail"], ensure_ascii=False)
@@ -204,8 +210,16 @@ class StrategyFitting:
             params.append(1 if abnormal_flag else 0)
 
         where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        # ⚠ 这里的列必须与 `get` / `get_latest` 一致。原先只取 13 列、漏了
+        # mase / pred_qty / pred_lo / pred_hi / sigma_l / detail_json —— 而 `_to_dict` 用的是
+        # **固定键列表**（`row["x"] if "x" in keys else None`），于是这 6 个键**照样出现在返回里、
+        # 但恒为 None，哪怕库里有值**。消费方（前端列表、智能体）拿到 pred_qty=None 会理解成
+        # 「该物料没有预测量」，而 detail_json=None 还会丢掉候选模型明细。
+        # 实测 2026-09-15：BRK 库里 mase=0.8112 / pred_qty=1623.64，经 list 全变 None；
+        # 经 get_latest 才拿到真值 —— 同一份数据的两条读路径给出不同答案。
         select_sql = """
-            SELECT material_no, fit_version, pred_method, pred_params, smape,
+            SELECT material_no, fit_version, pred_method, pred_params, smape, mase,
+                   pred_qty, pred_lo, pred_hi, sigma_l, detail_json,
                    service_factor, safety_level, batch_window, fulfill_rate,
                    inv_days, changeover_cnt, abnormal_flag, status
             FROM strategy_fitting
@@ -262,13 +276,15 @@ class StrategyFitting:
         # 数据不足/拟合失败（pred_method 为空）时无方法可回填：跳过回填，仅登记复核结论，
         # 物料 base_method 保持为空，销售预测走「预测留空、以人工为准」路径。
         if row["pred_method"]:
+            # ⚠ **不传 batch_window / service_level**（2026-09-17 改）：它们是物料主数据里
+            # **人工维护**的参数（BRD §4.8.1「组批窗口：物料主数据（经验值）」），拟合只回填
+            # 预测侧（方法/参数/model_blob/σ_L）。此前每次复核通过都会把拟合的常量写回去，
+            # 等于**静默覆盖计划员手工设的组批窗口与满足率目标**。
             self.fde.call(
                 "md_material", "set_fit_params",
                 material_no=clean_material,
                 base_method=row["pred_method"],
                 base_params=row["pred_params"],
-                batch_window=row["batch_window"],
-                service_level=row["fulfill_rate"],
                 fit_version=clean_version,
                 model_blob=model_blob,
                 sigma_l=row["sigma_l"] if "sigma_l" in row.keys() else None,
@@ -324,14 +340,13 @@ class StrategyFitting:
         if prev is None:
             raise FdeError("无上一版参数可回滚")
 
-        # BR-15 回填上一版参数
+        # BR-15 回填上一版参数（**只回预测侧**：组批窗口/满足率目标由主数据人工维护，
+        # 回滚也不该动它们 —— 与 approve 同口径，见那里的说明）
         self.fde.call(
             "md_material", "set_fit_params",
             material_no=clean_material,
             base_method=prev["pred_method"],
             base_params=prev["pred_params"],
-            batch_window=prev["batch_window"],
-            service_level=prev["fulfill_rate"],
             fit_version=prev["fit_version"],
         )
 
@@ -593,27 +608,28 @@ class StrategyFitting:
                 "detail": {"candidates": [], "k_min": self._K_MIN,
                            "recent_window": self._RECENT_WINDOW}}
 
-    def _inventory_fit(self, history):
-        """库存拟合（简化）：取默认组合（服务系数 1.65、组批窗口 28 天 = 4 周）。
+    def _inventory_params(self, material):
+        """库存侧参数：**取物料主数据里人工维护的当前值**（组批窗口 + 满足率目标）。
 
-        完整实现为遍历服务系数×组批窗口，在满足率≥目标约束下选成本最小者
-        （BR-08/BR-09/BR-10/BR-11/BR-12）；此处按简化约定取默认组合。"""
-        service_factor = 1.65
-        batch_window = 28.0
-        fulfill_rate = 0.95
-        safety_level = 0.0
-        inv_days = 0.0
-        changeover_cnt = 0
+        为什么不再"算"：BR-06 的组批库存 `B = 日需求 × 组批窗口`，而 BRD §4.8.1 明确
+        「组批窗口：**物料主数据（经验值）**或经济批量模型计算」；业务口径（2026-09-17 确认）
+        取前者 —— **该不该组批由计划员判断并维护在主数据上**，系统不自动运算。
+        （"经济批量模型计算 / 网格寻优 / 回放比成本"那条路本期不做，届时也不该覆盖人工值。）
 
-        if history:
-            mean = sum(history) / len(history)
-            std = (sum((d - mean) ** 2 for d in history) / len(history)) ** 0.5
-            safety_level = round(service_factor * std, 2)
-            daily = mean / 30.0
-            inv_days = round(batch_window + (safety_level / daily if daily > 0 else 0.0), 2)
-            changeover_cnt = max(1, len(history) // 4)
-
-        return service_factor, safety_level, batch_window, fulfill_rate, inv_days, changeover_cnt
+        返回 (batch_window, fulfill_rate)：两个都可能为 None（主数据没维护），
+        此时按"未维护"如实留空，**不填默认值**——默认值会让"没维护"和"维护成了 28"看起来一样。
+        """
+        bw = material.get("batch_window")
+        sl = material.get("service_level")
+        try:
+            bw = float(bw) if bw is not None and str(bw).strip() != "" else None
+        except (TypeError, ValueError):
+            bw = None
+        try:
+            sl = float(sl) if sl is not None and str(sl).strip() != "" else None
+        except (TypeError, ValueError):
+            sl = None
+        return bw, sl
 
     def _clean_material_no(self, material_no):
         clean = "" if material_no is None else str(material_no).strip()

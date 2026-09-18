@@ -43,7 +43,7 @@ export_net(version_no*)
     — 导出某版本净需求清单（物料号/滚动月度/net_qty），供线下产能平衡。
 get(version_no*, material_no*, rolling_month*)
     — 按 version_no + material_no + rolling_month 取单条毛需求/净需求详情（分层拆解）。
-list(version_no=None:string, material_no=None:string, rolling_month=None:string, page=None:string, size=None:string)
+list(version_no=None:string, material_no=None:string, rolling_month=None:string, page=None:integer, size=None:integer)
     — 按版本/物料/滚动月度筛选毛需求与净需求分页列表。
 publish(version_no*)
     — 发布冻结毛需求：校验已合成，并联动 md_monthly_version.publish 锁定版本。
@@ -79,7 +79,7 @@ create(material_no*, replenish_type*, replenish_qty*, required_inbound*, stock_o
     — 库存推移表击穿触发自动生成补库单（数据来源类型：自动参考创建，非手工新建）。
 get(replenish_no*)
     — 按补库单号查看单条补库单详情。
-list(material_no=None:string, replenish_type=None:string, status=None:string, page=None:string, size=None:string)
+list(material_no=None:string, replenish_type=None:string, status=None:string, page=None:integer, size=None:integer)
     — 按物料号 / 补库类型 / 状态（精确）筛选分页列表，默认按要求入库时间升序。
 on_inbound(replenish_no*)
     — ERP 回传入库：生产中 -> 已完成（终态）。
@@ -95,7 +95,7 @@ release(replenish_no*, promised_inbound=None:string)
 ### list 返回项示例
 ```json
 {
- "replenish_no": "RP202609150002",
+ "replenish_no": "RP202609170002",
  "material_no": "BYD-HAN-FB25",
  "replenish_type": "最低库存补库",
  "replenish_qty": 70.53,
@@ -114,7 +114,7 @@ get(material_no*, biz_date*)
     — 按物料号 + 日期查询单日推移明细。
 list(material_no=None:string, biz_date=None:string, alert_type=None:string, page=None:integer, size=None:integer)
     — 按物料号 / 日期 / 预警类型筛选推移表列表，支持分页。
-refresh(material_no*, biz_date*, opening_stock=None:string)
+refresh(material_no*, biz_date*, opening_stock=None:number)
     — 对单个物料逐日推演未来 3 个月库存水位并落盘（含预警标记）。
 refresh_batch(biz_date=None:string, material_nos=None:string)
     — 整批刷新全量物料推移表，并在刷新后联动预警扫描（击穿自动创建需求池补库单）。
@@ -201,8 +201,8 @@ list(version_no=None:string, material_no=None:string, page=None:integer, size=No
  "material_no": "BYD-HAN-WIR",
  "version_no": "202610",
  "rolling_month": "N+1",
- "plan_version": 1,
- "plan_qty": 5209.32,
+ "plan_version": 2,
+ "plan_qty": 8516.52,
  "latest_inbound_date": "2026-10-31"
 }
 ```
@@ -220,7 +220,7 @@ get(bp_id*)
     — 按断点标识查询单条断点记录（含已停用记录）。
 get_switch_time(new_material_no*, customer_no=None:string)
     — 取某新物料的断点切换时间（可按客户收窄）；无断点返回 None。
-list(customer_no=None:string, old_material_no=None:string, new_material_no=None:string, page=None:string, size=None:string)
+list(customer_no=None:string, old_material_no=None:string, new_material_no=None:string, page=None:integer, size=None:integer)
     — 按客户/原物料号/新物料号（精确）筛选分页列表，默认不含已停用记录，按切换时间降序。
 trace(new_material_no*)
     — 沿断点向上追溯原物料号链，返回从最上游原物料号到给定新物料号的序列（无断点返回自身）。
@@ -236,7 +236,7 @@ update(bp_id*, customer_no=None:string, old_material_no=None:string, new_materia
 ### list 返回项示例
 ```json
 {
- "bp_id": 27,
+ "bp_id": 29,
  "customer_no": "BYD",
  "old_material_no": "BYD-HAN-FB25",
  "new_material_no": "BYD-HAN-FB26",
@@ -295,7 +295,7 @@ list(material_no=None:string, material_name=None:string, status=None:string, pag
     — 按物料号/名称模糊、状态精确筛选的分页列表。返回全字段，供列表自选显示列。
 predecessor_chain(material_no*)
     — 递归追溯前序物料链，返回 [最老前序, …, 直接前序, 本物料]（最老在前）。
-set_fit_params(material_no*, base_method*, base_params*, batch_window*, service_level*, fit_version*, model_blob=None:string, sigma_l=None:number)
+set_fit_params(material_no*, base_method*, base_params*, batch_window=None:number, service_level=None:number, fit_version=None:string, model_blob=None:string, sigma_l=None:number)
     — 拟合参数回填（被 strategy_fitting 调用），更新方法/参数并记录版本快照。
 sync_external_material()
     — 对外服务：从外部（ERP / PLM）拉取物料主数据并经 import_batch 落库。
@@ -324,9 +324,9 @@ update(material_no*, material_name=None:string, status=None:string, unit_value=N
  "base_method": "AutoTheta",
  "base_params": "{\"season_length\": 12}",
  "fit_version": "202610",
- "fit_effective_at": "2026-09-15 13:50:27",
+ "fit_effective_at": "2026-09-15 14:50:42",
  "model_blob": null,
- "sigma_l": null
+ "sigma_l": 5.9852
 }
 ```
 
@@ -369,7 +369,7 @@ disable(rel_no*)
     — 将替换关系设为「失效」（幂等：已失效直接返回）。
 get(rel_no*)
     — 查看单条替换关系详情。
-list(old_material_no=None:string, new_material_no=None:string, status=None:string, page=None:string, size=None:string)
+list(old_material_no=None:string, new_material_no=None:string, status=None:string, page=None:integer, size=None:integer)
     — 按原物料号/替换物料号（模糊）、状态（精确）筛选分页列表。
 update(rel_no*, old_material_no*, new_material_no*, ecn_no=None:string)
     — 更新替换关系的原/替换物料号与 ECN 依据，重新校验物料引用、原≠替换与组合唯一。
@@ -456,7 +456,7 @@ delete(plan_no*)
     — 删除出库计划：仅「待出库」可删；已关闭为历史留痕，不可删除。
 get(plan_no*)
     — 按出库计划号查看单条计划详情。
-list(material_no=None:string, customer_no=None:string, status=None:string, page=None:string, size=None:string)
+list(material_no=None:string, customer_no=None:string, status=None:string, page=None:integer, size=None:integer)
     — 按物料 / 客户 / 状态筛选出库计划分页列表（读取前先惰性关闭到期计划）。
 update(plan_no*, customer_no=None:string, material_no=None:string, qty=None:string, out_date=None:string, actual_out_no=None:string)
     — 编辑出库计划（已关闭亦可编辑延期）：传入字段覆盖，状态按最终日期重算。
@@ -471,7 +471,7 @@ update(plan_no*, customer_no=None:string, material_no=None:string, qty=None:stri
  "plan_no": "OB202609150003",
  "customer_no": "BYD",
  "material_no": "BYD-HAN-SPARM",
- "qty": 84.55,
+ "qty": 129.8545,
  "out_date": "2026-10-10",
  "actual_out_no": null,
  "status": "待出库"
@@ -483,7 +483,7 @@ update(plan_no*, customer_no=None:string, material_no=None:string, qty=None:stri
 
 ### 服务契约
 ```
-adjust_event(version_no*, material_no*, customer_no*, rolling_month*, event_analysis=None:string, event_adj=0:string)
+adjust_event(version_no*, material_no*, customer_no*, rolling_month*, event_analysis=None:string, event_adj=0:number)
     — 填写事件分析/事件调整量，重算基线和事件合计量（只作用归属期，不外推）。
 calc_baseline(version_no*, material_no*, customer_no*, rolling_month*)
     — 断点追溯前置 + 按物料基线方法/参数作用于历史干净需求，得到基线数量。
@@ -497,7 +497,7 @@ decide(version_no*, material_no*, customer_no*, rolling_month*)
     — 按 MAPE 与偏离率自动标记异常并给出最终预测建议（异常行不自动填写）。
 decide_batch(version_no*, material_no=None:string, customer_no=None:string)
     — 批量决策：遍历版本内全部处理行（可按物料/客户收窄）逐行 decide，单行失败跳过。
-fill_customer(version_no*, material_no*, customer_no*, rolling_month*, orig_qty=None:string, adj_qty=None:string)
+fill_customer(version_no*, material_no*, customer_no*, rolling_month*, orig_qty=None:number, adj_qty=None:number)
     — 填写客户原始预测数量，系统按 bias 自动算调整后需求（人工可调）。
 get(version_no*, material_no*, customer_no*, rolling_month*)
     — 按主键取处理表单行全部字段。
@@ -505,7 +505,7 @@ get_summary(version_no*, material_no=None:string)
     — 取指定版本（可指定物料）的汇总行，供毛需求合成。
 import_orig_qty(version_no*, rows*)
     — 批量导入客户原始预测：逐行调 fill_customer 写 orig_qty（自动算 adj、N+1 关联历史台账），
-list(version_no=None:string, material_no=None:string, customer_no=None:string, rolling_month=None:string, abnormal_flag=None:string, page=None:string, size=None:string)
+list(version_no=None:string, material_no=None:string, customer_no=None:string, rolling_month=None:string, abnormal_flag=None:boolean, page=None:integer, size=None:integer)
     — 按版本/物料/客户/滚动月度/异常标记筛选分页查询处理表。
 open_version(version_no*)
     — 开启月度版本：按正常状态物料 × 该物料的历史采购客户生成清单并拆 N+1/N+2/N+3 进处理表。
@@ -539,10 +539,10 @@ summarize(version_no*)
  "switch_time": null,
  "abnormal_flag": 0,
  "final_qty": 1629.6,
- "created_at": "2026-09-15 13:50:15",
- "updated_at": "2026-09-15 13:50:50",
+ "created_at": "2026-09-15 14:50:31",
+ "updated_at": "2026-09-15 22:03:20",
  "created_by": "demo",
- "updated_by": "admin"
+ "updated_by": "demo"
 }
 ```
 
@@ -592,13 +592,13 @@ upsert(material_no*, customer_no*, period*, qty*)
 
 ### 服务契约
 ```
-approve(fit_version*, material_no*, confirm=False:string)
+approve(fit_version*, material_no*, confirm=False:boolean)
     — 复核通过：待复核 → 已生效，并回填物料主数据（带版本）。
 get(fit_version*, material_no*)
     — 查看单条拟合结果完整字段。
 get_latest(material_no*)
     — 取某物料最新一版拟合结果（按 fit_version 降序）。无拟合返回 None（不抛错）。
-list(material_no=None:string, fit_version=None:string, status=None:string, abnormal_flag=None:string, page=None:string, size=None:string)
+list(material_no=None:string, fit_version=None:string, status=None:string, abnormal_flag=None:boolean, page=None:integer, size=None:integer)
     — 按物料号（模糊）/拟合版本/状态/异常标记筛选分页列表。
 reject(fit_version*, material_no*)
     — 否决：待复核 → 已否决，不回填物料主数据。
@@ -621,19 +621,11 @@ run_batch(fit_version=None:string)
  "pred_method": "AutoTheta",
  "pred_params": "{\"season_length\": 12}",
  "smape": 0.0391,
- "mase": null,
- "pred_qty": null,
- "pred_lo": null,
- "pred_hi": null,
- "sigma_l": null,
- "detail_json": null,
- "service_factor": 1.65,
- "safety_level": 119.94,
- "batch_window": 28.0,
- "fulfill_rate": 0.95,
- "inv_days": 30.43,
- "changeover_cnt": 6,
- "abnormal_flag": false,
- "status": "已生效"
-}
+ "mase": 0.8112,
+ "pred_qty": 1623.64,
+ "pred_lo": 1543.6,
+ "pred_hi": 1706.36,
+ "sigma_l": 5.9852,
+ "detail_json": "{\"candidates\": [{\"method\": \"AutoTheta\", \"params\": {\"season_length\": 12}, \"mase\": 0.8112, \"smape\": 0.0391, \"steps\": [{\"period\": \"2024-09\", \"actual\": 1426.0, \"pred\": -22705.26}, {\"period\": \"2024-10\", \"actual\": 1516.0, \"pred\": -120.0}, {\"period\": \"2024-11\", \"actual\": 1506.0, \"pred\": 1414.69}, {\"period\": \"2024-12\", \"actual\": 1515.0, \"pred\": 1503.89}, {\"period\": \"2025-01\", \"actual\": 1402.0, \"pred\": 1518.04}, {\"period\": \"2025-02\", \"actual\": 1365.0, \"pred\": 1413.21}, {\"period\": \"2025-03\", \"actual\": 1393.0, \"pred\": 1371.85}, {\"period\": \"2025-04\", \"actual\": 1379.0, \"pred\": 1395.4}, {\"period\": \"2025-05\", \"actual\": 1359.0, \"pred\": 1383.81}, {\"period\": \"2025-06\", \"actual\": 1440.0, \"pred\": 1364.35}, {\"period\": \"2025-07\", \"actual\": 1458.0, \"pred\": 1438.9}, {\"period\": \"2025-08\", \"actual\": 1555.0, \"pred\": 1460.53}, {\"period\": \"2025-09\", \"actual\": 1513.0, \"pred\": 1552.69}, {\"period\": \"2025-10\", \"actual\": 1545.0, \"pred\": 1519.3}, {\"period\": \"2025-11\", \"actual\": 1626.0, \"pred\": 1547.1}, {\"period\": \"2025-12\", \"actual\": 1533.0, \"pred\": 1624.69}, {\"period\": \"2026-01\", \"actual\": 1483.0, \"pred\": 1542.64}, {\"period\": \"2026-02\", \"actual\": 1509.0, \"pred\": 1490.58}, {\"period\": \"2026-03\", \"actual\": 1462.0, \"pred\": 1511.57}, {\"period\": \"2026-04\", \"actual\": 1401.0, \"pred\": 1468.94}, {\"period\": \"2026-05\", \"actual\": 1466.0, \"pred\": 1409.12}, {\"period\": \"2026-06\", \"actual\": 1520.0, \"pred\": 1466.1}, {\"period\": \"2026-07\", \"actual\": 1512.0, \"pred\": 1520.29}, {\"period\": \"2026-08\", \"actual\": 1627.0, \"pred\": 1516.29}]}, {\"method\": \"AutoETS\", \"params\": {\"season_length\": 12}, \"mase\": 0.8133, \"smape\": 0.0392, \"steps\": [{\"period\": \"2024-09\", \"actual\": 1426.0, \"pred\": 1429.24}, {\"period\": \"2024-10\", \"actual\": 1516.0, \"pred\": 1426.18}, {\"period\": \"2024-11\", \"actual\": 1506.0, \"pred\": 1510.89}, {\"period\": \"2024-12\", \"actual\": 1515.0, \"pred\": 1506.28}, {\"period\": \"2025-01\", \"actual\": 1402.0, \"pred\": 1514.5}, {\"period\": \"2025-02\", \"actual\": 1365.0, \"pred\": 1408.41}, {\"period\": \"2025-03\", \"actual\": 1393.0, \"pred\": 1367.47}, {\"period\": \"2025-04\", \"actual\": 1379.0, \"pred\": 1391.55}, {\"period\": \"2025-05\", \"actual\": 1359.0, \"pred\": 1379.71}, {\"period\": \"2025-06\", \"actual\": 1440.0, \"pred\": 1360.18}, {\"period\": \"2025-07\", \"actual\": 1458.0, \"pred\": 1435.46}, {\"period\": \"2025-08\", \"actual\": 1555.0, \"pred\": 1456.72}, {\"period\": \"2025-09\", \"actual\": 1513.0, \"pred\": 1549.4}, {\"period\": \"2025-10\", \"actual\": 1545.0, \"pred\": 1515.07}, {\"period\": \"2025-11\", \"actual\": 1626.0, \"pred\": 1543.3}, {\"period\": \"2025-12\", \"actual\": 1533.0, \"pred\": 1621.29}, {\"period\": \"2026-01\", \"actual\": 1483.0, \"pred\": 1538.03}, {\"period\": \"2026-02\", \"actual\": 1509.0, \"pred\": 1486.13}, {\"period\": \"2026-03\", \"actual\": 1462.0, \"pred\": 1507.7}, {\"period\": \"2026-04\", \"actual\": 1401.0, \"pred\": 1464.6}, {\"period\": \"2026-05\", \"actual\": 1466.0, \"pred\": 1404.62}, {\"period\": \"2026-06\", \
+  …（已截断）
 ```

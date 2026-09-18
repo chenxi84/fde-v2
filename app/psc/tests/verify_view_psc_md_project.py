@@ -23,11 +23,23 @@ ROOT = _project_root()
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
 
-from fde_platform.dbguard import isolate_dbs  # noqa: E402
+from fde_platform.shadowdb import shadow_dbs, shadow_clear, shadow_clear_prefs, auth_db_path  # noqa: E402
+from fde_platform.view_watchdog import install_watchdog  # noqa: E402
 
-_iso = isolate_dbs()
-_iso.__enter__()
-atexit.register(_iso.__exit__, None, None, None)
+# 影子库：业务库与平台库**都**复制到副本 → 真库零字节接触，**不用停 dev server**。
+# config=True 是必需的：本脚本要播种 admin（写 config/auth.db），不影子化就会污染真库。
+_shadow = shadow_dbs(env=True, inprocess=False, config=True)
+_shadow.__enter__()
+# ⚠ **必须在副本上清表**（2026-09-18 加）：影子库是**真库的拷贝** —— 真演示数据
+# （e2e 的 M001/M002、PSC 的各主数据）会被一起复制进来，而本脚本自带的造数会撞主键。
+# 此前不写这句也没事，只是因为当时副本落盘在另一个目录、平台读到的其实是**新建空库**；
+# 布局修正后"副本是空的"这个隐含假设当场暴露 ⇒ 显式清表，语义与《验证门禁.md》
+# §四之二的「view e2e 起点 = 空表」一致。
+shadow_clear("psc")
+# **个人 UI 偏好也要清**：它是操作者本机状态（如"手动隐藏过某列"），
+# 不清就会让用例结果取决于谁在哪台机器上跑（实测：真库里藏了 sales_forecast 的两列）。
+shadow_clear_prefs()
+atexit.register(_shadow.__exit__, None, None, None)
 
 from fde_platform import users  # noqa: E402
 users.init_schema()
@@ -36,7 +48,7 @@ users.seed_admin()
 # seed_admin 落 password_changed=0 → 首登被强制改密闸门拦下（auth.py ②.5），
 # 与 verify_view_e2e 样板/各逐应用脚本一致，先在隔离后的 config/auth.db 置 1 放行。
 try:
-    auth_db = ROOT / "config" / "auth.db"
+    auth_db = auth_db_path()
     if auth_db.exists():
         conn = sqlite3.connect(str(auth_db))
         conn.execute("UPDATE users SET password_changed = 1 WHERE username = 'admin'")
@@ -198,6 +210,9 @@ def main():
 
     errors = []
     ignored = []
+    # 卡住诊断（2026-09-18）：页面冻死/渲染进程崩溃时 playwright 调用不返回 ——
+    # 由这个守护线程把「最后完成的步骤 + 已收集的错误」打出来；否则超时被强杀时现场全丢。
+    install_watchdog(errors, step_getter=lambda: STEP)
 
     def attach(page):
         def on_console(msg):
@@ -246,11 +261,13 @@ def main():
             page.wait_for_selector(".rail, .menu, nav", timeout=15000)
 
             # ===================== §0 造数 =====================
+            # §0 造数（测试数据字典：非用例，文档未编 VT 编号 —— 仅作后续用例前置）
             step("§0 造数（PRJ-1 / PRJ-2 / PRJ-SOP / PRJ-EOP）")
             seed = page.evaluate(SEED_JS)
             assert seed and seed.get("seeded"), f"md_project 造数失败：{seed}"
 
             # ===================== §1 本页渲染（防粘滞）=====================
+            # §1 VT-ROUTE-01 路由渲染（.card>0 · .kpi==0 · 工具栏两按钮 + .tbl + 分页条）
             step("§1 路由渲染防粘滞")
             page.evaluate("location.hash = '#/md_project'")
             try:
@@ -268,6 +285,7 @@ def main():
             assert "共" in page.locator("main").inner_text(), "缺分页条"
 
             # ===================== §2 造数后列表有数据 =====================
+            # §2 VT-LIST-01 列表含所造单号（PRJ-1 行 project_name/stage/owner 回显）
             step("§2 LIST-01 列表含所造单号")
             rows = page.locator("table.tbl tr.data")
             assert rows.count() >= 4, f"md_project 造数后列表行数不足：{rows.count()}"
@@ -278,6 +296,7 @@ def main():
             assert "进行中" in row_txt, "PRJ-1 行 stage 徽章应为 进行中"
             assert "S001" in row_txt, "PRJ-1 行 owner 应为 S001"
 
+            # §2 VT-LIST-02 阶段 chips 过滤（精确匹配：仅 PRJ-SOP）
             step("§2 LIST-02 阶段 chips 过滤（SOP）")
             page.locator(".fchip", has_text="SOP").first.click()
             page.wait_for_timeout(700)
@@ -289,6 +308,7 @@ def main():
             page.locator(".fchip", has_text="全部").first.click()
             page.wait_for_timeout(700)
 
+            # §2 VT-LIST-03 项目号模糊搜索（PRJ-）
             step("§2 LIST-03 项目号模糊搜索（PRJ-）")
             no_input = page.locator('input[placeholder="项目号"]').first
             no_input.fill("PRJ-")
@@ -301,6 +321,7 @@ def main():
             click_button(page, ["查询"])
             page.wait_for_timeout(700)
 
+            # §2 VT-LIST-04 项目名称模糊搜索 + 空态
             step("§2 LIST-04 项目名称模糊搜索 + 空态")
             name_input = page.locator('input[placeholder="项目名称"]').first
             name_input.fill("项目1")
@@ -320,6 +341,7 @@ def main():
             page.wait_for_timeout(700)
 
             # ===================== §3 模态全字段 =====================
+            # §3 VT-MODAL-01 详情模态全字段 + 进行中页脚推进按钮（PRJ-1）
             step("§3 MODAL-01 详情模态全字段 + 进行中页脚推进按钮（PRJ-1）")
             page.locator("table.tbl tr.data .b-link", has_text="PRJ-1").first.click()
             modal = wait_modal(page)
@@ -335,6 +357,7 @@ def main():
             assert ft.locator('button:visible:has-text("关闭")').count() == 1, "进行中态页脚应有「关闭」"
             close_modal(page, modal)
 
+            # §3 VT-MODAL-02 页脚按钮按状态可见性（PRJ-SOP / PRJ-EOP）
             step("§3 MODAL-02 页脚按钮按状态可见性（PRJ-SOP / PRJ-EOP）")
             page.locator("table.tbl tr.data .b-link", has_text="PRJ-SOP").first.click()
             modal = wait_modal(page)
@@ -354,6 +377,7 @@ def main():
             close_modal(page, modal)
 
             # ===================== §4 表单落库回显 =====================
+            # §4 VT-FORM-01 创建落库（PRJ-NEW，stage=进行中）
             step("§4 FORM-01 创建落库（PRJ-NEW，stage=进行中）")
             click_button(page, ["+ 新建项目"])
             modal = wait_modal(page)
@@ -375,6 +399,7 @@ def main():
             assert "进行中" in row_txt, "PRJ-NEW 初始 stage 应为 进行中"
             assert "2026-10-01" in row_txt, "PRJ-NEW sop_date 应回显 2026-10-01"
 
+            # §4 VT-FORM-02 空 project_no 被拒（前端校验）
             step("§4 FORM-02 空 project_no 被拒（前端校验）")
             click_button(page, ["+ 新建项目"])
             modal = wait_modal(page)
@@ -387,6 +412,7 @@ def main():
             close_modal(page, modal)
             assert row_by_no(page, "项目号空").count() == 0, "空 project_no 不应新增行"
 
+            # §4 VT-FORM-03 重复 project_no 后端拒绝（BR-01）
             step("§4 FORM-03 重复 project_no 后端拒绝（BR-01）")
             click_button(page, ["+ 新建项目"])
             modal = wait_modal(page)
@@ -399,6 +425,7 @@ def main():
             close_modal(page, modal)
             assert row_by_no(page, "PRJ-1").count() == 1, "重复 PRJ-1 列表仍应仅 1 条"
 
+            # §4 VT-FORM-04 编辑态 project_no 只读 + 字段更新回显 + stage 选项单向
             step("§4 FORM-04 编辑态 project_no 只读 + 字段更新回显 + stage 选项单向")
             row_by_no(page, "PRJ-1").first.locator('button:has-text("编辑")').first.click()
             modal = wait_modal(page)
@@ -425,6 +452,7 @@ def main():
             assert "项目1-改" in row_txt, "PRJ-1 编辑后 project_name 应为 项目1-改"
             assert "S011" in row_txt, "PRJ-1 编辑后 owner 应为 S011"
 
+            # §4 VT-FORM-05 阶段推进（进行中 → SOP）
             step("§4 FORM-05 阶段推进（进行中 → SOP）")
             row_by_no(page, "PRJ-2").first.locator('button:has-text("推进至 SOP")').first.click()
             modal = wait_modal(page)
@@ -445,6 +473,7 @@ def main():
             assert "SOP" in row_txt, "PRJ-2 推进后 stage 应为 SOP"
             assert "2026-09-30" in row_txt, "PRJ-2 推进后 sop_date 应为 2026-09-30"
 
+            # §4 VT-FORM-06 阶段推进（SOP → EOP）+ 推进日期必填前端校验
             step("§4 FORM-06 阶段推进（SOP → EOP）+ 推进日期必填前端校验")
             row_by_no(page, "PRJ-SOP").first.locator('button:has-text("推进至 EOP")').first.click()
             modal = wait_modal(page)
@@ -463,6 +492,7 @@ def main():
             assert "EOP" in row_txt, "PRJ-SOP 推进后 stage 应为 EOP"
             assert "2029-12-31" in row_txt, "PRJ-SOP 推进后 eop_date 应为 2029-12-31"
 
+            # §4 VT-FORM-07 日期先后后端校验（BR-05）
             step("§4 FORM-07 日期先后后端校验（BR-05）")
             click_button(page, ["+ 新建项目"])
             modal = wait_modal(page)
@@ -479,6 +509,7 @@ def main():
             close_modal(page, modal)
             assert row_by_no(page, "PRJ-DATE").count() == 0, "日期错误不应新增 PRJ-DATE"
 
+            # §4 VT-FORM-08 批量导入（新增 + 冲突 upsert + 失败明细）
             step("§4 FORM-08 批量导入（新增 + 冲突 upsert + 失败明细）")
             click_button(page, ["批量导入"])
             modal = wait_modal(page)
@@ -502,8 +533,17 @@ def main():
             assert "项目1导入改" in row_txt, "PRJ-1 导入 upsert 后 project_name 应变为 项目1导入改"
 
             # ===================== §6 0 报错红线 =====================
+            # §6 VT-ERR-01 本会话 0 报错
             step("§6 会话 0 报错")
             assert not errors, f"md_project 会话前端报错：{errors[:5]}"
+            # **豁免也要受检**（2026-09-17 补）：`ignored` 收集了却从不校验，等于给「静默吞掉」
+            # 开了口子 —— 任何新形态的 4xx/console error 都能混进来而不被任何人发现。
+            # 只认 favicon / sourcemap / 403 三种豁免理由，其余一律报出。
+            for item in ignored:
+                ok = ("/favicon.ico" in item or ".map" in item or "403" in item)
+                assert ok, f"豁免理由不成立（既不是 favicon/.map，也不是 403）：{item!r}"
+            if ignored:
+                print(f"  · 本次豁免 {len(ignored)} 条：{ignored[:3]}")
             print("VERIFY_VIEW_psc_md_project: PASS")
 
     finally:

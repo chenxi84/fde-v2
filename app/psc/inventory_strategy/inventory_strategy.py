@@ -11,9 +11,26 @@ class InventoryStrategy:
     SERVICE_FACTORS = {0.90: 1.28, 0.95: 1.65, 0.98: 2.05, 0.99: 2.33}
 
     def calc(self, version_no: str, material_no: str, customer_no: str = None):
-        """计算单物料库存策略（三层水位+对冲工具），同物料同版本重复计算即覆盖更新。"""
+        """计算单物料库存策略（三层水位+对冲工具），同物料同版本重复计算即覆盖更新。
+
+        **不传 customer_no 时自动取该物料的主要客户**（历史出货量最大者，口径同 calc_batch）。
+
+        ⚠ 不加这一步会出现「同物料两条路径结论相反」：BR-11/12 的对冲选型判的是
+        `(生产+物流) <= (线边库存 + 调拨提前期)`，右边由**客户**给；不传客户时右边恒为 0，
+        于是「速度对冲」永远出不来。calc_batch 早已修过这个坑（见其 docstring），
+        **但单行路径一直没修** —— 而前端「行内重算」按钮走的正是单行路径。
+        实测（2026-09-15）：`BYD-HAN-BRK` 经 calc_batch 得 (速度, 0, 0, 0)，
+        经 calc(V, material_no) 得 (库存, 151.64, 9.88, 1415.32) —— 结论相反，
+        且后者会给一个高价值短周期件凭空虚增 1415 件的组批库存。
+        """
         version_no = self._validate_version(version_no)
         material_no = self._clean_material_no(material_no)
+        if customer_no is None:
+            try:
+                customer_no = self.fde.call("sales_history", "main_customer",
+                                            material_no=material_no)
+            except FdeError:
+                customer_no = None      # 客户口径是增强项：取不到不该让这个物料算不出水位
         return self._calc_one(version_no, material_no, customer_no)
 
     def calc_batch(self, version_no: str):
@@ -324,6 +341,18 @@ class InventoryStrategy:
             raise FdeError("月度版本不能为空")
         if not re.fullmatch(r"\d{6}", v) or int(v[4:6]) < 1 or int(v[4:6]) > 12:
             raise FdeError("版本号格式必须为 YYYYMM")
+        # BR-16 版本有效性校验：**格式对还不够，版本必须真实存在**。
+        # 只校验格式的后果实测过（2026-09-17）：`calc(version_no="209901")` **成功返回**，
+        # 为一个不存在的版本写入了水位策略 —— 那一行成了孤儿（无版本可依），
+        # 而任何"按版本查水位"的下游都会读到它。
+        # 这与本项目反复出现的那一类同源：**静默接受一个不存在的标识，比报错危险得多**。
+        exists = None
+        try:
+            exists = self.fde.call("md_monthly_version", "get", version_no=v)
+        except FdeError:
+            exists = None
+        if not exists:
+            raise FdeError(f"月度版本 {v} 不存在，请先在月度版本中创建后再计算库存策略")
         return v
 
     def _clean_material_no(self, material_no):

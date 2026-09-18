@@ -41,12 +41,14 @@ from fde_platform.runtime import FdePlatform  # noqa: E402
 # 退出时删除残料、原样还回用户数据。链路测试此前用 clean() 直接 DROP 真实库，
 # 会洗掉用户在平台上积累的数据（2026-08-20 曾因此丢失 202610 版本）——现已改用
 # dbguard 隔离，与 verify_view_*.py 一致，绝不再触碰真实数据。
-from fde_platform.dbguard import isolate_dbs  # noqa: E402
+# 影子库隔离：业务库**复制**到临时目录，测试全程只读写副本 ——
+# **真库零字节接触，且不用停 dev server**（移库要求文件不被占用，复制只读、无此约束）。
+from fde_platform.shadowdb import shadow_dbs, shadow_clear  # noqa: E402
 import atexit  # noqa: E402
 
-_iso = isolate_dbs()
-_iso.__enter__()
-atexit.register(_iso.__exit__, None, None, None)
+_shadow = shadow_dbs()
+_shadow.__enter__()
+atexit.register(_shadow.__exit__, None, None, None)
 
 # stub 模式：清掉外部系统基址，出向适配器自动降级为本地 stub
 for _k in ("LLM_BASE_URL", "LLM_API_KEY", "SAP_BASE_URL", "MOM_BASE_URL",
@@ -94,11 +96,16 @@ def expect_err(fn, substr):
 PARTS = [
     ("part1", "§1 主数据准备 + §2 主业务链"),
     ("part2", "§3 分支 / 异常用例"),
+    ("part3", "§3.11 适配器穿透（影子库内注入非零值）"),
 ]
 
 
 def main():
-    # 真实库已由 isolate_dbs 移走，FdePlatform 在空库上经 schema.sql 重建（审计列就位）。
+    # ⚠ **必须显式清表**（与 dbguard 移库的关键差异）：
+    # 移库后空位是空的，平台建表即得到空库；而**影子库的副本带着真库的数据** ——
+    # 不清就会"跑在演示数据上"，用例自带造数会撞主键。
+    # 清的是**副本**，真库不受影响。
+    shadow_clear(GROUP)
     pf = FdePlatform()
     pf.load_all()
 

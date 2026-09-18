@@ -21,11 +21,23 @@ ROOT = _project_root()
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
 
-from fde_platform.dbguard import isolate_dbs  # noqa: E402
+from fde_platform.shadowdb import shadow_dbs, shadow_clear, shadow_clear_prefs, auth_db_path  # noqa: E402
+from fde_platform.view_watchdog import install_watchdog  # noqa: E402
 
-_iso = isolate_dbs()
-_iso.__enter__()
-atexit.register(_iso.__exit__, None, None, None)
+# 影子库：业务库与平台库**都**复制到副本 → 真库零字节接触，**不用停 dev server**。
+# config=True 是必需的：本脚本要播种 admin（写 config/auth.db），不影子化就会污染真库。
+_shadow = shadow_dbs(env=True, inprocess=False, config=True)
+_shadow.__enter__()
+# ⚠ **必须在副本上清表**（2026-09-18 加）：影子库是**真库的拷贝** —— 真演示数据
+# （e2e 的 M001/M002、PSC 的各主数据）会被一起复制进来，而本脚本自带的造数会撞主键。
+# 此前不写这句也没事，只是因为当时副本落盘在另一个目录、平台读到的其实是**新建空库**；
+# 布局修正后"副本是空的"这个隐含假设当场暴露 ⇒ 显式清表，语义与《验证门禁.md》
+# §四之二的「view e2e 起点 = 空表」一致。
+shadow_clear("psc")
+# **个人 UI 偏好也要清**：它是操作者本机状态（如"手动隐藏过某列"），
+# 不清就会让用例结果取决于谁在哪台机器上跑（实测：真库里藏了 sales_forecast 的两列）。
+shadow_clear_prefs()
+atexit.register(_shadow.__exit__, None, None, None)
 
 # admin 账号（登录必需）；seed_admin 落 password_changed=0，首次登录会强制改密，
 # 直接置 1 绕开 /change-password 页（与 parts-fc 逐应用脚本同法）。
@@ -36,7 +48,7 @@ users.seed_admin()
 import sqlite3
 
 try:
-    auth_db = ROOT / "config" / "auth.db"
+    auth_db = auth_db_path()
     if auth_db.exists():
         conn = sqlite3.connect(str(auth_db))
         conn.execute("UPDATE users SET password_changed = 1 WHERE username = 'admin'")
@@ -101,8 +113,9 @@ SEED_JS = r"""async () => {
     return x;
   };
 
-  // 跨应用前置：客户 + 原/新物料
+  // 跨应用前置：客户（C001 主测 / C002 供 VT-LIST-02 断言「不出现其他客户行」）+ 原/新物料
   await call("md_customer", "create", { customer_no: "C001", customer_name: "客户C001" });
+  await call("md_customer", "create", { customer_no: "C002", customer_name: "客户C002" });
   await call("md_material", "create", { material_no: "M3", material_name: "旧物料A" });
   await call("md_material", "create", { material_no: "M4", material_name: "新物料B" });
 
@@ -114,6 +127,16 @@ SEED_JS = r"""async () => {
     switch_time: "2026-09-01",
     ecn_no: "ECN-002"
   }));
+
+  // 本页主数据 BPX（他客户 C002，供 §2 VT-LIST-02 断言「客户过滤后不出现其他客户行」）：
+  // 原/新物料复用 M3/M4，靠 customer_no + switch_time + ecn_no 与 BP1 区分 → 组合唯一成立。
+  await call("md_breakpoint", "create", {
+    customer_no: "C002",
+    old_material_no: "M3",
+    new_material_no: "M4",
+    switch_time: "2026-12-01",
+    ecn_no: "ECN-902"
+  });
 
   return { seeded: true, bp1_id: bp1 && bp1.bp_id };
 }"""
@@ -230,6 +253,19 @@ def pick_autocomplete(page, modal, placeholder, value):
     page.wait_for_timeout(200)
 
 
+def pick_filter(page, placeholder, value):
+    """过滤条 autocomplete（客户…/原物料号…/新物料号…）：fill 触发下拉 → 点**同一容器内**
+    的可见匹配项（`.` 作用域收到输入的父 div，避免命中表格行里的同名 `.mono`）。"""
+    inp = page.locator(f'input[placeholder="{placeholder}"]').first
+    inp.click()
+    inp.fill(value)
+    box = inp.locator("xpath=..")
+    opt = box.locator(f'.mono:visible:has-text("{value}")').first
+    opt.wait_for(state="visible", timeout=5000)
+    opt.click()
+    page.wait_for_timeout(600)          # 选中即 list.load(1)，等列表重载
+
+
 def main():
     port = free_port()
     proc = subprocess.Popen(
@@ -241,6 +277,9 @@ def main():
 
     errors = []
     ignored = []
+    # 卡住诊断（2026-09-18）：页面冻死/渲染进程崩溃时 playwright 调用不返回 ——
+    # 由这个守护线程把「最后完成的步骤 + 已收集的错误」打出来；否则超时被强杀时现场全丢。
+    install_watchdog(errors, step_getter=lambda: STEP)
 
     def attach(page):
         def on_console(msg):
@@ -289,6 +328,7 @@ def main():
             page.wait_for_selector(".rail, .menu, nav", timeout=15000)
 
             # ===================== §1 本页渲染（防粘滞）=====================
+            # §1 VT-ROUTE-01 路由渲染（.card>0 · 列表三段式：工具栏 + .tbl 表格 + 分页条 · .kpi==0 防粘滞）
             step("§1 本页渲染（防粘滞）")
             page.evaluate("location.hash = '#/md_breakpoint'")
             try:
@@ -298,9 +338,24 @@ def main():
             page.wait_for_timeout(700)
 
             assert page.locator("main").inner_text().strip(), "md_breakpoint 页面无内容"
-            assert page.locator("main .card").count() > 0, "md_breakpoint 未渲染 card"
+            # `:visible` 限定：隐藏卡片不计入（pitfalls #14）
+            assert page.locator("main .card:visible").count() > 0, "md_breakpoint 未渲染 card(:visible)"
             assert page.locator("main .tbl, main table").count() > 0, "md_breakpoint 未渲染表格"
             assert page.locator(".kpi").count() == 0, "md_breakpoint 挂载未重建（残留看板）"
+
+            # 三段式之二：工具栏（查询 / 重置 / ＋ 新建断点）
+            # 取 .bd 的**直接子** .tagline（工具栏 / 分页条两条；内层同名 div 不算，否则 .last 命中工具栏里的按钮组）
+            bars = page.locator("main .card:visible .bd > .tagline")
+            bar = bars.first
+            for t in ["查询", "重置", "新建断点"]:
+                assert bar.locator(f'button:visible:has-text("{t}")').count() > 0, \
+                    f"md_breakpoint 工具栏缺按钮：{t}"
+            # 三段式之三：分页条（共 N 条 / 上一页 / 下一页）
+            pager = bars.last
+            assert "共" in pager.inner_text(), "md_breakpoint 分页条缺「共 N 条」"
+            for t in ["上一页", "下一页"]:
+                assert pager.locator(f'button:visible:has-text("{t}")').count() > 0, \
+                    f"md_breakpoint 分页条缺按钮：{t}"
 
             # ===================== §0 造数 =====================
             step("§0 造数（跨应用前置 + BP1）")
@@ -309,6 +364,7 @@ def main():
             bp1_id = str(seed.get("bp1_id"))
 
             # ===================== §2 造数后列表有数据 =====================
+            # §2 VT-LIST-01 列表含所造断点（BP1 行字段全集 + 表头无「状态」列 + 断点标识列默认隐藏）
             step("§2 造数后列表有数据")
             page.reload()
             page.wait_for_selector(".rail, .menu, nav", timeout=15000)
@@ -330,7 +386,36 @@ def main():
             bp_th = page.locator('table tr:first-child th', has_text="断点标识")
             assert bp_th.count() == 1 and not bp_th.first.is_visible(), "断点标识列应默认隐藏"
 
+            # §2 VT-LIST-02 搜索抽样（customer_no 精确匹配 → 结果集收敛，不出现其他客户行）
+            step("§2 VT-LIST-02 搜索抽样（customer_no 精确匹配）")
+            pick_filter(page, "客户…", "C001")
+            rows = page.locator("table tr.data")
+            assert rows.count() == 1, f"客户过滤 C001 后应仅剩 BP1 一行，实际 {rows.count()}"
+            row_txt = rows.first.inner_text()
+            assert "C001" in row_txt and "ECN-002" in row_txt, \
+                f"客户过滤后应命中 BP1（C001/ECN-002）：{row_txt[:80]}"
+            assert page.locator('table tr.data:has-text("ECN-902")').count() == 0, \
+                "客户过滤不应出现其他客户（C002/ECN-902）的行"
+            assert page.locator("td.empty").count() == 0, "命中时不应显示空态"
+
+            # §2 VT-LIST-03 无匹配空态（原物料号 autocomplete 选 M4：M4 仅作新物料，
+            #     无「原=M4」的断点 → 命中专用空态文案，而非初始空态）
+            step("§2 VT-LIST-03 无匹配空态（原物料号=M4）")
+            click_button(page, ["重置"])
+            page.wait_for_timeout(600)
+            pick_filter(page, "原物料号…", "M4")
+            assert page.locator("table tr.data").count() == 0, "原物料号=M4 应无匹配行"
+            empty = page.locator("td.empty").first
+            assert empty.inner_text().strip() == "无符合条件的断点记录", \
+                f"空态文案不符：{empty.inner_text()!r}"
+            # 复位：清空过滤，列表回全量（BP1 + BPX）
+            click_button(page, ["重置"])
+            page.wait_for_timeout(600)
+            assert page.locator("table tr.data").count() == 2, \
+                f"重置后应恢复全量 2 行（BP1 + BPX），实际 {page.locator('table tr.data').count()}"
+
             # ===================== §3 详情模态全字段 =====================
+            # §3 VT-MODAL-01 详情模态含全部业务字段（标签/值 + 停用徽章 + 原始数据区 + 页脚三按钮）
             step("§3 详情模态全字段")
             row1.first.locator(".b-link").first.click()
             modal = open_modal(page)
@@ -401,8 +486,15 @@ def main():
             }""")
             assert bp2_id, "md_breakpoint 未取到 ECN-FORM 行的 bp_id"
             row2_txt = row2.first.inner_text()
-            for expected in [bp2_id, "C001", "M3", "M4", "2026-10-01", "ECN-FORM"]:
-                assert expected in row2_txt, f"新建断点行缺字段：{expected}"
+            # ⚠ **不要把 bp_id 拿去断行文本**（2026-09-18 修）：它是 `col_default_hidden: "断点标识"`
+            # 的**默认隐藏列**，行里根本不渲染它 —— 之前那条 `expected in row2_txt` 能过，
+            # 是因为当时影子库读到的是空库、自增主键恰好是 1/2 这种**在别的单元格里也出现**的数字
+            # （巧合命中）。影子库布局修好后主键变成 32（真库自增序列的延续），巧合不再成立，当场暴露。
+            # 断言分两半：**接口**证明落库（bp_id 取得到）+ **行文本**只断可见列。
+            for expected in ["C001", "M3", "M4", "2026-10-01", "ECN-FORM"]:
+                assert expected in row2_txt, f"新建断点行缺可见字段：{expected}"
+            assert "断点标识" not in row2_txt, \
+                "「断点标识」是默认隐藏列，不该出现在行文本里（列设置机制若失效，这条会红）"
 
             # VT-FORM-02 必填校验（空值拦截，不发请求）
             step("§4 VT-FORM-02 必填校验")
@@ -418,6 +510,7 @@ def main():
 
             # VT-FORM-03 old=new 校验
             step("§4 VT-FORM-03 old=new 校验")
+            rows_before = page.locator("table tr.data").count()
             click_button(page, ["新建断点"])
             modal = open_modal(page)
             pick_autocomplete(page, modal, "搜索客户", "C001")
@@ -426,7 +519,13 @@ def main():
             modal.locator('input[type="date"]').first.fill("2026-11-01")
             click_button(modal, ["创建"])
             page.wait_for_selector('.toast.warn:has-text("原物料号与新物料号不能相同")', timeout=5000)
+            # 用例 §4 VT-FORM-03 断言：toast 提示「原物料号与新物料号不能相同」+ 不产生新记录
+            assert page.locator('.toast.warn:has-text("原物料号与新物料号不能相同")').count() >= 1, \
+                "old=new 未弹出前端警告 toast（文案：原物料号与新物料号不能相同）"
+            assert modal.is_visible(), "old=new 被拦截后模态应保持打开"
             assert page.locator('table tr:has-text("2026-11-01")').count() == 0, "old=new 不应产生新记录"
+            assert page.locator("table tr.data").count() == rows_before, \
+                f"old=new 被拦截后列表行数不应变化：{rows_before} → {page.locator('table tr.data').count()}"
             close_modal(page, modal)
 
             # VT-FORM-04 组合唯一（后端 FdeError）
@@ -503,6 +602,14 @@ def main():
             # ===================== §6 0 报错红线 =====================
             step("§6 0 报错红线")
             assert not errors, f"md_breakpoint 会话前端报错：{errors[:5]}"
+            # **豁免也要受检**（2026-09-17 补）：`ignored` 收集了却从不校验，等于给「静默吞掉」
+            # 开了口子 —— 任何新形态的 4xx/console error 都能混进来而不被任何人发现。
+            # 只认 favicon / sourcemap / 受限会话 403 三种豁免理由，其余一律报出。
+            for _item in ignored:
+                _ok = ("/favicon.ico" in _item or ".map" in _item or "403" in _item)
+                assert _ok, f"豁免理由不成立（既不是 favicon/.map，也不是 403）：{_item!r}"
+            if ignored:
+                print(f"  · 本次豁免 {len(ignored)} 条：{ignored[:3]}")
             print("VERIFY_VIEW_psc_md_breakpoint: PASS")
 
     finally:

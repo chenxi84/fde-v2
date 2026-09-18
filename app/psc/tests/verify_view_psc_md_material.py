@@ -21,11 +21,23 @@ ROOT = _project_root()
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
 
-from fde_platform.dbguard import isolate_dbs  # noqa: E402
+from fde_platform.shadowdb import shadow_dbs, shadow_clear, shadow_clear_prefs, auth_db_path  # noqa: E402
+from fde_platform.view_watchdog import install_watchdog  # noqa: E402
 
-_iso = isolate_dbs()
-_iso.__enter__()
-atexit.register(_iso.__exit__, None, None, None)
+# 影子库：业务库与平台库**都**复制到副本 → 真库零字节接触，**不用停 dev server**。
+# config=True 是必需的：本脚本要播种 admin（写 config/auth.db），不影子化就会污染真库。
+_shadow = shadow_dbs(env=True, inprocess=False, config=True)
+_shadow.__enter__()
+# ⚠ **必须在副本上清表**（2026-09-18 加）：影子库是**真库的拷贝** —— 真演示数据
+# （e2e 的 M001/M002、PSC 的各主数据）会被一起复制进来，而本脚本自带的造数会撞主键。
+# 此前不写这句也没事，只是因为当时副本落盘在另一个目录、平台读到的其实是**新建空库**；
+# 布局修正后"副本是空的"这个隐含假设当场暴露 ⇒ 显式清表，语义与《验证门禁.md》
+# §四之二的「view e2e 起点 = 空表」一致。
+shadow_clear("psc")
+# **个人 UI 偏好也要清**：它是操作者本机状态（如"手动隐藏过某列"），
+# 不清就会让用例结果取决于谁在哪台机器上跑（实测：真库里藏了 sales_forecast 的两列）。
+shadow_clear_prefs()
+atexit.register(_shadow.__exit__, None, None, None)
 
 from fde_platform import users  # noqa: E402
 
@@ -36,7 +48,7 @@ users.seed_admin()
 # 测试会话提前标记已改密，登录后直达首页。
 import sqlite3  # noqa: E402
 try:
-    auth_db = ROOT / "config" / "auth.db"
+    auth_db = auth_db_path()
     if auth_db.exists():
         conn = sqlite3.connect(str(auth_db))
         conn.execute("UPDATE users SET password_changed = 1 WHERE username = 'admin'")
@@ -239,6 +251,9 @@ def main():
 
     errors = []
     ignored = []
+    # 卡住诊断（2026-09-18）：页面冻死/渲染进程崩溃时 playwright 调用不返回 ——
+    # 由这个守护线程把「最后完成的步骤 + 已收集的错误」打出来；否则超时被强杀时现场全丢。
+    install_watchdog(errors, step_getter=lambda: STEP)
 
     def attach(page):
         def on_console(msg):
@@ -286,6 +301,7 @@ def main():
             page.wait_for_selector(".rail, .menu, nav", timeout=15000)
 
             # ===================== §1 本页渲染（防粘滞 · 空库先于造数）=====================
+            # §1 VT-ROUTE-01 路由渲染（防粘滞 · 空库先于造数）
             step("§1 路由渲染 + .kpi==0")
             page.evaluate("location.hash = '#/md_material'")
             try:
@@ -299,11 +315,13 @@ def main():
             assert page.locator(".kpi").count() == 0, "md_material 挂载未重建（残留看板 .kpi）"
 
             # ===================== §0 造数（M1–M4）=====================
+            # §0 造数（测试数据字典：非用例，文档未编 VT 编号 —— 仅作后续用例前置）
             step("§0 造数 M1–M4")
             seed = page.evaluate(SEED_JS)
             assert seed and seed.get("seeded"), f"md_material 造数失败：{seed}"
 
             # ===================== §2 列表有数据 =====================
+            # §2 VT-LIST-01 列表含所造单号（含行内名称/状态徽章回显）
             step("§2 列表含 M1")
             page.reload()
             page.wait_for_selector(".rail, .menu, nav", timeout=15000)
@@ -321,6 +339,7 @@ def main():
             assert "螺栓-标准" in m1_txt, "M1 行缺物料名称回显"
             assert "正常" in m1_txt, "M1 行缺状态徽章回显"
 
+            # §2 VT-LIST-02 物料号模糊搜索
             step("§2 物料号模糊搜索")
             page.locator('input[placeholder="物料号"]').first.fill("M1")
             click_button(page, ["查询", "搜索"])
@@ -330,6 +349,7 @@ def main():
             assert page.locator('table tr.data:has-text("M3")').count() == 0, "物料号搜索泄漏 M3"
             assert page.locator('table tr.data:has-text("M4")').count() == 0, "物料号搜索泄漏 M4"
 
+            # §2 VT-LIST-03 状态 chips 精确过滤
             step("§2 状态 chips 精确过滤")
             page.locator('input[placeholder="物料号"]').first.fill("")
             page.locator('.fchip:has-text("正常")').first.click()
@@ -338,7 +358,12 @@ def main():
             assert page.locator('table tr.data:has-text("M4")').count() >= 1, "正常态过滤缺 M4"
             assert page.locator('table tr.data:has-text("M2")').count() == 0, "正常态过滤泄漏 M2(EOP)"
             assert page.locator('table tr.data:has-text("M3")').count() == 0, "正常态过滤泄漏 M3(停用)"
+            # 用例 §2 VT-LIST-03 断言「结果含 M1、M4，不含 M2、M3」——「含 M1/M4 + 不含 M2/M3」
+            # 只约束了四个已知单号，若混入第五行（或某行被重复渲染）则看不出来；补行数闭合。
+            assert page.locator("table tr.data").count() == 2, \
+                f"正常态过滤应恰 2 行（M1/M4），实际 {page.locator('table tr.data').count()}"
 
+            # §2 VT-LIST-04 物料名称模糊搜索（含清空过滤后命中 M1–M4 全量）
             step("§2 物料名称模糊搜索")
             page.locator('.fchip:has-text("全部")').first.click()
             page.locator('input[placeholder="物料名称"]').first.fill("螺栓")
@@ -355,6 +380,7 @@ def main():
             assert page.locator("table tr.data").count() >= 4, "清空过滤后应命中 M1–M4 全量"
 
             # ===================== §3 模态全字段 =====================
+            # §3 VT-MODAL-01 详情模态全字段（16 项标签/值 + tryParse 结构化 + status 只读 + 页脚无状态机按钮）
             step("§3 详情模态全字段")
             page.locator('button.b-link:has-text("M1")').first.click()
             modal = open_modal(page)
@@ -387,6 +413,7 @@ def main():
             close_modal(page, modal)
 
             # ===================== §4 表单落库回显 =====================
+            # §4 VT-FORM-01 创建（全字段 + status 不进表单）
             step("§4 创建（status 不进表单）")
             click_button(page, ["+ 新建物料", "新建物料"])
             form_modal = open_modal(page)
@@ -426,6 +453,7 @@ def main():
             assert "新物料" in mnew_txt, "M-NEW 行缺物料名称回显"
             assert "正常" in mnew_txt, "M-NEW 行缺默认状态徽章（正常）"
 
+            # §4 VT-FORM-02 创建空必填校验（前端拦截）
             step("§4 空必填校验（前端拦截）")
             click_button(page, ["+ 新建物料", "新建物料"])
             form_modal = open_modal(page)
@@ -440,6 +468,7 @@ def main():
             assert form_modal.count() == 1, "空必填后创建表单应保持打开"
             close_modal(page, form_modal)
 
+            # §4 VT-FORM-03 编辑态（material_no 只读 · status 不进表单 · 更新回显 + 详情同步）
             step("§4 编辑态（material_no 只读 · status 不进表单）")
             m1_row = page.locator('table tr.data:has-text("M1")').first
             m1_row.locator('button:has-text("编辑")').first.click()
@@ -479,6 +508,7 @@ def main():
             assert "螺栓-标准-改" in modal.inner_text(), "重开详情模态物料名称未同步"
             close_modal(page, modal)
 
+            # §4 VT-FORM-04 批量导入（摘要 + 错误明细 + 列表回显）
             step("§4 批量导入（摘要 + 错误明细）")
             click_button(page, ["批量导入"])
             imp_modal = open_modal(page)
@@ -527,9 +557,77 @@ def main():
             assert "导入件" in mimp_txt, "M-IMP 行缺物料名称回显"
             assert "正常" in mimp_txt, "M-IMP 行缺状态徽章回显"
 
+            # §4 VT-FORM-05 前序物料选择器（autocomplete）：输入「螺」→ 下拉命中 M1 → 落库 → 详情回显
+            #   下拉源自 md_material.list 全量（含停用/EOP）；M1 的名称在 VT-FORM-03 已改为「螺栓-标准-改」，
+            #   故下拉/回显小字以**当前名**为准。
+            step("§4 前序物料 autocomplete（选 M1 → 落库 → 详情回显 M1）")
+            click_button(page, ["+ 新建物料", "新建物料"])
+            form_modal = open_modal(page)
+
+            pred_input = form_modal.locator('input[placeholder="搜索前序物料…"]').first
+            pred_input.click()
+            pred_input.fill("螺")
+            page.wait_for_timeout(300)
+            # 下拉项与表格行同为 div.mono：限定在输入框同容器内且 :visible（pitfalls #14）
+            pred_box = pred_input.locator("xpath=..")
+            opt = pred_box.locator('.mono:visible:has-text("M1")').first
+            opt.wait_for(state="visible", timeout=5000)
+            opt.click()
+            page.wait_for_timeout(200)
+            assert pred_input.input_value() == "M1", \
+                f"前序物料选中后未回填编码：{pred_input.input_value()!r}"
+
+            fill_labeled(form_modal, "物料号", "M-NEW2")
+            fill_labeled(form_modal, "物料名称", "新一代螺栓")
+            click_button(form_modal, ["创建"])
+            try:
+                page.wait_for_selector('.toast:has-text("创建成功")', timeout=8000)
+            except Exception:
+                pass
+            try:
+                form_modal.wait_for(state="hidden", timeout=5000)
+            except Exception:
+                pass
+            page.wait_for_timeout(700)
+
+            try:
+                page.wait_for_selector('table tr.data:has-text("M-NEW2")', timeout=10000)
+            except Exception:
+                pass
+            assert page.locator('table tr.data:has-text("M-NEW2")').count() == 1, \
+                "前序物料创建后列表未回显 M-NEW2"
+            mnew2_txt = page.locator('table tr.data:has-text("M-NEW2")').first.inner_text()
+            # 小字为 materialMap 回显；materialMap 由 loadMaterialOptions() 在页面 init 时抓一次，
+            # VT-FORM-03 改名后**不刷新**，故此处仍是旧名「螺栓-标准」（与文档一致）
+            assert "M1" in mnew2_txt and "螺栓-标准" in mnew2_txt, \
+                f"M-NEW2 行前序物料列未回显 M1 + 物料名：{mnew2_txt[:80]}"
+
+            # 重开详情模态：predecessor_material_no = M1，且附前序物料名称（materialName 命中）
+            page.locator('button.b-link:has-text("M-NEW2")').first.click()
+            modal = open_modal(page)
+            try:
+                page.wait_for_selector('.modal:visible .docno:has-text("M-NEW2")', timeout=8000)
+            except Exception:
+                pass
+            page.wait_for_timeout(300)
+            pred_cell = modal.locator('div.k', has_text="前序物料").first \
+                .locator("xpath=..").inner_text()
+            assert "M1" in pred_cell, f"详情模态前序物料值应为 M1：{pred_cell!r}"
+            assert "螺栓-标准" in pred_cell, f"详情模态缺前序物料名称回显：{pred_cell!r}"
+            close_modal(page, modal)
+
             # ===================== §6 0 报错 =====================
+            # §6 0 报错红线（本会话；文档 §6 该条未编 VT 编号，无对应 VT-ERR 条目）
             step("§6 0 报错")
             assert not errors, f"md_material 会话前端报错：{errors[:5]}"
+            # **豁免也要受检**（2026-09-17 补）：`ignored` 收集了却从不校验，等于给「静默吞掉」
+            # 开了口子 —— 任何新形态的 4xx/console error 都能混进来而不被任何人发现。
+            # 只认 favicon / sourcemap / 403 三种豁免理由，其余一律报出。
+            for item in ignored:
+                ok = ("/favicon.ico" in item or ".map" in item or "403" in item)
+                assert ok, f"豁免理由不成立（既不是 favicon/.map，也不是 403）：{item!r}"
+            if ignored:
+                print(f"  · 本次豁免 {len(ignored)} 条：{ignored[:3]}")
             print("VERIFY_VIEW_psc_md_material: PASS")
 
     finally:

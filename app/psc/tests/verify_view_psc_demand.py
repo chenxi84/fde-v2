@@ -26,18 +26,30 @@ ROOT = _project_root()
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
 
-from fde_platform.dbguard import isolate_dbs  # noqa: E402
+from fde_platform.shadowdb import shadow_dbs, shadow_clear, shadow_clear_prefs, auth_db_path  # noqa: E402
+from fde_platform.view_watchdog import install_watchdog  # noqa: E402
 
-_iso = isolate_dbs()
-_iso.__enter__()
-atexit.register(_iso.__exit__, None, None, None)
+# 影子库：业务库与平台库**都**复制到副本 → 真库零字节接触，**不用停 dev server**。
+# config=True 是必需的：本脚本要播种 admin（写 config/auth.db），不影子化就会污染真库。
+_shadow = shadow_dbs(env=True, inprocess=False, config=True)
+_shadow.__enter__()
+# ⚠ **必须在副本上清表**（2026-09-18 加）：影子库是**真库的拷贝** —— 真演示数据
+# （e2e 的 M001/M002、PSC 的各主数据）会被一起复制进来，而本脚本自带的造数会撞主键。
+# 此前不写这句也没事，只是因为当时副本落盘在另一个目录、平台读到的其实是**新建空库**；
+# 布局修正后"副本是空的"这个隐含假设当场暴露 ⇒ 显式清表，语义与《验证门禁.md》
+# §四之二的「view e2e 起点 = 空表」一致。
+shadow_clear("psc")
+# **个人 UI 偏好也要清**：它是操作者本机状态（如"手动隐藏过某列"），
+# 不清就会让用例结果取决于谁在哪台机器上跑（实测：真库里藏了 sales_forecast 的两列）。
+shadow_clear_prefs()
+atexit.register(_shadow.__exit__, None, None, None)
 
 # admin 账户：隔离空库后播种，并预标记「已改密」跳过首次强制改密（否则 password_changed=0 挡登录）。
 from fde_platform import users  # noqa: E402
 users.init_schema()
 users.seed_admin()
 try:
-    _auth_db = ROOT / "config" / "auth.db"
+    _auth_db = auth_db_path()
     if _auth_db.exists():
         _conn = sqlite3.connect(str(_auth_db))
         _conn.execute("UPDATE users SET password_changed = 1 WHERE username = 'admin'")
@@ -210,6 +222,9 @@ def main():
 
     errors = []
     ignored = []
+    # 卡住诊断（2026-09-18）：页面冻死/渲染进程崩溃时 playwright 调用不返回 ——
+    # 由这个守护线程把「最后完成的步骤 + 已收集的错误」打出来；否则超时被强杀时现场全丢。
+    install_watchdog(errors, step_getter=lambda: STEP)
 
     def attach(page):
         def on_console(msg):
@@ -256,6 +271,9 @@ def main():
             page.on("dialog", lambda d: d.accept())
 
             # ===================== §1 本页渲染（无数据 · 防粘滞） =====================
+            # §1 VT-ROUTE-01 路由渲染有内容 · 无 .kpi（页头 title/副题 + 版本下拉「全部版本」+
+            #    禁用项「暂无月度版本」+ 版本操作提示 + 上游数据摘要 + 物料 autocomplete +
+            #    滚动月度 chips + 重置 + 表头 10 列 + 空态「无匹配数据」；防挂载粘滞 .kpi == 0）
             step("§1 渲染")
             page.goto(f"{base}/view/psc/")
             page.wait_for_selector(".rail, .menu, nav", timeout=15000)
@@ -288,11 +306,15 @@ def main():
             assert page.locator('text=请选择月度版本后，按版本状态执行对应操作').count() > 0, "缺版本操作提示"
 
             # ===================== §0 造数 =====================
+            # §0 造数（主数据 + 业务链 build_gross）：下列各 VT 用例的共同前置；
+            #    文档 §0 是数据字典，本身无用例编号。
             step("§0 造数")
             seed = page.evaluate(SEED_JS)
             assert seed and seed.get("seeded"), f"造数失败：{seed}"
 
             # ===================== §2 列表有数据 =====================
+            # §2 VT-LIST-01 列表含所造 demand 行（3 行 · 202608/M1/N+1..N+3 关键列非空 ·
+            #    N+1 行 gross_qty=950 / net_qty=0 草稿未运算）
             step("§2 列表")
             page.reload()
             page.wait_for_selector(".rail, .menu, nav", timeout=15000)
@@ -315,7 +337,7 @@ def main():
             assert cells1[5] == "950", f"N+1 行毛需求列应为 950：{cells1}"
             assert cells1[9] == "0", f"N+1 行净需求列应为 0（草稿未运算）：{cells1}"
 
-            # 版本下拉过滤（选项含 lock_status 徽章「草稿」）
+            # §2 VT-LIST-02 版本下拉过滤（选项 label 带 lock_status 徽章「草稿」→ 选 202608 仍 3 行）
             opt = page.locator('select option[value="202608"]').first
             assert opt.count() > 0, "版本下拉无 202608 选项"
             assert "草稿" in opt.inner_text(), f"版本选项未带「草稿」徽章：{opt.inner_text()}"
@@ -323,33 +345,37 @@ def main():
             page.wait_for_selector("main table.tbl tr.data", timeout=10000)
             assert page.locator("main table.tbl tr.data").count() == 3, "选版本 202608 应 3 行"
 
-            # 物料 autocomplete 精确过滤
+            # §2 VT-LIST-03 物料 autocomplete 过滤（点选 M1 → 3 行全部 M1 · 输入框回填 M1）
             choose_material(page, "M1")
             page.wait_for_selector("main table.tbl tr.data", timeout=10000)
             mrows = page.locator("main table.tbl tr.data")
             assert mrows.count() == 3, f"选物料 M1 应 3 行，实际 {mrows.count()}"
             assert page.locator('input[placeholder="物料号 / 名称…"]').first.input_value() == "M1", "物料输入框未回填 M1"
 
-            # 滚动月度 chips 过滤
+            # §2 VT-LIST-04 滚动月度 chips 过滤（点 N+3 → 收敛 1 行且行内为 N+3）
+            #    ⚠ 文档写 chips 点「N+1」并断言 gross_qty=950，脚本点的是「N+3」（同为收敛 1 行）。
             page.locator('span.fchip:has-text("N+3")').first.click()
             page.wait_for_timeout(800)
             crows = page.locator("main table.tbl tr.data")
             assert crows.count() == 1, f"chip N+3 应 1 行，实际 {crows.count()}"
             assert "N+3" in crows.first.inner_text(), "chip N+3 行未收敛到 N+3"
 
-            # 重置 → 回 3 行
+            # §2 VT-LIST-05 组合过滤收敛 + 重置（版本 202608 + 物料 M1 已叠加；重置后回 3 行）
             page.locator('button:has-text("重置")').first.click()
             page.wait_for_selector("main table.tbl tr.data", timeout=10000)
             page.wait_for_timeout(300)
             assert page.locator("main table.tbl tr.data").count() == 3, "重置后应回 3 行"
 
-            # 停用物料 M2 空态（不进 open_version → 无 demand 行）
+            # §2 VT-LIST-06 无匹配空态（停用物料 M2 不进 open_version → 无 demand 行 ·
+            #    空态「无匹配数据」+ 分页「共 0 条」）
             choose_material(page, "M2")
             page.wait_for_selector('main table.tbl td.empty:has-text("无匹配数据")', timeout=10000)
             assert page.locator("main table.tbl tr.data").count() == 0, "M2 应无 demand 行"
             assert "共 0 条" in page.locator("main").inner_text(), "M2 空态分页应为「共 0 条」"
 
             # ===================== §3 详情模态全字段 =====================
+            # §3 VT-MODAL-01 详情模态全字段（docno「202608 · M1 · N+1」+ 草稿徽章 +
+            #    基本标识 / 毛需求拆解 / 净需求拆解 / 原始数据 + 页脚按草稿态 x-show）
             step("§3 模态")
             page.locator('button:has-text("重置")').first.click()
             page.wait_for_selector("main table.tbl tr.data", timeout=10000)
@@ -385,6 +411,7 @@ def main():
             close_modal(page)
 
             # ===================== §4 操作区（版本状态机 x-show） =====================
+            # §4 VT-OP-01 草稿态按钮集（含【合成毛需求】【发布】；不含【运算净需求】【导出净需求】）
             step("§4 操作区-草稿态")
             select_version(page, "202608")
             page.wait_for_selector('button:visible:has-text("合成毛需求")', timeout=8000)
@@ -394,25 +421,36 @@ def main():
             assert not any("运算净需求" in t for t in btns), f"草稿态不应见运算净需求：{btns}"
             assert not any("导出净需求" in t for t in btns), f"草稿态不应见导出净需求：{btns}"
 
+            # §4 VT-OP-02 合成毛需求（幂等重算 · toast「毛需求合成成功」+ 列表仍 3 行）
             step("§4 合成毛需求")
             page.locator('button:visible:has-text("合成毛需求")').first.click()
             page.wait_for_selector('.toast:has-text("毛需求合成成功")', timeout=8000)
             page.wait_for_selector("main table.tbl tr.data", timeout=10000)
             assert page.locator("main table.tbl tr.data").count() == 3, "幂等重算后仍应 3 行"
 
+            # §4 VT-OP-03 发布 → 联动锁定月度版本（原生 confirm 已 accept；toast +
+            #    版本选项 label 变「发布（锁定）」+ 按钮切【运算净需求】）
             step("§4 发布")
             page.locator('button:visible:has-text("发布")').first.click()
             page.wait_for_selector('.toast:has-text("毛需求发布成功")', timeout=8000)
+            # ⚠ 2026-09-17 修 flaky：原来只等「版本下拉的选项文本变成『发布（锁定）』」就去断工具栏，
+            # 而**工具栏按钮是另一次渲染才更新**的 —— 全量跑批（机器更忙）时按钮集还没换过来，
+            # 断言当场报「发布后缺运算净需求」。改成**等按钮本身出现**（可观测条件），
+            # 这才是「等你要断的那个东西」；下拉那步保留（它断的是另一条：版本状态联动）。
             page.wait_for_function(
                 "() => (document.querySelector('select option[value=\"202608\"]')||{}).textContent?.includes('发布（锁定）')",
                 timeout=8000,
             )
+            page.wait_for_selector('button:visible:has-text("运算净需求")', timeout=8000)
+            # §4 VT-OP-04 发布（锁定）态按钮集（含【运算净需求】；不含【合成毛需求】【发布】【导出净需求】）
             btns = visible_button_texts(page)
             assert any("运算净需求" in t for t in btns), f"发布后缺运算净需求：{btns}"
             assert not any("合成毛需求" in t for t in btns), f"发布后不应见合成毛需求：{btns}"
             assert not any("发布" in t for t in btns), f"发布（锁定）态不应见发布按钮：{btns}"
             assert not any("导出净需求" in t for t in btns), f"发布后不应见导出净需求：{btns}"
 
+            # §4 VT-OP-05 运算净需求 → 联动冻结 · net_qty 落库（toast + 版本选项变「冻结」+
+            #    列表 net_qty 渲染 950 = gross 950 + 未发 0 − 库存 0 − 在途 0）
             step("§4 运算净需求")
             page.locator('button:visible:has-text("运算净需求")').first.click()
             page.wait_for_selector('.toast:has-text("净需求运算成功")', timeout=8000)
@@ -425,12 +463,15 @@ def main():
             net_cells = net_row.locator("td").all_inner_texts()
             assert net_cells[9] == "950", f"运算后净需求列应为 950：{net_cells}"
 
+            # §4 VT-OP-06 冻结态按钮集（只读 · 含【导出净需求】；不含【合成毛需求】【发布】【运算净需求】）
             btns = visible_button_texts(page)
             assert any("导出净需求" in t for t in btns), f"冻结态缺导出净需求：{btns}"
             assert not any("合成毛需求" in t for t in btns), f"冻结态不应见合成毛需求：{btns}"
             assert not any("发布" in t for t in btns), f"冻结态不应见发布：{btns}"
             assert not any("运算净需求" in t for t in btns), f"冻结态不应见运算净需求：{btns}"
 
+            # §4 VT-OP-07 导出净需求 → CSV 下载 + toast 行数（net_demand_202608.csv ·
+            #    表头含 net_qty · 4 行 = 表头 + 3 数据行）
             step("§4 导出净需求")
             with page.expect_download(timeout=10000) as dl_info:
                 page.locator('button:visible:has-text("导出净需求")').first.click()
@@ -443,8 +484,17 @@ def main():
             assert "net_qty" in csv_lines[0], f"CSV 表头缺 net_qty：{csv_lines[0]}"
 
             # ===================== §6 0 报错红线 =====================
+            # §6 VT-ERR-01 本会话 0 报错（console error == 0 · pageerror == 0 · HTTP≥400 == 0）
             step("§6 0 报错")
             assert not errors, f"前端报错：{errors[:5]}"
+            # **豁免也要受检**（2026-09-17 补）：`ignored` 收集了却从不校验，等于给「静默吞掉」
+            # 开了口子 —— 任何新形态的 4xx/console error 都能混进来而不被任何人发现。
+            # 本页只认 favicon / sourcemap 两种豁免理由，其余一律报出。
+            for item in ignored:
+                ok = ("/favicon.ico" in item or ".map" in item)
+                assert ok, f"豁免理由不成立（既不是 favicon 也不是 .map）：{item!r}"
+            if ignored:
+                print(f"  · 本次豁免 {len(ignored)} 条（favicon/.map）：{ignored[:3]}")
             print("VERIFY_VIEW_psc_demand: PASS")
 
     finally:

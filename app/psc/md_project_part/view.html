@@ -198,8 +198,8 @@
         <div>
           <div class="frow">
             <div style="grid-column: span 2">
-              <label class="f">粘贴数据 / 上传 CSV <span class="muted" style="font-weight:400; font-size:11px">列：project_no, material_no, veh_model, usage, share</span></label>
-              <textarea x-model="imp.text" rows="8" placeholder="每行一条：project_no,material_no,veh_model,usage,share"></textarea>
+              <label class="f">粘贴数据 / 上传 CSV <span class="muted" style="font-weight:400; font-size:11px">列：project_no, material_no, usage</span></label>
+              <textarea x-model="imp.text" rows="8" placeholder="每行一条：project_no,material_no,usage"></textarea>
             </div>
           </div>
           <div class="tagline mt12" style="gap:8px">
@@ -236,9 +236,15 @@
     <div class="modal-ft">
       <div class="right tagline" style="gap:8px">
         <template x-if="!imp.result">
-          <button class="b-ghost" @click="closeImport()">取消</button>
-          <button class="b-pri" :disabled="imp.busy" @click="runImport()"
-            x-text="imp.busy ? '导入中…' : '开始导入'"></button>
+          <!-- ⚠ 必须**一个根元素**：Alpine 的 `x-if` 只挂载 `el.content.cloneNode(true).firstElementChild`
+               （见 view/lib/alpine.esm.js）——此前这里并列写着「取消」「开始导入」两个按钮，
+               第二个被**静默丢弃** ⇒ 批量导入在界面上根本提交不了（2026-09-17 由前端可追溯性
+               对账 V3 判据补断言时实测发现：点开导入弹窗只有 ['✕','下载模板','取消']）。 -->
+          <div class="tagline" style="gap:8px">
+            <button class="b-ghost" @click="closeImport()">取消</button>
+            <button class="b-pri" :disabled="imp.busy" @click="runImport()"
+              x-text="imp.busy ? '导入中…' : '开始导入'"></button>
+          </div>
         </template>
         <template x-if="imp.result">
           <button class="b-pri" @click="closeImport()">完成</button>

@@ -132,19 +132,20 @@
               <div class="muted" style="font-size:11px">越小越准；&gt;1 表示不可预测</div></div>
           </div>
 
-          <div class="sec">库存拟合结果</div>
+          <div class="sec">库存侧参数（物料主数据人工维护）</div>
           <div class="kv">
             <div><div class="k">服务系数</div><div class="v mono" x-text="fmt(modalX.d.service_factor)"></div></div>
             <div><div class="k">安全水位</div><div class="v mono" x-text="fmt(modalX.d.safety_level)"></div></div>
             <div><div class="k">组批窗口</div><div class="v mono" x-text="fmt(modalX.d.batch_window)"></div>
               <div class="muted" style="font-size:11px">天存储 · 28 = 4 周</div></div>
-            <div style="grid-column: span 2"><div class="k">说明</div><div class="v muted">约束优化选成本最小（BR-11）</div></div>
+            <div style="grid-column: span 2"><div class="k">说明</div><div class="v muted">组批窗口 / 满足率目标由**物料主数据人工维护**（该不该组批由计划员判断）；
+              本应用只回读镜像，不做自动运算 —— 网格寻优 / 回放 / 成本折算本期不做，故服务系数、安全水位显示为空</div></div>
           </div>
 
-          <div class="sec">回测指标</div>
+          <div class="sec">回测指标（本期不产出）</div>
           <div class="kv">
             <div><div class="k">满足率</div><div class="v mono" x-text="pct(modalX.d.fulfill_rate)"></div>
-              <div class="muted" style="font-size:11px">满足率 = 1 − 缺货量/总需求（BR-10）</div></div>
+              <div class="muted" style="font-size:11px">= 主数据里的满足率目标（回测本期不做，故不是算出来的）</div></div>
             <div><div class="k">库存天数</div><div class="v mono" x-text="fmt(modalX.d.inv_days)"></div></div>
             <div><div class="k">切线次数</div><div class="v mono" x-text="fmt(modalX.d.changeover_cnt)"></div></div>
           </div>
