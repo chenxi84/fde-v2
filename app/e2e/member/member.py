@@ -54,7 +54,12 @@ class Member:
 
         return self._to_dict(row)
 
-    def list(self, keyword: str = None, role: str = None, page: int = None, page_size: int = None):
+    # ⚠ 2026-09-17 订正：分页形参由 `page_size` 统一改名 `size` —— 平台基座
+    # `view/lib/shell.js::pageable()` 传的是 `{page, size}`，而 `web.py::_coerce` 对**未知键静默忽略**
+    # ⇒ 原名 `page_size` 收不到值，**声明的分页参数从未生效**（一直走服务默认），而前端按自己的 size
+    # 算页数 ⇒ 分页条与真实返回不一致。PSC 全组 17 个应用都叫 `size`（与基座一致），e2e 这两个是例外
+    # ⇒ 按多数派统一（消「同名不同义」），而不是在平台侧加别名把不一致藏起来。
+    def list(self, keyword: str = None, role: str = None, page: int = None, size: int = None):
         keyword = self._clean(keyword)
         role = self._clean(role)
 
@@ -87,19 +92,19 @@ class Member:
         items = [self._to_dict(row) for row in rows]
         total = len(items)
 
-        if page is None and page_size is None:
+        if page is None and size is None:
             return {"total": total, "items": items}
 
         page_no = self._to_int(page, 1)
-        page_size = self._to_int(page_size, 50)
+        size = self._to_int(size, 50)
 
         if page_no < 1:
             page_no = 1
-        if page_size < 1:
-            page_size = 50
+        if size < 1:
+            size = 50
 
-        start = (page_no - 1) * page_size
-        return {"total": total, "items": items[start:start + page_size]}
+        start = (page_no - 1) * size
+        return {"total": total, "items": items[start:start + size]}
 
     def _clean(self, value):
         if value is None:

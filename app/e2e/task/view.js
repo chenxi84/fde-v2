@@ -18,7 +18,7 @@ export default function pageTask() {
     tpl: "",
     hue, fmt,                        // 展示工具（dash / fmtTime / tryParse 为 window 全局，模板直接用）
 
-    /* ---- 列表 + 过滤（与 task.list(status, assignee_member_no, priority, page, page_size) 一一对应；
+    /* ---- 列表 + 过滤（与 task.list(status, assignee_member_no, priority, page, size) 一一对应；
             契约无 keyword 参数 → 不设关键字搜索，禁止前端假过滤） ---- */
     list: null,
     fStatus: "",                     // 全部 / 待办 / 进行中 / 已完成
@@ -43,7 +43,7 @@ export default function pageTask() {
         status: self.fStatus || undefined,
         assignee_member_no: self.fAssignee || undefined,
         priority: self.fPriority || undefined,
-        ...q,                        // page / page_size（契约 string 型，照传）
+        ...q,                        // page / size（分页形参名与平台基座 pageable() 一致，2026-09-17 统一）
       }));
       await self.loadMembers();      // 备齐姓名映射，再拉列表数据
       await self.list.load();
@@ -52,8 +52,8 @@ export default function pageTask() {
     /* 负责人下拉数据源：quiet 探测，失败不喷 toast，零值兜底 */
     async loadMembers() {
       try {
-        const r = await svc("member", "list", { page: 1, page_size: 200 }, { quiet: true });
-        const rows = Array.isArray(r) ? r : (r && r.items) || [];
+        const r = await svc("member", "list", { page: 1, size: 200 }, { quiet: true });
+        const rows = (r && r.items) || [];   // 契约恒返回 {items,total}（CONVENTION §7），不再做裸数组兜底
         self.memberList = rows;
         const map = {};
         for (const m of rows) if (m && m.member_no) map[m.member_no] = m.name || m.member_no;

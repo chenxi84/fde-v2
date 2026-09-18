@@ -23,7 +23,10 @@ export default function pageDashboard() {
     },
 
     async loadAll() {
-      // page/page_size 缺省 → 服务端返回全量 {total, items}（见 member.py / task.py list）
+      // page/size 缺省 → 服务端返回全量 `{total, items}`（**两个应用都必须**，CONVENTION §7）。
+      // ⚠ 这两行依赖的是**契约形状**，不是"顺手写写的兜底"：2026-09-18 之前 `task.list` 无参时
+      // 返回**裸数组**，`t.items` 取不到 ⇒ 任务类 KPI 与状态分布**恒 0**（且被 0==0 的断言放行）。
+      // 所以这里**故意不做裸数组兜底** —— 兜底会让下一个违约者继续蒙混；形状不对就该红。
       const [m, t] = await Promise.all([
         svc("member", "list", {}, { quiet: true }).catch(() => ({ total: 0, items: [] })),
         svc("task", "list", {}, { quiet: true }).catch(() => ({ total: 0, items: [] })),

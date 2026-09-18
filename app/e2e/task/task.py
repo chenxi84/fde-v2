@@ -79,13 +79,18 @@ class Task:
     def get(self, task_no: str):
         return self._get_task(task_no)
 
+    # ⚠ 2026-09-17 订正：分页形参由 `page_size` 统一改名 `size` —— 平台基座
+    # `view/lib/shell.js::pageable()` 传的是 `{page, size}`，而 `web.py::_coerce` 对**未知键静默忽略**
+    # ⇒ 原名 `page_size` 收不到值，**声明的分页参数从未生效**（一直走服务默认），而前端按自己的 size
+    # 算页数 ⇒ 分页条与真实返回不一致。PSC 全组 17 个应用都叫 `size`（与基座一致），e2e 这两个是例外
+    # ⇒ 按多数派统一（消「同名不同义」），而不是在平台侧加别名把不一致藏起来。
     def list(
         self,
         status: Optional[str] = None,
         assignee_member_no: Optional[str] = None,
         priority: Optional[str] = None,
         page: Optional[int] = None,
-        page_size: Optional[int] = None,
+        size: Optional[int] = None,
     ):
         if status is not None:
             status = str(status).strip()
@@ -101,8 +106,8 @@ class Task:
                 priority = None
         if page is not None and str(page).strip() == "":
             page = None
-        if page_size is not None and str(page_size).strip() == "":
-            page_size = None
+        if size is not None and str(size).strip() == "":
+            size = None
 
         if status is not None and status not in self.VALID_STATUSES:
             raise FdeError("状态筛选不合法")
@@ -130,41 +135,41 @@ class Task:
             FROM task
         """ + where_sql + " ORDER BY created_at DESC, task_no DESC"
 
-        if page is None and page_size is None:
+        if page is None and size is None:
+            # 不分页分支**也返回 {items, total}**（CONVENTION §7：前端 pageable() 消费的 list，
+            # 一律同形返回）。2026-09-18 修：此前这里返回裸 list，与 member.list 不同形 ——
+            # 消费方按 {total, items} 取值 ⇒ 恒定读成 0（看板三张任务类 KPI 恒 0 的根因）。
             rows = self.db.execute(select_sql, tuple(params)).fetchall()
-            return [dict(row) for row in rows]
+            items = [dict(row) for row in rows]
+            return {"items": items, "total": len(items)}
 
         try:
             page_int = int(page) if page is not None else 1
-            page_size_int = int(page_size) if page_size is not None else 100
+            size_int = int(size) if size is not None else 100
         except (TypeError, ValueError):
             raise FdeError("分页参数不合法") from None
 
         if page_int < 1:
             raise FdeError("页码必须大于等于1")
-        if page_size_int < 1:
+        if size_int < 1:
             raise FdeError("每页条数必须大于等于1")
 
         total_row = self.db.execute("SELECT COUNT(*) FROM task" + where_sql, tuple(params)).fetchone()
         total = total_row[0] if total_row is not None else 0
 
-        offset_int = (page_int - 1) * page_size_int
+        offset_int = (page_int - 1) * size_int
         rows = self.db.execute(
             select_sql + " LIMIT ? OFFSET ?",
-            tuple(params + [page_size_int, offset_int]),
+            tuple(params + [size_int, offset_int]),
         ).fetchall()
         items = [dict(row) for row in rows]
 
-        return {
-            "total": total,
-            "page": page_int,
-            "page_size": page_size_int,
-            "items": items,
-            "data": items,
-            "rows": items,
-            "list": items,
-            "records": items,
-        }
+        # 只回 `{total, items}`（CONVENTION §7 逐字；与 `member.list` 完全同形）。
+        # 2026-09-18 删掉此前多出的 6 个别名键（data/rows/list/records）与 page/size 回声：
+        # 别名是"兼容旧前端"的遗留，全仓已无消费方，留着只会让"返回结构"这件事
+        # 在契约冻结里说不清（消费方看到 8 个键，不知道该信哪个）。page/size 回声也没必要 ——
+        # 前端 `pageable()` 取 `data.page ?? page`，取不到就回落到自己请求的那一页。
+        return {"total": total, "items": items}
 
     def start(self, task_no: str):
         task = self._get_task(task_no)
