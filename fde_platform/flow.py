@@ -47,7 +47,9 @@ from fde_platform import users
 
 _ROOT = Path(__file__).resolve().parents[1]
 _APPS_DIR = _ROOT / "app"
-_PROGRESS_DB = _ROOT / "config" / "flow_runs.db"
+# 路径**调用时解析**（认 `FDE_CONFIG_ROOT`）：原先这里是模块级常量，环境变量若在 import 后
+# 才设（进程内测试的常见顺序）就冻在真 config/ 上了。见 `config_paths.py`。
+from fde_platform.config_paths import config_path  # noqa: E402
 
 _MAX_ROUNDS = 10  # 单节点 ReAct 最大轮次（防失控）
 
@@ -167,7 +169,7 @@ def delete_flow(group: str, key: str) -> dict:
 
 def _report_progress(flow_name: str, status: str, step_index: int,
                      step_total: int, current_role: str, result: str = "") -> None:
-    conn = sqlite3.connect(str(_PROGRESS_DB))
+    conn = sqlite3.connect(str(config_path("flow_runs.db")))
     try:
         conn.executescript(_SCHEMA)
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -196,7 +198,7 @@ def _report_progress(flow_name: str, status: str, step_index: int,
 
 def get_progress() -> dict | None:
     """读最近一次 flow 执行的进度（无则 None）。"""
-    conn = sqlite3.connect(str(_PROGRESS_DB))
+    conn = sqlite3.connect(str(config_path("flow_runs.db")))
     conn.row_factory = sqlite3.Row
     try:
         conn.executescript(_SCHEMA)
@@ -208,7 +210,7 @@ def get_progress() -> dict | None:
 
 def list_runs(limit: int = 20) -> list[dict]:
     """读最近 N 条 flow 运行历史（时间线，最新在前）。"""
-    conn = sqlite3.connect(str(_PROGRESS_DB))
+    conn = sqlite3.connect(str(config_path("flow_runs.db")))
     conn.row_factory = sqlite3.Row
     try:
         conn.executescript(_SCHEMA)

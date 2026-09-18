@@ -41,6 +41,7 @@ from flask import (
 
 from fde import FdeError
 from fde_platform import builtin_tools, integration, listsort, scanner, users, view_registry
+from fde_platform.config_paths import config_path
 from fde_platform.logging_config import init_logging
 from fde_platform.runtime import FdePlatform
 
@@ -84,7 +85,10 @@ app = Flask(__name__, template_folder=str(_PKG_DIR / "templates"))
 app.config["TEMPLATES_AUTO_RELOAD"] = True  # 开发便利：模板改动即时生效，无需重启（生产可关闭）
 
 # 会话签名密钥 —— 优先 env SECRET_KEY；否则从文件恢复；再否自动生成并持久化（防开源回退值泄露）
-_SECRET_PATH = _PKG_DIR.parent / "config" / ".secret_key"
+# 会话签名密钥也属于 `config/` ⇒ 测试隔离时应当用副本（认 `FDE_CONFIG_ROOT`，见 `config_paths.py`）。
+# ⚠ 这里是**import 期解析一次**（与"调用时解析"的其它模块不同）：密钥只在启动时读一次，
+# 而测试起的平台子进程**从启动就带着环境变量** ⇒ 够用；import 之后才改环境变量的场景不存在。
+_SECRET_PATH = config_path(".secret_key")
 _secret = os.environ.get("SECRET_KEY", "").strip()
 if _secret:
     app.secret_key = _secret
@@ -1909,7 +1913,7 @@ def api_alerts():
     # 2. 定时任务失败（scheduler runs）
     try:
         import sqlite3
-        c = sqlite3.connect(str(_PKG_DIR.parent / "config" / "scheduler.db"))
+        c = sqlite3.connect(str(config_path("scheduler.db")))
         c.row_factory = sqlite3.Row
         rows = c.execute("SELECT * FROM runs WHERE status != 'ok' ORDER BY rowid DESC LIMIT 50").fetchall()
         c.close()
@@ -1926,7 +1930,7 @@ def api_alerts():
     # 3. 集成接口失败（integration call_logs）
     try:
         import sqlite3
-        c = sqlite3.connect(str(_PKG_DIR.parent / "config" / "integration.db"))
+        c = sqlite3.connect(str(config_path("integration.db")))
         c.row_factory = sqlite3.Row
         rows = c.execute(
             "SELECT * FROM call_logs WHERE status != 'success' ORDER BY rowid DESC LIMIT 50"

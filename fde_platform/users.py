@@ -25,6 +25,7 @@ users.html 一起删除，平台自动回落无认证模式。自带 CLI：`pyth
 import argparse
 import hashlib
 import logging
+import os
 import re
 import secrets
 import sqlite3
@@ -44,7 +45,24 @@ from werkzeug.security import check_password_hash, generate_password_hash
 # ── 常量 ────────────────────────────────────────────────
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = PROJECT_ROOT / "config" / "auth.db"
+# ── 测试隔离：`FDE_CONFIG_ROOT` ──
+# 与 `runtime.py` 的 `FDE_DB_ROOT` 同构，但管的是 **config/ 下的平台库**。
+# 为什么两个变量而不是一个：**业务库与平台库的隔离需求不同** ——
+#   · view e2e 要播种 admin（写 config/auth.db）⇒ auth 必须也能被影子化；
+#   · eval 需要**真的 LLM 配置**（config/llm.db）⇒ config 必须留真库。
+# 分开控制才能同时满足两者。默认（未设）= 读真库，行为完全不变。
+# 路径**调用时解析**（认 `FDE_CONFIG_ROOT`）—— 统一走 `config_paths.config_path()`，
+# 不再在本模块自带一份解析逻辑（本模块原先是最早认这个变量的，其余模块后来才跟上）。
+# `db_path()` 保留成函数：模块级常量会在 import 期求值，若环境变量在 import 之后才设就冻在真路径上。
+from fde_platform.config_paths import config_path  # noqa: E402
+
+
+def db_path() -> Path:
+    """`config/auth.db` 的实际路径（受 `FDE_CONFIG_ROOT` 影响）。"""
+    return config_path("auth.db")
+
+
+DB_PATH = db_path()          # 兼容既有引用（import 期求值；内部一律用 `db_path()`）
 _logger = logging.getLogger(__name__)
 
 MIN_PASSWORD_LEN = 4
@@ -132,9 +150,10 @@ _USER_SELECT = (
 
 
 def get_conn() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fresh = not DB_PATH.exists() or DB_PATH.stat().st_size == 0
-    conn = sqlite3.connect(str(DB_PATH))
+    path = db_path()                         # 调用时解析（见 `db_path()` 的说明）
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fresh = not path.exists() or path.stat().st_size == 0
+    conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(_SCHEMA)   # 幂等建表（新库 / 旧库补表两相宜）

@@ -24,8 +24,8 @@ import sqlite3
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = PROJECT_ROOT / "config" / "llm.db"
-MASTER_KEY_PATH = PROJECT_ROOT / "config" / "llm_master.key"
+# 路径**调用时解析**（认 `FDE_CONFIG_ROOT`，见 `config_paths.py` 的说明）
+from fde_platform.config_paths import config_path  # noqa: E402
 
 # 系统内置的两个独立 Agent 角色
 ROLES = ("operator", "vision")
@@ -93,9 +93,10 @@ CREATE TABLE IF NOT EXISTS llm_profiles (
 # ── DB 层 ───────────────────────────────────────────────
 
 def get_conn() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fresh = not DB_PATH.exists() or DB_PATH.stat().st_size == 0
-    conn = sqlite3.connect(str(DB_PATH))
+    db_path = config_path("llm.db")
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    fresh = not db_path.exists() or db_path.stat().st_size == 0
+    conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     if fresh:
         conn.executescript(_SCHEMA)
@@ -161,15 +162,16 @@ def _master_key() -> bytes:
     env = os.environ.get("LLM_MASTER_KEY", "").strip()
     if env:
         return env.encode()
-    if MASTER_KEY_PATH.exists():
-        return MASTER_KEY_PATH.read_bytes().strip()
+    key_path = config_path("llm_master.key")     # 调用时解析（认 FDE_CONFIG_ROOT）
+    if key_path.exists():
+        return key_path.read_bytes().strip()
     from cryptography.fernet import Fernet
 
     key = Fernet.generate_key()
-    MASTER_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    MASTER_KEY_PATH.write_bytes(key)
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    key_path.write_bytes(key)
     try:
-        os.chmod(MASTER_KEY_PATH, 0o600)
+        os.chmod(key_path, 0o600)
     except OSError:  # Windows 无 POSIX 权限位
         pass
     return key

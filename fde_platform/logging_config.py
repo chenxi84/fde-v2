@@ -8,7 +8,9 @@ from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 import sys
 
-LOG_DIR = Path(__file__).resolve().parents[1] / "config" / "logs"
+# 路径**调用时解析**（认 `FDE_CONFIG_ROOT`，见 `config_paths.py`）：日志目录也要被隔离，
+# 否则测试起的平台会往真 config/logs/ 写日志。
+from fde_platform.config_paths import config_path  # noqa: E402
 
 
 def init_logging() -> logging.Logger:
@@ -27,9 +29,10 @@ def init_logging() -> logging.Logger:
 
         # 文件：DEBUG 及以上（详细，按天轮转，保留 30 天）
         try:
-            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            log_dir = config_path("logs")
+            log_dir.mkdir(parents=True, exist_ok=True)
             file_handler = TimedRotatingFileHandler(
-                str(LOG_DIR / "fde.log"),
+                str(log_dir / "fde.log"),
                 when="midnight",
                 interval=1,
                 backupCount=30,

@@ -312,7 +312,7 @@ def register(app):
     # 用户管理入口已移至 base.html 顶部导航（仅 admin 可见），用户名/退出仍在 .uchip。
     # app.after_request(inject_userbar)
 
-    logger.info("鉴权已启用 · 用户库 %s", users.DB_PATH)
+    logger.info("鉴权已启用 · 用户库 %s", users.db_path())
     return app
 
 

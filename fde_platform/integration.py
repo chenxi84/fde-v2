@@ -15,15 +15,17 @@ from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = PROJECT_ROOT / "config" / "integration.db"
+# 路径**调用时解析**（认 `FDE_CONFIG_ROOT`，见 `config_paths.py` 的说明）
+from fde_platform.config_paths import config_path  # noqa: E402
 _logger = logging.getLogger(__name__)
 
 
 # ── 数据库 ────────────────────────────────────────────────
 
 def _get_conn() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH))
+    db_path = config_path("integration.db")
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS endpoints (
@@ -87,7 +89,7 @@ def _fernet():
         from cryptography.fernet import Fernet
     except ImportError:
         return None
-    key_path = PROJECT_ROOT / "config" / "llm_master.key"
+    key_path = config_path("llm_master.key")
     if not key_path.exists():
         return None
     return Fernet(key_path.read_bytes().strip())

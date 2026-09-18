@@ -38,7 +38,11 @@ except ImportError:  # pragma: no cover
 # ── 常量 ────────────────────────────────────────────────
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = PROJECT_ROOT / "config" / "scheduler.db"
+# ⚠ **不要在这里冻成常量**：`FDE_CONFIG_ROOT`（测试隔离，见 `shadowdb.py`）必须在**调用时**解析，
+# 否则"进程内测试先 import、后设环境变量"的常见顺序会把路径冻在真 config/ 上 ——
+# 那正是 2026-09-18 查到的问题（测试起的平台真发定时任务、run 记录落真库）。
+# 统一走 `config_paths.config_path()`；未设变量时行为与过去逐字一致。
+from fde_platform.config_paths import config_path  # noqa: E402
 _logger = logging.getLogger(__name__)
 
 MAX_RUNS_PER_JOB = 200   # 每任务保留的运行日志上限
@@ -94,9 +98,10 @@ def bind_platform(platform) -> None:
 
 
 def get_conn() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fresh = not DB_PATH.exists() or DB_PATH.stat().st_size == 0
-    conn = sqlite3.connect(str(DB_PATH))
+    db_path = config_path("scheduler.db")
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    fresh = not db_path.exists() or db_path.stat().st_size == 0
+    conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     if fresh:
@@ -641,7 +646,7 @@ def register(app, platform) -> None:
     import atexit
 
     atexit.register(shutdown_engine)
-    _logger.info("定时任务已启用 · 任务库 %s", DB_PATH)
+    _logger.info("定时任务已启用 · 任务库 %s", config_path("scheduler.db"))
     return app
 
 

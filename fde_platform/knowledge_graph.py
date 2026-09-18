@@ -31,7 +31,23 @@ import pathlib
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 APP_DIR = PROJECT_ROOT / "app"
 CONFIG_DIR = PROJECT_ROOT / "config"
-KG_DIR = CONFIG_DIR / "kg_storage"
+# ⚠ 只隔离**会被写**的平台状态（KG 存储），不隔离**只读内容库**（`rules/` 是人工维护的制度文件，
+# 与 app 文档同级，测试不需要它的副本）。`KG_DIR` 走调用时解析，认 `FDE_CONFIG_ROOT`。
+from fde_platform.config_paths import config_path  # noqa: E402
+
+
+def kg_dir() -> pathlib.Path:
+    """KG 存储目录（**调用时解析**，认 `FDE_CONFIG_ROOT`）。
+
+    ⚠ 保留这个函数而不是只留常量：模块级常量在 import 期求值，"进程内测试先 import、
+    后设环境变量"的顺序会把它冻在真 config/ 上。外部要用的（如 `rules_admin._index_status`）请调本函数。
+    """
+    return config_path("kg_storage")
+
+
+# 兼容别名（import 期求值；**新的调用点请用 `kg_dir()`**）——`rules_admin` 曾直接读它，
+# 2026-09-18 改成只留函数时忘了别名，`/api/knowledge` 当场 500（view e2e 抓到了）。
+KG_DIR = kg_dir()
 
 EMBED_MODEL = os.environ.get("FDE_KG_EMBED_MODEL", "BAAI/bge-small-zh-v1.5")
 EMBED_DIM = int(os.environ.get("FDE_KG_EMBED_DIM", "512"))
@@ -168,7 +184,7 @@ def _get_rag(group: str):
     from lightrag import LightRAG
     from lightrag.utils import EmbeddingFunc
 
-    working_dir = KG_DIR / group
+    working_dir = kg_dir() / group
     working_dir.mkdir(parents=True, exist_ok=True)
     return LightRAG(
         working_dir=str(working_dir),
@@ -194,7 +210,7 @@ async def build_index(group: str, force: bool = False) -> dict:
     if not docs:
         raise RuntimeError(f"app/{group} 下没有可索引的设计文档")
 
-    working_dir = KG_DIR / group
+    working_dir = kg_dir() / group
     if force and working_dir.is_dir():
         import shutil
         shutil.rmtree(working_dir)
@@ -299,7 +315,7 @@ def viz(group: str, out=None) -> pathlib.Path:
     import networkx as nx
     from pyvis.network import Network
 
-    graphml = KG_DIR / group / "graph_chunk_entity_relation.graphml"
+    graphml = kg_dir() / group / "graph_chunk_entity_relation.graphml"
     if not graphml.is_file():
         raise RuntimeError(f"未找到知识图谱（{graphml}），请先 index {group}")
 

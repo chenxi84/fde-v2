@@ -11,6 +11,7 @@
 """
 import importlib.util
 import logging
+import os
 import sqlite3
 import time
 from fde_platform import db, ddl
@@ -209,7 +210,20 @@ class FdePlatform:
         if not schema_path.exists():
             raise FdeError(f"应用 {qn} 缺少必选的 schema.sql")
 
-        db_path = folder / f"{name}.db"
+        # ── 测试隔离：`FDE_DB_ROOT` ──
+        # 设了它，**业务库**就解析到该目录下的同名文件，于是测试跑在**副本**上、真库零字节接触。
+        # 为什么用环境变量而不是进程内猴子补丁：**子进程能继承它** ——
+        # `verify_view_*.py` 是 `subprocess.Popen([python, main.py])` 起平台的、
+        # agent 编排跑在 :4100 另一个进程，进程内的补丁过不去，只有环境变量能穿透。
+        #
+        # ⚠ **只影响 `app/**` 的业务库**：`config/` 下的平台库（auth/llm/…）不走这里，仍读真库
+        # —— `verify_agent_quality.py`（eval）需要**真的 LLM 配置**，把 config/ 也重定向
+        # 会让它因"没配模型"而跑不起来；而 config/ 里的东西（用户/令牌/LLM 配置）本来
+        # 也不该被测试当数据改。
+        #
+        # 默认（未设该变量）= 行为**完全不变**。删掉这三行即回落到现状。
+        _db_root = os.environ.get("FDE_DB_ROOT", "").strip()
+        db_path = (Path(_db_root) / f"{name}.db") if _db_root else (folder / f"{name}.db")
         handle = AppHandle(
             name=name, folder=folder, module=module, cls=cls, db_path=db_path,
             group=group, qualname=qn,

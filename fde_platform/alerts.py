@@ -10,13 +10,14 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-_DB = Path(__file__).resolve().parents[1] / "config" / "agent_alerts.db"
+# 路径**调用时解析**（认 `FDE_CONFIG_ROOT`，见 `config_paths.py`）；原先是模块级常量。
+from fde_platform.config_paths import config_path  # noqa: E402
 
 _LEVELS = ("red", "amber")
 
 
 def _conn():
-    conn = sqlite3.connect(str(_DB))
+    conn = sqlite3.connect(str(config_path("agent_alerts.db")))
     conn.row_factory = sqlite3.Row
     conn.execute(
         """CREATE TABLE IF NOT EXISTS agent_alerts (

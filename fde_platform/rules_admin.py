@@ -53,7 +53,8 @@ def _doc_id(name: str) -> str:
 
 def _index_status() -> dict:
     """索引状态：是否已建 + 图规模（节点/边），叠加异步索引进度。"""
-    graphml = knowledge_graph.KG_DIR / "rules" / "graph_chunk_entity_relation.graphml"
+    # 调函数而不是读模块常量：常量是 import 期求值的，测试隔离下会指到真 config/（见 `kg_dir()`）
+    graphml = knowledge_graph.kg_dir() / "rules" / "graph_chunk_entity_relation.graphml"
     status = dict(_INDEX_STATE)
     status["built"] = graphml.is_file()
     status["nodes"] = 0
