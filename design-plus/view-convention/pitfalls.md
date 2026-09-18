@@ -59,8 +59,33 @@
 
 36. **每个模块必须有 dashboard 组级页（最致命的静默崩溃）**：平台壳 `shell.js` 的默认路由写死 `route: "dashboard"`（`view/lib/shell.js`）。模块若没有 `app/<组>/dashboard.{js,html}`，授权集到达**之前**的预渲染窗口与受限用户回落都会把空 `{}` 挂到默认路由上 → 模板里 `x-html="tpl"` 对 `undefined` 求值，连同看板要引用的 `list.items` 等一起喷一片 console error。2026-08 给 e2e 模块只建了应用页、漏了看板，verify_view 首屏即 5 个报错。✅ 规则：**新建模块 = 必产 `app/<组>/dashboard.{js,html}`**（key="dashboard"、PAGE_META.order 给最小、quiet 探测 + 零值兜底，照抄 `app/e2e/dashboard.*`）；它不是"可选聚合页"，是壳能正常启动的前提。
 37. **reactive 状态必须同步建好，再 await**：页面工厂的 `init()` 若先 `await`（如 `await loadMembers()`）再创建某个 `Alpine.reactive` 子对象（如 `self.list = pageable(...)`），`self.tpl` 一旦赋值 Alpine 即注入模板并求值 `list.items/total/page`，此刻 `list` 仍是 `null` → 「reading 'items' of null」。2026-08 task 页 init 先 await 成员映射、后建 list，首屏喷 4 个 null 错。✅ 规则：工厂体内**一切会被模板引用的 reactive 状态，必须在第一个 `await` 之前同步初始化**（list 先 `pageable(...)` 建好含空 `items:[]`，再 `await loadMembers()`，最后 `await self.list.load()`）——对标 e2e 范式。
-38. **加页面 = 同步更新 verify 受限用户断言（耦合极易漏）**：模块新增页面（尤其看板）后，`app/<组>/tests/verify_view_<组>.py` 里两处必须跟着改，否则受限阶段误报 403 / 回落断言失败：① 受限角色的授权清单要加上新页（如 `users.set_role_page_grants("limited_role", ["<组>:dashboard", "<组>:member", "_platform:agent"])`）——新页进菜单后预渲染窗口会带 `X-Fde-Page="<组>:<新页>"` 发 svc，未授权即 403；② 直访无授权路由的**回落断言**要改成菜单首项（看板成 menu[0] 后回落目标由「某应用」变成「首页看板」）。2026-08 e2e 加看板后这两处没同步，多出 2 个 403。✅ 规则：改完页面把 `verify_view_<组>.py` 的 `limited_role` 授权清单与回落断言逐字对一遍（照 `verify_view_e2e.py` 范式）。
+38. **加页面 = 同步更新 verify 受限用户断言（耦合极易漏）**：模块新增页面（尤其看板）后，`app/<组>/tests/verify_view_<组>.py` 里两处必须跟着改，否则受限阶段误报 403 / 回落断言失败：① 受限角色的授权清单要加上新页（如 `users.set_role_page_grants("limited_role", ["<组>:dashboard", "<组>:member", "_platform:workbench"])`（⚠ 2026-09-17 订正：平台置顶页的 key 是 `workbench`（侧栏名「AI管家」），**没有** `_platform:agent` / `_platform:agent_overview` 这两个页；授权键格式是 `_platform:<key>`，照 `view/lib/shell.js` 的 `PLATFORM_PAGES` 取））——新页进菜单后预渲染窗口会带 `X-Fde-Page="<组>:<新页>"` 发 svc，未授权即 403；② 直访无授权路由的**回落断言**要改成菜单首项（看板成 menu[0] 后回落目标由「某应用」变成「首页看板」）。2026-08 e2e 加看板后这两处没同步，多出 2 个 403。✅ 规则：改完页面把 `verify_view_<组>.py` 的 `limited_role` 授权清单与回落断言逐字对一遍（照 `verify_view_e2e.py` 范式）。
 39. **dbguard 隔离 + 平台配置库随清单演进（2026-07-30 洗库事故 / 2026-08 补 llm.db）**：① 一切测试必走 `fde_platform/dbguard.isolate_dbs()`：进入时移走全部应用库/平台库，退出（含断言失败，经 atexit）原样还回——**用户数据分毫不丢**；并行跑多个 verify 会互踩共享暂存洗掉用户库（2026-07-30 事故），故守卫持跨进程独占锁 `fde_platform/.dbguard.lock`，第二个并发进程干净拒绝（原 #19 并入）。② `dbguard._CONFIG_DBS` 枚举 `config/` 下的平台库，**新增任何 `config/*.db`（2026-08 前漏了 `llm.db`）必须同步加进清单**，否则用户真实配置泄漏进测试、使"未配置降级"类断言失准。③ 测试里逼 LLM 降级路径用 `FDE_LLM_RETRIES=1`/`FDE_LLM_BACKOFF=0` 压短重试（`fde_platform/llm.py` 读取，默认 3/8），连接拒绝即秒回，避免默认退避拖超测试超时。
+
+40. **`fill_labeled` 的 XPath `following::` 轴不受 locator scope 约束（2026-09-17 实测踩到）**：样板 helper 里写的是
+    `scope.locator('xpath=.//label[contains(…)]/following::input[1]')` —— `following::` 是**文档序**轴，
+    只受起点约束、**不落在 `scope` 里**：当标签文案恰好也出现在壳（如 Agent 右栏、文件面板）时，
+    它会抓到**壳里的全局输入框**，表现为 `element is not visible` 超时（实测抓到 `#agent-rail-file`）。
+    ✅ 规则：表单字段优先用**属性定位**（`input[placeholder="…"]` / `textarea[placeholder="…"]`）并**断言恰好 1 个**；
+    非要用 XPath 就显式加 `:scope`（或先取标签所在的行容器再在容器内找），别依赖 `following::` 的 scope 语义。
+41. **分页形参名两端不一致 ⇒ 参数静默失效（`pageable()` 传 `size`，应用却声明 `page_size`）**（2026-09-17 发现并修复）：
+    `view/lib/shell.js::pageable.load()` 回传 `{page, size}`；`web.py::_coerce` 对**未知键静默忽略** ⇒ `size` 被丢、
+    `page_size` 走服务默认；而前端又按自己的 `size` 算页数 ⇒ **分页条与真实返回不一致**（潜在的分页错乱）。
+    ⚠ **实测范围（2026-09-17 核实）**：扫了全仓 19 个应用的 `list` 签名 —— **PSC 17 个应用全部叫 `size`**（与基座一致、无此问题），**只有 `app/e2e` 的 member/task 叫 `page_size`**。所以这不是「平台基座口径差」，是**那两个应用自己与基座不一致**。
+    ✅ **处置（2026-09-17）**：**选应用侧改名**（`page_size` → `size`，与基座及 PSC 全组一致），
+    **不在 `_coerce` 加别名把不一致藏起来**（待办第 5 项要的是消同名不同义，不是容忍它）；
+    并补了回归守卫（e2e `TC-DM-17`：`size=1` ⇒ 本页恰 1 条、`total` 不受影响）。
+    ✅ **一般规则**：分页 / 过滤这类**跨层传参**的形参名必须两端一致；不一致时 `_coerce` 会静默忽略、
+    **一个字都不报**（表现为「参数像是没生效」，排查时看不到任何线索）—— 写新应用时把 `page/size` 与基座对齐。
+
+42. **「状态文本已变、动作按钮还没变」——等错了东西 ⇒ 单跑必过、全量必红**（2026-09-18 实测踩到）：
+    状态机动作后，行内**状态单元格**与**行内动作按钮**是 Alpine 的两处**独立绑定**，重渲染不在同一拍上。
+    脚本里写的是 `wait_row_status(page, X, "待办")` 之后**直接断按钮** ⇒ 状态文本已收敛、按钮还停在上一拍，
+    断言读到中间态就红了。负载高时（同机并跑另一组的前端脚本）**必现**，单跑却怎么都不出。
+    ⚠ **报错信息会自相矛盾**：`退回后行按钮应变回【启动】，实际 ['启动']` —— 因为断言时读一次、拼错误信息时**又读一次**，
+    两次之间 DOM 收敛了。看到这种"期望与实际看起来一样"的报错，**先怀疑断言点选错了对象，而不是怀疑日志**。
+    ✅ 规则：**等待条件必须与断言对象是同一个东西**（`wait_buttons(row, expect)` 轮询按钮本身），
+    错误信息里**用等到的那个快照**、不要重新求值。同类记录：PSC `demand` 页「等了下拉文案却去断工具栏按钮」。
 
 ## 架构事实速查（不是坑，详见 architecture.md / patterns.md）
 

@@ -10,6 +10,9 @@ python -m fde_platform.scanner                    # 跨应用调用契约静态�
 python -m fde_platform.mcp_server [--user admin]  # 本地 stdio MCP 服务，暴露全部应用（供外部 AI 工具接入）
 python scripts/verify_mcp_http.py                 # 远端 MCP 端点（POST /mcp）end-to-end 验收（需 dev server 在跑）
 python scripts/verify_agent_quality.py            # 与平台智能体真对话，校验分析/决策结论是否等于权威值（需平台+agent_service+LLM 在跑，对着真实演示数据）
+python scripts/br_coverage.py                     # BR 输出字段级覆盖取证（详设的「输出」↔ 脚本里 TC 步的断言；--write 刷新《测试用例.md》§4 的表）
+python scripts/run_gates.py                       # 验证门禁：static+oracle 两层，约 12 秒，**不停服、不动业务数据** —— 改完代码先跑这个
+python scripts/verify_psc_oracles.py --scenario   # PSC 对账体检：冗余双路径对账 + 不变式 + 静态探针 + 影子库全链/穿透/注入
 ```
 
 测试（每个脚本自包含、独立运行；**必须先停掉 dev server**）：
@@ -45,7 +48,16 @@ python app/<组>/tests/verify_view_<组>.py             # 组级壳/菜单/dashb
 
 - ① 架构设计 → ② 应用详设 → ③ 编码（CONVENTION）→ ④ 测试用例 → ⑤ 测试执行（`verify_chain`）→ **契约冻结 `app/<组>/_contracts.md`（前后端依赖屏障，未冻结不开工前端）** → ⑥ 前端设计 → ⑦ 前端编码（VIEW_CONVENTION）→ ⑧ 前端测试用例 → ⑨ 前端测试执行（`verify_view`，出口闸）。
 
-参考实现（只读样板）：`app/e2e/`（member/task，九步产物齐全 + dashboard.* / process.* 组级页）。
+参考实现（只读样板）：`app/e2e/`（member/task + dashboard.* / process.* 组级页）。
+✅ **该样板现已九步产物齐全**（2026-09-18 补齐，此前只有 ①②③ + 契约冻结 + ⑥⑦）：
+`brd/` + `architecture.md` + `architecture_review.md`（①）、`<应用>/应用详设.md`（②）、
+`_contracts.md`（契约冻结）、`测试用例.md` + `tests/`（④⑤）、
+`前端详设/` + `前端测试用例.md` + `tests/verify_view_e2e*.py`（⑥⑦⑧⑨）。
+**照它抄全流程可以照抄**。
+
+> ⚠ 但有一条**别照抄**：本组的 `brd/` 是**据已冻结设计反向整理**的（样板组没有真实业务方递交 BRD），
+> 所以 `architecture_review.md` 那份 100% 含一层**同源成分** —— 详见 `app/e2e/brd/00-目录.md` 与
+> `architecture_review.md` §五。真实项目里 BRD 是**业务方独立交付**的上游，不能这么反推。
 
 ## 迭代（修改现有应用）
 
@@ -53,11 +65,39 @@ python app/<组>/tests/verify_view_<组>.py             # 组级壳/菜单/dashb
 
 ## 测试与验收红线（不可逾越，规格见 design-plus/测试执行.md）
 
-1. **数据库隔离（最高优先）**：所有 verify 脚本在 `fde_platform/dbguard.py` 的 `isolate_dbs()` 下跑——移走真实库 → 空库跑 → 结束还回，**绝不污染用户 demo 数据**。
-2. **跑前杀 dev server**：Windows 下运行中的 `main.py` 占用 `.db` 句柄会导致隔离失败。
-3. **串行**：dbguard 带跨进程锁（`fde_platform/.dbguard.lock`），并行会被干净拒绝。
+1. **数据库隔离（最高优先）**：verify 脚本**绝不污染用户 demo 数据**。按场景选机制：
+
+   | 场景 | 机制 | 起点 | 要停服？ |
+   |---|---|---|---|
+   | 链测试 `verify_chain_*` | **影子库** `shadow_dbs()` + `shadow_clear(组)` | 空表 | **不用** |
+   | 前端 e2e `verify_view_*` | **影子库** `shadow_dbs(env=True, inprocess=False, config=True)` | 空表 | **不用** |
+   | 对账体检（破坏性注入） | **影子库**（不清表） | 真实数据 | 不用 |
+   | eval `verify_agent_quality` | **真库 + 数据指纹** | 真实数据 + 真 `config/` | 不用（它本就要服务在跑） |
+   | 备用 | `dbguard.isolate_dbs()`（**移库**） | 空库 | 要 |
+
+   **`fde_platform/shadowdb.py`（复制副本）**：真库零字节接触，靠 `FDE_DB_ROOT` /
+   `FDE_CONFIG_ROOT` 两个环境变量把业务库与平台库导向副本（**环境变量能穿透子进程** ——
+   view e2e 是 `subprocess.Popen([python, main.py])` 起平台的，进程内的补丁过不去）。
+   ⚠ 2026-09-18 修过一处隔离缺口：`FDE_CONFIG_ROOT` 原先**只有 `users.py` 认**，
+   其余模块硬编码真 `config/` ⇒ 测试起的平台会**真读真 cron 并触发定时任务**（run 记录写进真 `scheduler.db`）。
+   现在各模块统一走 **`fde_platform/config_paths.py`** 的 `config_path()`（**调用时解析**，别写成模块级常量）；
+   `shadowdb` 的副本集合 = 「除 `agent_service.db`（102.6 MB 对话记录）外的 config 库」（其余合计 0.6 MB）。
+   详见 `design-plus/验证门禁.md` §五之三 与 `app/psc/BUGS_psc_2026-09-15.md` §7。
+   **`dbguard.py`（移库）仍可用**，是「要停服、但真库被移走所以最保险」的那条路；
+   **不再是唯一要求**。（实测：服务在跑的同时跑 PSC 链测试与 view e2e 均 PASS，
+   业务库 19 个文件哈希与 mtime 全未变。）
+2. **跑前杀 dev server**：**只有用 `dbguard`（移库）的脚本**需要 —— Windows 下 `main.py`
+   占用 `.db` 句柄会让文件移不动。用**影子库**的**不需要**（只读复制，无锁冲突）。
+3. **串行**：`dbguard` 带跨进程锁（`fde_platform/.dbguard.lock`），并行会被干净拒绝。
+   影子库不受此限（各用各的临时目录），但**同一个组不要并行**（会争同一份业务数据）。
 4. **静态扫描入闸**：编码后 `python -m fde_platform.scanner` 至退出码 0（校验 `self.fde.call` 目标与参数契约）。
 5. **前端零报错**：0 console error · 0 pageerror · 0 HTTP≥400 为硬指标。
+6. **对账体检与门禁**：改完代码先跑 `python scripts/run_gates.py`（static+oracle，约 12 秒，**不停服、不动业务数据**）。第⑤步的 `verify_chain_<组>.py` 用例与代码**同源于《应用详设》**，同一份盲点——它对账不出「同一件事只修了一半」这类缺陷。新增的**冗余双路径对账 + 不变式 + 静默降级反证 + 影子库**见 `design-plus/验证门禁.md`（含三条纪律与「怎么加一条新检查」）。
+
+> ⚠ **eval 是影子库的例外，别去「顺手也改一下」**：它的 ground truth 在**本进程**算，
+> 而跟智能体对话走的 **HTTP 打到另一个已跑着的平台** —— 只影子化本进程 ⇒
+> ground truth 看副本、智能体写真库 ⇒ **指纹失效而污染照旧**，比不改更糟。
+> 它继续用「真库 + 数据指纹」兜底。
 
 ## 其他要点
 
