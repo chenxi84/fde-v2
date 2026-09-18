@@ -305,7 +305,8 @@ def x_b_facts(args):
     mp = _items(call("master_plan", "list", size=200))
     brk_iv = iv.get("BYD-HAN-BRK") or {}
     top = sorted(((m, (r.get("upper") or 0)) for m, r in iv.items()), key=lambda kv: -kv[1])[:3]
-    return {"brk_qty": brk.get("replenish_qty"), "brk_type": brk.get("replenish_type"),
+    return {"brk_no": brk.get("replenish_no"),
+            "brk_qty": brk.get("replenish_qty"), "brk_type": brk.get("replenish_type"),
             "brk_required": brk.get("required_inbound"),
             "brk_out_date": plan.get("out_date"), "brk_out_qty": plan.get("qty"),
             "brk_hedge": brk_iv.get("hedge_tool"), "brk_min_level": brk_iv.get("min_level"),
@@ -314,7 +315,13 @@ def x_b_facts(args):
             "top_upper_material": top[0][0] if top else None, "top_upper": top,
             "mp_dates": sorted({r["latest_inbound_date"] for r in mp if r["latest_inbound_date"]}),
             "mp_materials": [r["material_no"] for r in mp],
-            "dp_count": len(dp), "dp_types": {r["material_no"]: r["replenish_type"] for r in dp}}
+            "dp_count": len(dp), "dp_types": {r["material_no"]: r["replenish_type"] for r in dp},
+            # 缺货类补库单的量（按量降序）——「先下达哪一条」这类题有多个成立答案，
+            # 故按**列表**给，配合 numbers_must_appear_any_from 用，不写死某一个。
+            "shortage_qtys": sorted(
+                [r["replenish_qty"] for r in dp if r["replenish_type"] == "缺货补库"
+                 and r["replenish_qty"] is not None], reverse=True),
+            "shortage_count": sum(1 for r in dp if r["replenish_type"] == "缺货补库")}
 
 
 def x_planner_surface(args):
@@ -773,6 +780,18 @@ def check_case(case, gt, run, strict_read_only=True):
     if need:
         for v in flat_numbers(gt, need):
             res.append((num_present(ans, v), "L2", f"答案里应出现权威值 {v}"))
+    # 兄弟判据：**至少出现其中之一**。用于「多个答案都成立」的场景 ——
+    # 例如「先下达哪一条补库单」，当缺货单不止一张时，选哪一张都对，
+    # 若用 numbers_must_appear 写死其中一张的量，模型选了同样合理的那张就会被判错。
+    key_any = exp.get("numbers_must_appear_any_from")
+    if key_any:
+        vals = [v for v in (gt.get(key_any) or [])]
+        if not vals:
+            # 分母为空 = 用例配置错了，必须报出来，不能静默通过（空集上的断言是真空）
+            res.append((False, "L2", f"ground truth 的 {key_any} 为空，无法比对 —— 用例配置有误"))
+        else:
+            res.append((any(num_present(ans, v) for v in vals), "L2",
+                        f"答案里应至少出现下列权威值之一：{vals}"))
     for key in (exp.get("date_must_appear") or []):
         # 日期断言**必须取自现算的权威值**：写死日期会在数据一变就变成假红
         # （A11 原来写死 2026-10-10，重跑一遍数据后权威值成了 2026-10-01）
@@ -833,6 +852,34 @@ def load_cases():
     return out
 
 
+# 题干 / 裁判要点里的 {key} 占位，由**现算的权威事实**（gt 字典）填充。
+# 为什么必须这样：把「会随数据变化的数字」写死在用例里 = 给用例埋一个静默失效点。
+# 实测到过 —— B3/B4 的题干写着「这 7 条补库单」，而补库单数一旦因口径修复而变化，
+# 题干就与事实不符，裁判要点里的「7 条里唯一的一条缺货」也跟着错，且**不会报任何错**。
+_PLACEHOLDER = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
+
+
+def _fill_one(text, facts):
+    def sub(m):
+        key = m.group(1)
+        if key not in facts:
+            raise KeyError(key)
+        val = facts[key]
+        if isinstance(val, (list, dict, tuple, set)):
+            raise KeyError(f"{key}（非标量，不能直接填进题干）")
+        if val is None:
+            raise KeyError(f"{key}（当前值为空）")
+        return f"{val:g}" if isinstance(val, float) else str(val)
+    return _PLACEHOLDER.sub(sub, text)
+
+
+def fill_facts(turns, rubric, facts):
+    """把 {key} 占位替换成现算事实。任一占位解析不出来就抛 KeyError ——
+    宁可 SKIP，也绝不把未解析的 `{...}` 当字面量发给模型（那会得到无意义的回答）。"""
+    return ([_fill_one(t, facts) for t in turns],
+            [_fill_one(p, facts) for p in (rubric or [])])
+
+
 def run_one(case, verbose=True, judge=None, no_judge=False):
     """跑一条场景 → 结果 dict。SKIP 与 FAIL 严格分开。"""
     cid, tag = case["id"], case.get("tag", "")
@@ -855,6 +902,15 @@ def run_one(case, verbose=True, judge=None, no_judge=False):
     if not gt and case["gt"]["extract"] != "none":
         return {"id": cid, "tag": tag, "status": "SKIP", "question": turns[0],
                 "why": "ground truth 为空 —— 数据里没有这条分支"}
+
+    # ②b 题干与裁判要点里的 {key} 用现算事实填充（见 fill_facts 的说明）
+    try:
+        turns, rubric = fill_facts(turns, case.get("rubric"), gt)
+    except KeyError as e:
+        return {"id": cid, "tag": tag, "status": "SKIP", "question": turns[0],
+                "why": f"题干占位符无法从 ground truth 解析：{e}"}
+    if rubric:
+        case = dict(case, rubric=rubric)
 
     before = fingerprint()          # 跑前指纹（写操作会改变它）
 

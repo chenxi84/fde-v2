@@ -311,8 +311,15 @@
           <div class="sec">任务说明</div>
           <div class="muted" x-text="modal.data.description || '（无）'"></div>
           <template x-if="modal.data.last_run && modal.data.last_run.error_message">
-            <div class="sec">最近错误</div>
-            <div class="muted" x-text="modal.data.last_run.error_message"></div>
+            <!-- ⚠ 必须**一个根元素**：Alpine 的 `x-if` 只挂载
+                 `el.content.cloneNode(true).firstElementChild` —— 此前这里并列写着
+                 「最近错误」标题与消息两个 div，第二个被**静默丢弃** ⇒ 标题渲染了、
+                 错误内容永远看不到（2026-09-17 由 V6 静态探针扫出；同款修法见
+                 `app/psc/md_project_part/view.html` 的批量导入按钮）。 -->
+            <div>
+              <div class="sec">最近错误</div>
+              <div class="muted" x-text="modal.data.last_run.error_message"></div>
+            </div>
           </template>
         </div>
       </template>

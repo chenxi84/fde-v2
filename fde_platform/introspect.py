@@ -30,10 +30,50 @@ def _annotation_to_str(annotation) -> str:
     return str(annotation)
 
 
+def _split_top_level(text: str) -> list:
+    """按**顶层级**逗号切分（跳过 `[...]` 内的逗号）：`Dict[str,int], None` → 2 段。"""
+    parts, depth, cur = [], 0, []
+    for ch in text:
+        if ch in "[(":
+            depth += 1
+        elif ch in "])":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    if cur:
+        parts.append("".join(cur))
+    return parts
+
+
 def _json_type(py_type: str) -> str:
-    """Python 类型字符串 → JSON Schema 类型（复合类型取基底）。"""
-    base = py_type.split("[", 1)[0].strip()
-    return _TYPE_MAP.get(base, "string")
+    """Python 类型字符串 → JSON Schema 类型（复合类型取基底）。
+
+    `Optional[X]` / `Union[X, None]`（`typing.` 前缀可有可无）取**非 None 的那个分支**。
+    ⚠ 2026-09-18 修：此前 `base = py_type.split("[")[0]` 对 `typing.Optional[int]` 得到
+    `typing.Optional`，不在 `_TYPE_MAP` 里 ⇒ **静默落成 `string`** —— 于是同一参数写成
+    `page: int = None` 是 `integer`、写成 `page: Optional[int] = None` 是 `string`
+    （PSC 冻结契约里同组同名参数真的出现了两种类型）。这份类型不止喂契约文档，
+    还喂 MCP tool 定义、Agent function-calling、Web 调用表单的 `_coerce` 强转，
+    所以声明成 string 会让数值参数**一路以字符串形态**送达服务。
+    """
+    t = (py_type or "").strip()
+    for prefix in ("typing.", ""):
+        for wrapper in (f"{prefix}Optional[", f"{prefix}Union["):
+            if t.startswith(wrapper) and t.endswith("]"):
+                inner = _split_top_level(t[len(wrapper):-1])
+                inner = [p.strip() for p in inner if p.strip() not in ("None", "NoneType", "")]
+                if not inner:
+                    return "null"
+                if len(inner) == 1:
+                    return _json_type(inner[0])
+                # 真 Union（多个非 None 分支）：各分支基底一致才归一，否则如实回退 string
+                bases = {_json_type(p) for p in inner}
+                return bases.pop() if len(bases) == 1 else "string"
+    base = t.split("[", 1)[0].strip().rsplit(".", 1)[-1]   # 剥 `typing.` 前缀
+    return _TYPE_MAP.get(base) or _TYPE_MAP.get(base.lower()) or "string"
 
 
 def _parse_docstring_args(docstring: str) -> dict:

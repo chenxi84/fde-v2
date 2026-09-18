@@ -39,7 +39,11 @@ def pop_paging(raw: dict):
     page = _int(raw.pop("page", None), 1)
     size = raw.pop("size", None)
     if size is None:
-        size = raw.pop("page_size", None)   # 历史漂移命名兼容（部分应用 list 用 page_size）
+        # 历史漂移命名兼容：**仓内已无使用者**（2026-09-17 全组改回 `size`，见
+        # `app/psc/BUGS_psc_2026-09-15.md`「分页形参名漂移」）。保留只为仓外/新写应用不至于
+        # 因为一个名字静默不分页 —— ⚠ 但**别把它当"两个名字都行"**：`web.py::_coerce` 对未知键
+        # 是**静默忽略**的，只有带 `sort_by` 的调用才会走到这里；不带排序时 `page_size` 照样收不到。
+        size = raw.pop("page_size", None)
     else:
         raw.pop("page_size", None)
     return page, _int(size, 20)
