@@ -21,12 +21,20 @@ const LOCAL_HUES = {
 };
 const hue = (v) => LOCAL_HUES[v] || baseHue(v);
 
-/* 各基线方法的合法参数模板（用于表单 base_params 的 placeholder 提示） */
+/* 已从自动选型退役的基线方法（仅用于兼容历史数据与批量导入，不在下拉里可选）。
+   后端 `md_material._BASE_METHODS` 仍接受这 4 个值；`strategy_fitting` 不再产出它们。 */
+const RETIRED_METHODS = ["移动平均", "指数平滑", "阶跃检测", "借用参考"];
+
+/* 各基线方法的合法参数模板（用于表单 base_params 的 placeholder 提示）。
+   ⚠ 退役的 4 个仍留在这里：编辑一条旧物料时要把它的参数提示出来。
+   其中两处**只写实现真正读过的参数**，不再列「写了也不生效」的：
+     · 阶跃检测 —— threshold / confirm_periods 在 `_calc_base_qty` 里从未被读取（该分支实际等同移动平均）；
+     · 借用参考 —— mode / offset 同样从未被使用（只取参考物料历史均值 × scale）。 */
 const BASE_METHOD_PARAMS = {
   "移动平均": '{"window": 6}',
   "指数平滑": '{"alpha": 0.3, "trend": false}',
-  "阶跃检测": '{"threshold": 0.3, "confirm_periods": 2, "lookback": 6}',
-  "借用参考": '{"ref_material": "M12345", "scale": 1.0, "mode": "trend"}',
+  "阶跃检测": '{"lookback": 6}',
+  "借用参考": '{"ref_material": "M12345", "scale": 1.0}',
   "AutoTheta": '{"season_length": 12}',
   "AutoARIMA": '{"season_length": 12}',
   "AutoETS": '{"season_length": 12}',
@@ -90,6 +98,11 @@ export default function pageMdMaterial() {
       if (v === "" || v === null || v === undefined) return "";
       const n = Number(v);
       return Number.isNaN(n) ? "" : n;
+    },
+    // 编辑一条旧物料时，它的 base_method 可能是已退役的 4 个之一。
+    // 下拉里得把它显示出来（否则 select 会回落成空、一保存就把旧值抹掉），标注「已退役」提醒别再用。
+    isRetiredMethod(v) {
+      return RETIRED_METHODS.includes(v);
     },
     bpPlaceholder() {
       return BASE_METHOD_PARAMS[self.form.base_method] || "留空 = 后端按该方法默认参数落库";

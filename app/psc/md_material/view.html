@@ -273,12 +273,27 @@
       <div class="frow">
         <div>
           <label class="f">基线方法</label>
-          <select x-model="form.base_method">
+          <!-- ⚠ 只列**自动拟合会产出**的 6 个方法。移动平均 / 指数平滑 / 阶跃检测 / 借用参考
+               已从自动选型退役（`strategy_fitting._predict_fit` 只竞标这 6 个），且其中
+               「阶跃检测」的实现其实等同于移动平均（threshold / confirm_periods 两个参数从未被读取）、
+               「借用参考」的 mode / offset 也从未被使用 —— 留在下拉里会让人以为在选一种能力，
+               实际拿到的是另一种算法的结果。
+               后端仍接受这 4 个值（`md_material._BASE_METHODS` 未变），历史数据与批量导入不受影响：
+               编辑一条 base_method=移动平均 的旧物料时，下拉里会以「（已退役）移动平均」显示。 -->
+          <!-- ⚠ 下面这个 x-effect 是必需的，别删：退役选项由 x-if 渲染，而 x-if 是在
+               **下一轮微任务**才把 <option> 插进 DOM 的，晚于 x-model 应用值 —— 于是编辑一条
+               base_method=移动平均 的旧物料时，选项在、但**没被选中**，下拉显示成「—」
+               （表单里其实还握着 移动平均，保存不会丢值，但显示是错的）。这一句在值变化后重新对齐选中项。
+
+               ⚠ 必须写成 IIFE 把 form.base_method **同步读一次**：Alpine 的依赖收集只认
+               同步读取，写成 `$nextTick(() => $el.value = form.base_method)`（在回调里读）
+               这个 effect **只会跑一次、永不再跑** —— 值变了也不会重新对齐（实测踩过）。 -->
+          <select x-model="form.base_method"
+                  x-effect="(() => { const v = form.base_method; $nextTick(() => { $el.value = v; }); })()">
             <option value="">—</option>
-            <option value="移动平均">移动平均</option>
-            <option value="指数平滑">指数平滑</option>
-            <option value="阶跃检测">阶跃检测</option>
-            <option value="借用参考">借用参考</option>
+            <template x-if="isRetiredMethod(form.base_method)">
+              <option :value="form.base_method" x-text="'（已退役）' + form.base_method"></option>
+            </template>
             <option value="AutoTheta">AutoTheta</option>
             <option value="AutoARIMA">AutoARIMA</option>
             <option value="AutoETS">AutoETS</option>

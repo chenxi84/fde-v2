@@ -429,8 +429,10 @@ def main():
             choose_option(form_modal, "变更风险", value="高")
             fill_labeled(form_modal, "满足率目标（0~1）", "0.9")
             fill_labeled(form_modal, "组批窗口（天）", "14")
-            choose_option(form_modal, "基线方法", value="移动平均")
-            fill_labeled(form_modal, "基线参数（JSON）", '{"window": 4}', tags=("textarea",))
+            # 基线方法下拉现在只列**自动拟合会产出**的 6 个：移动平均/指数平滑/阶跃检测/借用参考
+            # 已退役（不再可选）。这里选一个在册的方法，参数也换成它的。
+            choose_option(form_modal, "基线方法", value="AutoTheta")
+            fill_labeled(form_modal, "基线参数（JSON）", '{"season_length": 12}', tags=("textarea",))
 
             click_button(form_modal, ["创建"])
             try:
