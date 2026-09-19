@@ -1,5 +1,5 @@
 """verify_chain_psc part2: §3 分支 / 异常用例"""
-# Covers: TC-ERR-01~38
+# Covers: TC-ERR-01~44
 
 
 def run_part(call, step, expect_err, record):
@@ -836,6 +836,33 @@ def run_part(call, step, expect_err, record):
         r = call("inventory_strategy", "get", version_no=V202608, material_no=M6)
         assert r.get("hedge_tool") == "速度", r
         assert r.get("safety_level") == 0 and r.get("batch_level") == 0, r
+        record(True)
+    except Exception as e:
+        record(False, f"{e}")
+
+    step("TC-ERR-44 BR-14 兜底闸：两个来源都空的行必须标异常，不能静默算 0")
+    try:
+        # 这条守的是一个**静默归零**：客户没报数、物料又算不出基线（新料无前序链/无断点）时，
+        # decide 的每一条分支都可能落到 final_qty=None。此前它会安静地留空，而 summarize 用
+        # COALESCE(final_qty, 0) 合计 ⇒ 该物料在毛需求里变成 0、从计划里消失，且 abnormal_flag=0、
+        # 界面上没有任何提示（202611 / BYD-HAN-FB27 实测踩到）。
+        M7 = "M-NOHIST"          # 不复用 M1~M14：那些已被别的用例占用
+        # ⚠ 建料时就把库存参数给全：`build_gross` 是 fail-closed 的（任一物料取不到水位就整版中止），
+        # 一条缺满足率的料会**把 part3 的前置打挂** —— 用例不该给别的用例埋雷。
+        # 注意：给的是**主数据参数**，不是历史台账，所以「无历史」这个前提不受影响。
+        call("md_material", "create", material_no=M7, material_name="无历史新料",
+             value_class="低", change_risk="低", service_level=0.95,
+             prod_days=10, logistics_days=5, batch_window=28)
+        call("sales_forecast", "create", version_no=V202609, material_no=M7, customer_no=C002)
+        # 只建行、**不填客户预测**（orig_qty 可空，BR-09）
+        b = call("sales_forecast", "calc_baseline", version_no=V202609, material_no=M7,
+                 customer_no=C002, rolling_month="N+1")
+        assert b.get("base_qty") is None, f"{M7} 无历史，基线应为空：{b}"
+        r = call("sales_forecast", "decide", version_no=V202609, material_no=M7,
+                 customer_no=C002, rolling_month="N+1")
+        assert r.get("final_qty") is None, f"两源皆空的行不该自动填值：{r}"
+        assert r.get("abnormal_flag") in (1, True), \
+            f"两源皆空的行必须标异常（否则汇总按 0 计、物料静默消失）：{r}"
         record(True)
     except Exception as e:
         record(False, f"{e}")

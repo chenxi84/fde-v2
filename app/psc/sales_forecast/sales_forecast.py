@@ -406,6 +406,19 @@ class SalesForecast:
                 # BR-15：MAPE 大（客户不可信）或 MAPE 不存在 → 取基线和事件合计量（默认信基线）
                 final_qty = base_pick if base_pick is not None else adj_qty
 
+        # ── BR-14 兜底闸：不能替人决定时，必须说出来 ─────────────────────────────
+        # 上面**每一条分支都可能落到 final_qty = None**：客户侧不可用且基线也空（新料无历史）、
+        # 无基线可比且本行 adj_qty 空、MAPE 决策两档取到的值本身就是 None……
+        # 此前这些情况会**安静地留空**，而 summarize 用 COALESCE(final_qty, 0) 合计 ⇒
+        # 该物料在毛需求里**静默变成 0**、从计划里消失，且 abnormal_flag=0、界面上没有任何提示。
+        # 实测（202611 / BYD-HAN-FB27：ERP 同步进来的改款新料，无前序链、无断点、客户未报数）：
+        # N+1/N+2/N+3 三行全部 abnormal_flag=0 且 final_qty 为空。
+        # 口径：与「两源分歧过大」同为「待人工」，只是原因可分辨；这也正是
+        # `演示业务方案.md` §2.5 对 FB27 写明的期望（「如实标记数据不足，预测留空待人工」——
+        # 「留空」早就做到了，「标记」此前没做）。
+        if final_qty is None and not abnormal_flag:
+            abnormal_flag = True
+
         self.db.execute(
             """
                 UPDATE sales_forecast_line
