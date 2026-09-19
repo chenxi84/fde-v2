@@ -34,6 +34,20 @@ def db_mode() -> str:
     return "SQLite"
 
 
+def dialect_of(conn) -> str:
+    """这条连接**实际**用的是哪种 SQL 方言（`"postgres"` / `"sqlite"`）。
+
+    ⚠ **不要用 `using_postgresql()` 代替它**：连接池是**懒建**的（第一次
+    `get_connection` 才建），所以建池之前调 `using_postgresql()` **恒为 False**。
+    `runtime._load` 恰好就是这个顺序（先算 dialect、再建连接）⇒ PostgreSQL 部署下
+    建表与对账全按 SQLite 走，`PRAGMA table_info` 在 PG 上直接语法报错、
+    **平台起不来**（2026-09-20 在测试服务器上实测踩到）。
+
+    从连接对象本身判断则没有这个问题：它是什么，就是什么。
+    """
+    return "postgres" if isinstance(conn, _PgConnection) else "sqlite"
+
+
 # ── 审计值注入 ──────────────────────────────────────────
 
 def _inject_audit(sql: str, params, ctx: dict) -> tuple:

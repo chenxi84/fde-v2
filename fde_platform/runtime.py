@@ -235,9 +235,13 @@ class FdePlatform:
         # 加载时建表：读 schema.sql → ddl 引擎解析建表（SQLite/PG 双兼容）。
         # 仅加载时执行一次，不计入单次服务调用开销。
         schema_sql = schema_path.read_text(encoding="utf-8")
-        dialect = "postgres" if db.using_postgresql() else "sqlite"
         conn = db.get_connection(qn, db_path)
         conn._fde_ctx = dict(self.default_ctx)
+        # ⚠ 方言必须在**拿到连接之后**再判。此处原先是 `using_postgresql()`，而连接池是
+        # 懒建的（上面这句才建）⇒ 建池之前恒为 False ⇒ PostgreSQL 部署下把建表与对账
+        # 全按 SQLite 走，`PRAGMA table_info` 在 PG 上直接语法报错、**平台起不来**。
+        # 2026-09-20 在测试服务器实测踩到；从连接对象本身判断则无此问题。
+        dialect = db.dialect_of(conn)
         try:
             # 建表 + 与声明对账（已有表缺的列在这里补上——CREATE TABLE IF NOT EXISTS
             # 对已存在的表整句跳过，加列不会生效）。补了列要让它**可见**，不静默。
