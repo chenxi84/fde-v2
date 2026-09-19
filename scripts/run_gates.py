@@ -76,6 +76,12 @@ def _tiers(group):
         "static": [
             ("契约静态扫描", [PY, "-m", "fde_platform.scanner"], False),
             ("DDL 列对账", [PY, "scripts/verify_ddl_reconcile.py"], False),
+            # **PG 方言改写层**（2026-09-20 加）：本地全程 SQLite、根本不走 `_PgConnection.execute`
+            # 那条路径，于是它的错本地一律发现不了 —— 2026-09-20 一天之内在那里连撞四个
+            # 只会在真 PG 上现形的缺陷（字面量 `%` 未转义 ⇒ 所有模糊搜索全崩；审计注入的
+            # 占位符又被那次转义吃掉 ⇒ 所有 UPDATE 全崩）。纯 Python、不起库、<1s，
+            # 两条断言都用突变验过「能失败」。
+            ("PG 方言改写层", [PY, "scripts/verify_pg_translate.py"], False),
             # **隔离机制自检**（2026-09-18 加）：四条判据 —— 副本按运行期规则可解析 / 副本内容 ==
             # 真库 / env 路径下 db_path 全在影子目录内 / 真库 mtime+size 全程不变。
             # 它是别的检查的**前提**（底座不成立时，其余检查的"没碰真库"结论也不可信），

@@ -354,6 +354,11 @@ class _PgConnection:
         user = (ctx or {}).get("userno", "") or ""
         sql_upper = sql.upper()
 
+        # ⚠ 约定：本函数内**所有**占位符（应用写的 + 本节审计注入的）一律先用 `?`，
+        # 函数末尾统一做一次「转义字面量 % → 把 ? 换成 %s」。审计注入这里**必须**写 `?`：
+        # 若图省事直接写 `%s`，会被末尾那次转义变成 `%%s` —— 占位符当场消失，
+        # psycopg2 报 `TypeError: not all arguments converted during string formatting`
+        # （2026-09-20 实测踩到：`outbound_plan.close_expired` 的 UPDATE 全挂）。
         if sql_upper.startswith("INSERT INTO"):
             extra_cols, extra_vals, extra_params = [], [], []
             if 'CREATED_AT' not in sql_upper:
@@ -361,10 +366,10 @@ class _PgConnection:
             if 'UPDATED_AT' not in sql_upper:
                 extra_cols.append("updated_at"); extra_vals.append("NOW()")
             if 'CREATED_BY' not in sql_upper:
-                extra_cols.append("created_by"); extra_vals.append("%s")
+                extra_cols.append("created_by"); extra_vals.append("?")
                 extra_params.append(user)
             if 'UPDATED_BY' not in sql_upper:
-                extra_cols.append("updated_by"); extra_vals.append("%s")
+                extra_cols.append("updated_by"); extra_vals.append("?")
                 extra_params.append(user)
             if extra_cols:
                 sql = re.sub(r'\)\s*VALUES\s*\(',
@@ -382,7 +387,7 @@ class _PgConnection:
             if 'UPDATED_AT' not in set_part:
                 set_parts.append("updated_at = NOW()")
             if 'UPDATED_BY' not in set_part:
-                set_parts.append("updated_by = %s")
+                set_parts.append("updated_by = ?")
                 set_params.append(user)
             if set_parts:
                 audit_set = ", " + ", ".join(set_parts)
