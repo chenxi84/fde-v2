@@ -1050,12 +1050,41 @@ def c_invariants(conn):
             "created_by 非空（平台自动注入）",
             lambda r: f"{r.get('material_no') or r.get('replenish_no')} created_by 为空")
 
-    # --- 状态机：补库单已完成的必须有承诺入库日 ---
-    inv("C6 状态机 · 已完成补库单须有承诺入库日",
+    # --- 状态机：已进入生产/完成的补库单必须有承诺入库日 ---
+    # ⚠ 2026-09-19 收窄：原 SQL 把 `已下达` 也算了进来，而**判据自己的名字写的是「已完成」** ——
+    # SQL 比它声明的口径更严。仓库内三条依据都站在「下达时允许留空」这一侧：
+    #   · 服务签名 `release(replenish_no, promised_inbound: Optional[str] = None)`（可选）
+    #   · `demand_pool/应用详设.md` 字段表把 `promised_inbound` 标为「否」（非必填）
+    #   · 详设状态机：「承诺入库时间在产能平衡后承诺（具体回填时点待确认）」
+    # 承诺日是**产能平衡的结果**，天然晚于「下达」这个动作；到「生产中」（ERP 已回传开工，
+    # 说明它接单并给了日期）还没有，才是真问题。故收窄到 `生产中 / 已完成`。
+    # 原来的信号没丢：见紧随其后的 C6b 参考项（长期挂着不承诺 → WARN，不卡闸）。
+    inv("C6 状态机 · 生产中/已完成的补库单须有承诺入库日",
         """SELECT replenish_no, status FROM demand_pool.demand_pool
-           WHERE status IN ('已下达','生产中','已完成') AND (promised_inbound IS NULL OR promised_inbound = '')""",
-        "已下达及之后状态必须有 promised_inbound",
+           WHERE status IN ('生产中','已完成') AND (promised_inbound IS NULL OR promised_inbound = '')""",
+        "已进入生产/完成的补库单必须有 promised_inbound（下达时允许留空：承诺日是产能平衡的结果）",
         lambda r: f"{r['replenish_no']} 状态={r['status']} 无承诺入库日")
+
+    # --- C6b 参考项：下达后长期没人承诺（只报出来，不卡闸）---
+    # 为什么是参考项而不是失败项：「下达后多久必须补上承诺日」业务上还没有定论
+    # （详设原文就是「具体回填时点待确认」）。一条**永远红**的检查会训练人无视红灯，
+    # 比没有检查更坏 —— 这是本项目已经写进纪律的一条（见 `design-plus/验证门禁.md`）。
+    # `updated_at` 在这里当作「最后一次改动时间」的代理：下达那一刻会写它，此后没人动就停在那儿。
+    try:
+        _late = q(conn, """SELECT replenish_no, updated_at FROM demand_pool.demand_pool
+                           WHERE status = '已下达'
+                             AND (promised_inbound IS NULL OR promised_inbound = '')
+                             AND updated_at < datetime('now', '-7 days')""")
+    except sqlite3.Error as e:
+        REP.skip("C", "C6b 已下达超过 7 天仍无承诺入库日（参考）", f"SQL 无法执行：{e}")
+    else:
+        if _late:
+            REP._add("C", "C6b 已下达超过 7 天仍无承诺入库日（参考）", "WARN",
+                     "下达后应在合理期限内补上承诺入库日（时点业务未定，故不卡闸）",
+                     " | ".join(f"{r['replenish_no']}@{r['updated_at']}" for r in _late[:5]),
+                     "`updated_at` 是「最后改动时间」的代理；该行之后若被动过，计时会重置")
+        else:
+            REP.ok("C", "C6b 已下达超过 7 天仍无承诺入库日（参考）")
 
     # --- 预测异常行的最终值口径（BR-26：异常行不自动填写）---
     inv("C7 预测 · 非异常行必须有最终预测",
