@@ -85,14 +85,7 @@ export default function pageMaterial360() {
         self.loadVersion(),
       ]);
       self.loading = false;
-      window.addEventListener("resize", () => {
-        const E = window.echarts;
-        if (!E) return;
-        ["m360HistoryChart", "m360ProjChart"].forEach(id => {
-          const el = document.getElementById(id);
-          if (el) { const c = E.getInstanceByDom(el); if (c) c.resize(); }
-        });
-      });
+      window.addEventListener("resize", () => self.resizeCharts());
     },
 
     gotoPage(key) { window.location.hash = "#/" + key; },
@@ -414,6 +407,25 @@ export default function pageMaterial360() {
       this.renderHistoryChart();
       this.renderProjChart();
       this.renderFitChart();
+      /* ⚠ 这一帧 resize 别删 —— 上面三个 `E.init(el)` 是在 `loading` 刚置 false 的 nextTick 里跑的，
+         那一刻容器**可能还没有宽度**（实测：容器 720×260，而 echarts 建出来的 canvas 是 **0×260**）。
+         canvas 宽 0 就是整张图什么都不画，而且**不报任何错**、控制台干干净净。
+         此前只在 `window.resize` 里补，而那份名单**漏了 `m360FitChart`** ⇒ 那张「逐月拟合」
+         图在任何浏览器里都从来没显示过（谁不手动拉一次窗口，它就一直是空的）。
+         放到下一帧再 resize：那时布局已定型，宽度读得到。 */
+      requestAnimationFrame(() => this.resizeCharts());
+    },
+    /* 三张图**统一在这里** resize。新增图时只往这个数组里加一个 id ——
+       别再写第二份名单：漏掉成员正是上面那个缺陷的成因。 */
+    resizeCharts() {
+      const E = window.echarts;
+      if (!E) return;
+      ["m360HistoryChart", "m360ProjChart", "m360FitChart"].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        const c = E.getInstanceByDom(el);
+        if (c) c.resize();
+      });
     },
     renderHistoryChart() {
       const el = document.getElementById("m360HistoryChart");

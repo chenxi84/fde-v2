@@ -170,6 +170,30 @@ def main():
         card_count = page.locator(".m360 .card .hd").count()
         assert card_count >= 3, f"选料后分区卡片不足 3 个（实际 {card_count}）"
 
+        # §3 VT-360-01b 已渲染的图，canvas 尺寸必须非零（2026-09-19 补）
+        # 为什么补这条：本用例此前只数分区骨架，**从没看过图** —— 于是两个缺陷一直没人发现：
+        #   ① 三张图都在容器宽度还是 0 的时候 `E.init()`，靠一次 window.resize 补救；
+        #   ② 那份 resize 名单**漏了 m360FitChart** ⇒ 「逐月拟合」图在任何浏览器里都没显示过。
+        # 症状是 **canvas 宽度为 0**：图什么都不画，而且**不报任何错**、控制台干干净净。
+        #
+        # ⚠ 判据只查「**已经有 canvas 的**图」：数据为空时 `renderXxxChart` 会提前 return、
+        #   按设计根本不建 canvas —— 那是「没数据不画」，不是「有数据画不出来」，两者不能混。
+        #   但也不能因此放过：所以配一道**分母闸** —— 一张 canvas 都没有时直接判失败，
+        #   否则这条规则会静默变成空规则（本项目已经吃过一次「分母为 0 的假绿」）。
+        time.sleep(1)          # 留一帧给 renderCharts 里那次 requestAnimationFrame resize
+        canvases = page.evaluate("""() => ['m360HistoryChart', 'm360ProjChart', 'm360FitChart']
+            .map(id => { const el = document.getElementById(id);
+                         const c = el && el.querySelector('canvas');
+                         return [id, c ? c.width : -1, c ? c.height : -1]; })""")
+        drawn = [c for c in canvases if c[1] >= 0]
+        assert drawn, (
+            f"物料 360 一张图都没渲染（连 canvas 都没有）—— 判据成了空规则，本次 PASS 不可信；"
+            f"实测={canvases}。先确认造数里该料有历史/拟合/推移数据。")
+        bad = [f"{i}(canvas {w}×{h})" for i, w, h in drawn if w <= 0 or h <= 0]
+        assert not bad, (
+            f"物料 360 的图未渲染（canvas 宽或高为 0）：{'、'.join(bad)}；"
+            f"全部实测={canvases}。常见成因：echarts 在容器宽度为 0 时 init，且没有在布局定型后 resize。")
+
         # §6 0 报错红线（本会话；本脚本无 `ignored` 豁免列表，故无需豁免校验）
         # 红线：0 console error / 0 pageerror / 0 HTTP≥400
         assert not errors, f"红线违规（{len(errors)} 项）：\n" + "\n".join(errors[:10])
