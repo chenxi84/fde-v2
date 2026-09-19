@@ -41,24 +41,51 @@ def _inject_audit_columns(expr: exp.Create) -> None:
     schema.set("expressions", columns + constraints)
 
 
+def _pg_time_funcs(expr: exp.Expression) -> None:
+    """把 SQLite 专有的时间函数改写成本方言可用的写法（**仅 PG 需要**）。
+
+    为什么需要：`datetime('now', 'localtime')` 是 SQLite 专有函数，sqlglot **不认识它**
+    （解析成 `Anonymous`），transpile 到 PG 时**原样带过去** ⇒
+    `function datetime(unknown, unknown) does not exist`，建表直接失败、平台起不来。
+    2026-09-20 在测试服务器上实测踩到：`app/psc/sales_forecast/schema.sql` 的
+    `settled_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))`。
+
+    口径：SQLite 侧保持原样（本地时区，与平台既有行为一致）；
+    PG 侧换成 `CURRENT_TIMESTAMP`（平台 DML 侧的审计值本来就按方言分口径）。
+    """
+    for node in list(expr.find_all(exp.Anonymous)):
+        if str(node.this).upper() == "DATETIME":
+            node.replace(exp.CurrentTimestamp())
+
+
 def build_ddl(sql_text: str, dialect: str = "sqlite") -> list:
     """把 schema.sql 编译成目标方言的建表语句列表（含审计列）。
 
     dialect: 'sqlite' | 'postgres'。SQLite 原样；PG 由 sqlglot transpile
-    （自动处理 `INTEGER PRIMARY KEY AUTOINCREMENT` → `GENERATED ... AS IDENTITY`）。
+    （自动处理 `INTEGER PRIMARY KEY AUTOINCREMENT` → `GENERATED ... AS IDENTITY`），
+    并额外规范化 SQLite 专有时间函数（见 `_pg_time_funcs`）。
     返回语句字符串列表，逐条 `conn.execute(stmt)` 即可。
     """
     exprs = parse_schema(sql_text)
     for e in exprs:
         _inject_audit_columns(e)
+        if dialect == "postgres":
+            _pg_time_funcs(e)
     return [e.sql(dialect=dialect) for e in exprs]
 
 
-def declared_columns(sql_text: str) -> dict:
-    """schema.sql 声明的 {表名: [列定义表达式]}（含平台注入的审计列）。"""
+def declared_columns(sql_text: str, dialect: str = "sqlite") -> dict:
+    """schema.sql 声明的 {表名: [列定义表达式]}（含平台注入的审计列）。
+
+    `dialect` 影响**列定义生成的 SQL**：PG 下同样要规范化 SQLite 专有时间函数，
+    否则补列时 `ALTER TABLE ... ADD COLUMN ... DEFAULT (datetime('now','localtime'))`
+    会在 PG 上炸（与建表是同一个坑）。
+    """
     exprs = parse_schema(sql_text)
     for e in exprs:
         _inject_audit_columns(e)
+        if dialect == "postgres":
+            _pg_time_funcs(e)
     out = {}
     for e in exprs:
         if not (isinstance(e, exp.Create) and e.kind == "TABLE"):
@@ -114,7 +141,7 @@ def reconcile_columns(conn, sql_text: str, dialect: str = "sqlite") -> list:
     无默认值/主键列）**直接报错**，不做"悄悄降级成可空"——那会让库与声明长期不一致。
     """
     added = []
-    for table, cols in declared_columns(sql_text).items():
+    for table, cols in declared_columns(sql_text, dialect).items():
         have = _existing_columns(conn, table, dialect)
         if not have:            # 表刚建好（或根本不存在）→ 无需对账
             continue
