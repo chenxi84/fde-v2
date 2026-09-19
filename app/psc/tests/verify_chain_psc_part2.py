@@ -866,3 +866,38 @@ def run_part(call, step, expect_err, record):
         record(True)
     except Exception as e:
         record(False, f"{e}")
+
+    step("TC-ERR-45 空客户行的行级动作不得被「客户编号非空」挡住（BR-14 兜底闸的前提）")
+    try:
+        # 守的是**兜底闸够得到它要保护的行**。`open_version` 对「没有任何历史采购记录」的物料
+        # 只初始化一行、**客户留空**（否则 N 个客户 × 3 个月把表铺满），这类空客户行是合法数据。
+        # 但 decide / set_final / get / calc_baseline / adjust_event 此前第一句都是
+        # `_require(customer_no, "客户编号")` ⇒ 空串直接抛错，而 decide_batch 对单行失败是「跳过」。
+        # 后果：这类行**瘫在表里** —— 算不出、标不了异常、连详情都打不开，
+        # 最后在汇总里静默变 0（实测 202611 / BYD-HAN-FB27 三行，abnormal_flag=0 且 final_qty 为空）。
+        # ⚠ 本用例与 TC-ERR-44 的分工：那条用的是 C002（**有客户**），所以它当初能过，
+        #   恰恰因为没走过「空客户」这条路 —— 两条都要有。
+        M8 = "M-NOHIST2"
+        # 同 TC-ERR-44：库存参数给全，别给 part3 的前置埋雷
+        call("md_material", "create", material_no=M8, material_name="无历史新料（空客户行）",
+             value_class="低", change_risk="低", service_level=0.95,
+             prod_days=10, logistics_days=5, batch_window=28)
+        call("sales_forecast", "create", version_no=V202609, material_no=M8, customer_no="")
+        g = call("sales_forecast", "get", version_no=V202609, material_no=M8,
+                 customer_no="", rolling_month="N+1")
+        assert (g.get("customer_no") or "") == "", f"空客户行的详情必须能读回来：{g}"
+        b = call("sales_forecast", "calc_baseline", version_no=V202609, material_no=M8,
+                 customer_no="", rolling_month="N+1")
+        assert b.get("base_qty") is None, f"{M8} 无历史，基线应为空：{b}"
+        r = call("sales_forecast", "decide", version_no=V202609, material_no=M8,
+                 customer_no="", rolling_month="N+1")
+        assert r.get("final_qty") is None, f"空客户行两源皆空，不该自动填值：{r}"
+        assert r.get("abnormal_flag") in (1, True), \
+            f"空客户行两源皆空必须标异常 —— 兜底闸要够得到它：{r}"
+        # 标了异常还得能人工定稿，否则这条路仍然是断的（异常行不自动填值，靠人补）
+        s = call("sales_forecast", "set_final", version_no=V202609, material_no=M8,
+                 customer_no="", rolling_month="N+1", final_qty=123)
+        assert s.get("final_qty") == 123, f"空客户行的人工定稿必须能落库：{s}"
+        record(True)
+    except Exception as e:
+        record(False, f"{e}")

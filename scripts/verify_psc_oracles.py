@@ -605,10 +605,20 @@ def a_merge_transfer(conn):
 def a_deviation(conn):
     """A15 BR-12 偏离率计算 + BR-14 异常标记：独立重算 deviation，与 `abnormal_flag` 对照。
 
-    判据（照详设 BR-12 原文，不照代码）：
+    判据（照详设 BR-12 / BR-14 原文，不照代码）：
       偏离率 = |基线值 − 客户值| ÷ 客户值；客户值为 0 时按绝对值判定
       其中 客户值 = 物料级客户调整后需求合计（`SUM(adj_qty)`）、基线值 = 基线和事件合计量
-      BR-14：**MAPE 存在 且 偏离率 > 5% → 标记异常**；否则不标记
+      **两条规则取并集**：
+        BR-12：MAPE 存在 且 偏离率 > 5%  → 标记异常
+        BR-14 兜底闸（2026-09-19 补）：走完决策仍拿不到最终值（`final_qty` 为空）
+               → 也必须标记异常。不能替人决定时，必须说出来；否则该物料在汇总里
+               静默变成 0、从计划里消失，而界面上没有任何提示。
+
+    ⚠ 2026-09-20 修：本判据原先在「客户值与基线都取不到」时直接判 `expect = False`
+      （注释写「按 BR-14 不标记」）——那是**兜底闸加入之前**的语义，A15 没跟着更新，
+      于是它与 C7（非异常行必须有最终预测）对同一批空客户行给出相反期望：
+      实测 202611 / BYD-HAN-FB27 三行，C7 判它必须标异常、A15 判它必须正常，
+      两条判据谁也没错，是口径没对齐。现按 BR-14 现文改为并集。
 
     这条此前**没有任何判据**（`--coverage` 标 ❌），而它是 `decide` 里唯一的判定逻辑 ——
     阈值写错、除以零写错、MAPE 的存在性判断写错，都不会有任何东西报警。
@@ -619,7 +629,7 @@ def a_deviation(conn):
     """
     rows = q(conn, """
         SELECT version_no, material_no, customer_no, rolling_month,
-               orig_qty, adj_qty, base_qty, mape, abnormal_flag
+               orig_qty, adj_qty, base_qty, mape, final_qty, abnormal_flag
         FROM sales_forecast.sales_forecast_line
     """)
     rows = find("A", "A15 BR-12 偏离率与异常标记", rows, "预测明细全表")
@@ -644,24 +654,28 @@ def a_deviation(conn):
             if k4 in settled:
                 skipped_settled += 1
                 continue
-            if adj_sum is None or base is None:
-                expect = False          # 无从算偏离率 ⇒ 按 BR-14 不标记
-            else:
+            # BR-12：MAPE 存在 且 偏离率 > 5%
+            rule12 = False
+            if adj_sum is not None and base is not None:
                 dev = abs(base - adj_sum) if not adj_sum else abs(base - adj_sum) / adj_sum
-                expect = (l["mape"] is not None) and dev > THRESHOLD
+                rule12 = (l["mape"] is not None) and dev > THRESHOLD
+            # BR-14 兜底闸：走完决策仍拿不到最终值 ⇒ 必须标异常（不能替人决定时，必须说出来）
+            rule14 = l["final_qty"] is None
+            expect = rule12 or rule14
             checked += 1
             if bool(l["abnormal_flag"]) != bool(expect):
                 bad.append({"k": f"{l['material_no']}/{l['customer_no']}/{l['rolling_month']}",
                             "why": f"重算 应{'异常' if expect else '正常'}，实际 "
                                    f"abnormal_flag={l['abnormal_flag']}（客户值={adj_sum} 基线={base} "
-                                   f"MAPE={l['mape']}）"})
+                                   f"MAPE={l['mape']} 最终值={l['final_qty']}）"})
     if checked == 0:
         REP.skip("A", "A15 BR-12 偏离率与异常标记",
                  f"分母为空：{skipped_settled} 行全部是人工定稿行，没有可判的")
         return
     REP.viol("A", "A15 BR-12 偏离率与异常标记", bad,
              "偏离率 = |基线 − 客户值| ÷ 客户值（客户值为 0 按绝对值）；"
-             "MAPE 存在 且 偏离率 > 5% 才标异常（BR-12 / BR-14）",
+             "MAPE 存在 且 偏离率 > 5% → 异常（BR-12）；"
+             "或走完决策仍无最终值 → 异常（BR-14 兜底闸）；两者取并集",
              lambda t: f"{t['k']}：{t['why']}",
              f"{checked} 行参与比对（另跳过 {skipped_settled} 行人工定稿行 —— BR-27 下它们不受 decide 影响）")
 

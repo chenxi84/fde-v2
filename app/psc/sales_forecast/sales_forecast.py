@@ -185,7 +185,7 @@ class SalesForecast:
         """断点追溯前置 + 按物料基线方法/参数作用于历史干净需求，得到基线数量。"""
         version_no = self._require(version_no, "版本号")
         material_no = self._require(material_no, "物料号")
-        customer_no = self._require(customer_no, "客户编号")
+        customer_no = self._clean_customer_key(customer_no)
         rolling_month = self._require(rolling_month, "滚动月度")
         self._require_draft(version_no)
         self._require_rolling_month(rolling_month)
@@ -314,7 +314,7 @@ class SalesForecast:
         """填写事件分析/事件调整量，重算基线和事件合计量（只作用归属期，不外推）。"""
         version_no = self._require(version_no, "版本号")
         material_no = self._require(material_no, "物料号")
-        customer_no = self._require(customer_no, "客户编号")
+        customer_no = self._clean_customer_key(customer_no)
         rolling_month = self._require(rolling_month, "滚动月度")
         self._require_draft(version_no)
         self._require_rolling_month(rolling_month)
@@ -345,7 +345,7 @@ class SalesForecast:
         """按 MAPE 与偏离率自动标记异常并给出最终预测建议（异常行不自动填写）。"""
         version_no = self._require(version_no, "版本号")
         material_no = self._require(material_no, "物料号")
-        customer_no = self._require(customer_no, "客户编号")
+        customer_no = self._clean_customer_key(customer_no)
         rolling_month = self._require(rolling_month, "滚动月度")
         self._require_draft(version_no)
         self._require_rolling_month(rolling_month)
@@ -433,7 +433,7 @@ class SalesForecast:
         """异常行人工填写最终预测量（非异常行拒绝人工覆盖）。"""
         version_no = self._require(version_no, "版本号")
         material_no = self._require(material_no, "物料号")
-        customer_no = self._require(customer_no, "客户编号")
+        customer_no = self._clean_customer_key(customer_no)
         rolling_month = self._require(rolling_month, "滚动月度")
         self._require_draft(version_no)
         self._require_rolling_month(rolling_month)
@@ -550,7 +550,7 @@ class SalesForecast:
         """按主键取处理表单行全部字段。"""
         version_no = self._require(version_no, "版本号")
         material_no = self._require(material_no, "物料号")
-        customer_no = self._require(customer_no, "客户编号")
+        customer_no = self._clean_customer_key(customer_no)
         rolling_month = self._require(rolling_month, "滚动月度")
         return self._get_line(version_no, material_no, customer_no, rolling_month)
 
@@ -648,6 +648,23 @@ class SalesForecast:
 
     def _clean(self, value):
         return "" if value is None else str(value).strip()
+
+    def _clean_customer_key(self, customer_no):
+        """行级动作的客户键：**允许为空**（`_clean` 的语义化别名）。
+
+        为什么这里不能像别处一样用 `_require(..., "客户编号")`：
+        `open_version` 对「没有任何历史采购记录」的物料**只初始化一行、客户留空**
+        （否则 N 个客户 × 3 个月会把表铺满）。这类空客户行是**合法数据**，但此前会被
+        非空校验一律挡在门外——`decide` / `set_final` / `get` / `calc_baseline` /
+        `adjust_event` 全部失败，而 `decide_batch` 对单行失败是「跳过」。后果是这类行
+        **瘫在表里**：算不出、标不了异常、连详情都打不开，最后在汇总里静默变成 0。
+        （实测：202611 / BYD-HAN-FB27 的 N+1/N+2/N+3 三行，abnormal_flag=0 且 final_qty 为空。）
+
+        行身份本来就是「版本 + 物料 + 客户 + 滚动月度」四元组，客户可以为空；
+        真正的校验在 `_get_line`（行不存在即抛「处理表行不存在」），所以这里只清洗、不设非空。
+        例外：`fill_customer` 仍要求非空——给一个没有客户的行「填报客户预测」没有意义。
+        """
+        return self._clean(customer_no)
 
     def _to_float(self, value, label):
         if value is None or value == "":
