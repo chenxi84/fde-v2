@@ -212,18 +212,98 @@ class _PgDictRow(dict):
         return iter(self._keys)
 
 
-class _PgCursorWrapper:
-    """包装 psycopg2 cursor，返回 _PgDictRow 并暴露 lastrowid。"""
+# ── PostgreSQL 下取回自增主键 ─────────────────────────────
+# 表名 → 由序列支撑的主键列名；查过一次就缓存（_PG_SEQ_PK_MISS = 查到「没有」）
+_PG_SEQ_PK_CACHE: dict = {}
+_PG_SEQ_PK_MISS = object()
 
-    def __init__(self, cursor):
+
+def _pg_seq_pk(conn, table: str):
+    """取该表**由序列支撑**的主键列名；没有则返回 None。
+
+    只认序列支撑（serial / identity）的主键——只有它们才有一个「本会话刚用过的
+    currval」可取。业务自编码主键本来就不需要 lastrowid，保持 None 即可。
+    表名走 search_path（连接建立时已 SET 到本应用 schema），故不必再限 schema。
+    """
+    cached = _PG_SEQ_PK_CACHE.get(table, _PG_SEQ_PK_MISS)
+    if cached is not _PG_SEQ_PK_MISS:
+        return cached
+    col = None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT a.attname
+                 FROM pg_index i
+                 JOIN pg_attribute a
+                   ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+                WHERE i.indrelid = %s::regclass
+                  AND i.indisprimary
+                  AND pg_get_serial_sequence(%s, a.attname) IS NOT NULL
+                LIMIT 1""",
+            (table, table),
+        )
+        row = cur.fetchone()
+        cur.close()
+        col = row[0] if row else None
+    except Exception as e:            # noqa: BLE001 - 查不到就当没有，不比现状更糟
+        _logger.debug("[db] 查 %s 的序列主键失败：%s", table, e)
+        col = None
+    _PG_SEQ_PK_CACHE[table] = col
+    return col
+
+
+class _PgCursorWrapper:
+    """包装 psycopg2 cursor，返回 _PgDictRow 并暴露 lastrowid。
+
+    ⚠ **`cursor.lastrowid` 在 PostgreSQL 下是坏的**：psycopg2 给的是「插入行的 OID」，
+      而现代 PG 已无 OID ⇒ 实测恒为 **0**（不是 None）。应用按平台约定写
+      `return self.get(cur.lastrowid)`（如 app/psc/md_breakpoint/md_breakpoint.py:29）时，
+      插入其实成功了，但按 0 回查为空 ⇒ 抛业务错误「记录不存在」、并被平台回滚。
+      症状是「新建失败，且报的是查不到」——把驱动能力缺口报成了业务问题。
+
+    修法：INSERT 之后**惰性**取一次 `currval(pg_get_serial_sequence(表, 主键))`。本会话
+      刚用过那个序列，取到的就是刚插入行的主键。**不改写 INSERT 语句本身**，所以对既有
+      写路径零影响；取不到时保持原值，行为不比今天更糟。
+    """
+
+    def __init__(self, cursor, conn=None, insert_table=None):
         from datetime import datetime, date
         from decimal import Decimal
         self._cur = cursor
-        self.lastrowid = cursor.lastrowid
+        self._raw_lastrowid = cursor.lastrowid
+        self._conn = conn
+        self._insert_table = insert_table
+        self._resolved = _PG_SEQ_PK_MISS      # 尚未解析
         self.description = cursor.description
         self.rowcount = cursor.rowcount
         self._cols = [d[0] for d in cursor.description] if cursor.description else []
         self._types = (datetime, date, Decimal)
+
+    @property
+    def lastrowid(self):
+        """刚插入行的主键；PostgreSQL 下由 currval 惰性回填（见类 docstring）。"""
+        if self._raw_lastrowid:
+            return self._raw_lastrowid
+        if self._resolved is _PG_SEQ_PK_MISS:
+            self._resolved = self._resolve_lastrowid()
+        return self._resolved if self._resolved else self._raw_lastrowid
+
+    def _resolve_lastrowid(self):
+        if not self._insert_table or self._conn is None:
+            return None
+        col = _pg_seq_pk(self._conn, self._insert_table)
+        if not col:
+            return None
+        try:
+            cur = self._conn.cursor()
+            cur.execute("SELECT currval(pg_get_serial_sequence(%s, %s))",
+                        (self._insert_table, col))
+            row = cur.fetchone()
+            cur.close()
+            return int(row[0]) if row and row[0] is not None else None
+        except Exception as e:        # noqa: BLE001
+            _logger.debug("[db] 取 %s.%s 的 currval 失败：%s", self._insert_table, col, e)
+            return None
 
     def _to_jsonable(self, value):
         if value is None:
@@ -308,7 +388,12 @@ class _PgConnection:
             self._cursor.execute(sql, tuple(params))
         else:
             self._cursor.execute(sql)
-        return _PgCursorWrapper(self._cursor)
+        # 只有 INSERT 才可能有「刚插入行的主键」可取；表名交给包装层惰性解析
+        insert_table = None
+        if sql_upper.startswith("INSERT INTO"):
+            m = re.match(r'INSERT\s+INTO\s+"?([A-Za-z_][A-Za-z0-9_]*)"?', sql, re.IGNORECASE)
+            insert_table = m.group(1) if m else None
+        return _PgCursorWrapper(self._cursor, conn=self._conn, insert_table=insert_table)
 
     def commit(self):
         self._conn.commit()
