@@ -41,18 +41,25 @@ def _inject_audit_columns(expr: exp.Create) -> None:
     schema.set("expressions", columns + constraints)
 
 
-def _pg_time_funcs(expr: exp.Expression) -> None:
-    """把 SQLite 专有的时间函数改写成本方言可用的写法（**仅 PG 需要**）。
+def _time_funcs(expr: exp.Expression, dialect: str) -> None:
+    """把 SQLite 专有的时间函数改写成本方言可用的写法（**除 sqlite 外都需要**）。
 
     为什么需要：`datetime('now', 'localtime')` 是 SQLite 专有函数，sqlglot **不认识它**
-    （解析成 `Anonymous`），transpile 到 PG 时**原样带过去** ⇒
-    `function datetime(unknown, unknown) does not exist`，建表直接失败、平台起不来。
-    2026-09-20 在测试服务器上实测踩到：`app/psc/sales_forecast/schema.sql` 的
+    （解析成 `Anonymous`），transpile 到别的方言时**原样带过去** ⇒ 建表直接失败、
+    平台起不来。2026-09-20 在测试服务器上实测踩到（PG 侧）：
+    `app/psc/sales_forecast/schema.sql` 的
     `settled_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))`。
 
+    ⚠ **不要只给某一个方言开这个口子**：当天先写成「仅 postgres」，
+    而把 19 个 schema 渲染成 mysql / tsql / oracle 一看，同样的残留**一个不少**——
+    这类坑每个方言都有，只修脚下那个等于把同一件事只做了一半。
+
     口径：SQLite 侧保持原样（本地时区，与平台既有行为一致）；
-    PG 侧换成 `CURRENT_TIMESTAMP`（平台 DML 侧的审计值本来就按方言分口径）。
+    其余方言换成 `CURRENT_TIMESTAMP` —— 它是 **SQL 标准**，PG / MySQL / SQL Server /
+    Oracle 都认，比 `NOW()` 更适合作为共同目标（平台 DML 侧的审计值本就按方言分口径）。
     """
+    if dialect == "sqlite":
+        return
     for node in list(expr.find_all(exp.Anonymous)):
         if str(node.this).upper() == "DATETIME":
             node.replace(exp.CurrentTimestamp())
@@ -63,14 +70,13 @@ def build_ddl(sql_text: str, dialect: str = "sqlite") -> list:
 
     dialect: 'sqlite' | 'postgres'。SQLite 原样；PG 由 sqlglot transpile
     （自动处理 `INTEGER PRIMARY KEY AUTOINCREMENT` → `GENERATED ... AS IDENTITY`），
-    并额外规范化 SQLite 专有时间函数（见 `_pg_time_funcs`）。
+    并额外规范化 SQLite 专有时间函数（见 `_time_funcs`）。
     返回语句字符串列表，逐条 `conn.execute(stmt)` 即可。
     """
     exprs = parse_schema(sql_text)
     for e in exprs:
         _inject_audit_columns(e)
-        if dialect == "postgres":
-            _pg_time_funcs(e)
+        _time_funcs(e, dialect)
     return [e.sql(dialect=dialect) for e in exprs]
 
 
@@ -84,8 +90,7 @@ def declared_columns(sql_text: str, dialect: str = "sqlite") -> dict:
     exprs = parse_schema(sql_text)
     for e in exprs:
         _inject_audit_columns(e)
-        if dialect == "postgres":
-            _pg_time_funcs(e)
+        _time_funcs(e, dialect)
     out = {}
     for e in exprs:
         if not (isinstance(e, exp.Create) and e.kind == "TABLE"):

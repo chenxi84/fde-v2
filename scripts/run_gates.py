@@ -82,6 +82,13 @@ def _tiers(group):
             # 占位符又被那次转义吃掉 ⇒ 所有 UPDATE 全崩）。纯 Python、不起库、<1s，
             # 两条断言都用突变验过「能失败」。
             ("PG 方言改写层", [PY, "scripts/verify_pg_translate.py"], False),
+            # **多方言渲染**（2026-09-20 加）：把 app/**/schema.sql 逐个渲染成
+            # postgres / mysql / tsql / oracle，检查产物里有没有留下源方言（SQLite）
+            # 专有的写法。**不需要安装任何数据库** —— 建表 DDL 的生成是纯函数，
+            # 断言它的输出不必连着那个库。加一个方言 = 在脚本的 DIALECTS 里加一个字符串。
+            # 起因：当天把 `datetime()` 的归一化只写成「仅 postgres」，一渲染才发现
+            # mysql/tsql/oracle 三个方言**一模一样地残留**——只修脚下那个等于只做一半。
+            ("多方言渲染", [PY, "scripts/verify_dialect_render.py"], False),
             # **隔离机制自检**（2026-09-18 加）：四条判据 —— 副本按运行期规则可解析 / 副本内容 ==
             # 真库 / env 路径下 db_path 全在影子目录内 / 真库 mtime+size 全程不变。
             # 它是别的检查的**前提**（底座不成立时，其余检查的"没碰真库"结论也不可信），
