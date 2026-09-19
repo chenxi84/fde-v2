@@ -398,7 +398,16 @@ class _PgConnection:
 
         self._cursor = self._conn.cursor()
         if params:
-            sql = sql.replace("?", "%s")
+            # ⚠ 顺序不能反，也不能只做一半：psycopg2 把 SQL 里的 `%` 当**格式符**，
+            # 所以必须先把**字面量里的 `%`** 转义成 `%%`，再把 `?` 换成 `%s`。
+            # 只做 `?`→`%s` 的朴素替换时，`LIKE '%' || ? || '%'` 会变成
+            # `LIKE '%' || %s || '%'` —— 中间那两个 `%'` 被当成格式符，
+            # psycopg2 直接报 `IndexError: tuple index out of range`，
+            # 于是**所有 LIKE 模糊搜索在 PostgreSQL 上全崩**（2026-09-20 实测：
+            # md_customer.list 带筛选即报「系统错误：IndexError」）。
+            # 反过来的顺序（先 `?`→`%s` 再转义 `%`）会把刚生成的占位符一起转义掉。
+            # 不带参数时不走这条路：psycopg2 不做插值，`%` 是普通字符，无需转义。
+            sql = sql.replace("%", "%%").replace("?", "%s")
             self._cursor.execute(sql, tuple(params))
         else:
             self._cursor.execute(sql)
