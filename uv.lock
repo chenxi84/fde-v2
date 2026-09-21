@@ -917,7 +917,7 @@ wheels = [
 
 [[package]]
 name = "fde-v2"
-version = "2.1.0"
+version = "2.3.0b0"
 source = { virtual = "." }
 dependencies = [
     { name = "agentscope", extra = ["service", "storage-sql"] },

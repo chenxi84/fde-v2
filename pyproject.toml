@@ -1,6 +1,8 @@
 [project]
 name = "fde-v2"
-version = "2.1.0"
+# PEP 440 预发布写法（b0 = beta 0）。产品版本号的正本是 fde_platform/web.py 的 VERSION，
+# 对外显示 `v2.3.0-beta`；这里只是打包版本，两处要同步改。
+version = "2.3.0b0"
 description = "FDE 领域驱动 + 约定优于配置业务平台"
 requires-python = ">=3.11"
 
