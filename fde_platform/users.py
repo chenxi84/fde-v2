@@ -7,7 +7,7 @@
 - 能否**调用**某服务 = 角色授权 ∪ 个人特授是否含它（is_admin 角色例外，全通）；
 - 能否**看到/进入**某应用 = 并集中该应用下是否有≥1 个服务。
 - **前端页面授权**（role_page_grants，角色级）：角色可获授前端页面（page_id 形如
-  `crm:customer` / `_platform:agent`，清单由 view_registry 扫描 view/ 动态生成）。
+  `crm:customer` / `_platform:workbench`，清单由 view_registry 扫描 view/ 动态生成）。
   两个效力：① 视图菜单按页面授权渲染（admin 全量）；② **隐式服务放行**——页面源码
   扫描出的 svc() 调用（页→服务派生边）随页面授权一并放行，无需再逐个授服务。
   隐式放行仅对携带 `X-Fde-Page` 请求头（lib/api.js 自动注入）的调用生效；无头
@@ -69,7 +69,7 @@ MIN_PASSWORD_LEN = 4
 
 _USERNAME_RE = re.compile(r"^[^\s/\\]{1,32}$")
 _ROLE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")  # 与应用名同风格：小写蛇形
-_PAGE_ID_RE = re.compile(r"^[a-z0-9_]+:[a-z0-9_]+$")   # '模块:页key'（_platform:agent 合法）
+_PAGE_ID_RE = re.compile(r"^[a-z0-9_]+:[a-z0-9_]+$")   # '模块:页key'（_platform:workbench 合法）
 
 # 内置默认角色（新库播种；admin 的 is_admin=1 承接旧版"admin 全通"语义）
 _DEFAULT_ROLES = (("admin", "管理员", 1), ("user", "用户", 0))
@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS role_grants (
 
 CREATE TABLE IF NOT EXISTS role_page_grants (
     role_name  TEXT NOT NULL REFERENCES roles(name) ON DELETE CASCADE,
-    page_id    TEXT NOT NULL,              -- '模块:页key'，如 crm:customer / _platform:agent
+    page_id    TEXT NOT NULL,              -- '模块:页key'，如 crm:customer / _platform:workbench
     granted_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
     PRIMARY KEY (role_name, page_id)
 );
@@ -562,7 +562,7 @@ def migrate_grant_app_names(platform) -> None:
 
 
 def get_role_page_grants(role_name: str) -> list:
-    """某角色的前端页面授权（page_id 列表，如 ['crm:customer', '_platform:agent']）。"""
+    """某角色的前端页面授权（page_id 列表，如 ['crm:customer', '_platform:workbench']）。"""
     conn = get_conn()
     rows = conn.execute(
         "SELECT page_id FROM role_page_grants WHERE role_name = ? ORDER BY page_id",

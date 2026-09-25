@@ -23,7 +23,7 @@
 品牌约定推导（name=`FDE·<组名大写>`，foot=`<组名> 组 · N 页面`），无任何配置文件。
 
 缓存：以全部被扫描文件的 mtime 最大值为令牌，变化即失效；`invalidate()` 供管理页手动刷新。
-page_id 形如 `crm:customer` / `crm:dashboard` / `_platform:agent`。
+page_id 形如 `crm:customer` / `crm:dashboard` / `_platform:workbench`。
 """
 import re
 from pathlib import Path

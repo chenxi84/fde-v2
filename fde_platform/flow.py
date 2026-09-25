@@ -268,10 +268,21 @@ def _check_condition(cond, state: dict) -> bool:
         return str(value) in str(val)
     if op == "equals":
         return str(val) == str(value)
-    if op == "not_empty":
-        return bool(str(val).strip())
-    if op == "empty":
-        return not bool(str(val).strip())
+    # ⚠ **容器要拆开看**（2026-09-25 修，实测踩到）：`bool(str(val).strip())` 对 dict/list 恒为真
+    # —— 而平台的服务返回要么是 `{items, total}` 信封、要么是明细行 dict。于是
+    # `when: {key: alerts, op: not_empty}` 这种"有告警才处理"的闸会**恒真**：nasa_pms 的
+    # `tpm_alert_heal` 在没有未了结告警时**照样跑了 4 个 agent 节点**（白烧 290 秒模型），
+    # 这是只有"真跑一次"才会暴露的声明缺陷（静态预检查不出来）。
+    # 口径：list → 看元素个数；dict 有 `items`（平台列表契约 §7）→ 看 items；否则 → 看字典本身。
+    if op in ("not_empty", "empty"):
+        if isinstance(val, list):
+            is_empty = not val
+        elif isinstance(val, dict):
+            inner = val.get("items") if "items" in val else val
+            is_empty = not inner
+        else:
+            is_empty = not str(val).strip()
+        return is_empty if op == "empty" else (not is_empty)
     if op in ("gt", "lt", "gte", "lte"):
         try:
             a, b = float(val), float(value)
@@ -451,6 +462,16 @@ def _execute_node(node: dict, state: dict, platform, user, group: str = ""):
     """
     if not _check_condition(node.get("when"), state):
         return None
+    # **上游被跳过 ⇒ 本节点也跳过**（2026-09-25 加）：`depends_on` 只约束**顺序**，不保证上游
+    # 真的写进 state（上游可能被 `when` 跳掉）。不判这一条的话，本节点的 `{上游输出}` 占位符
+    # 会**原样**喂给模型/拼进参数（平台自己有条纪律：绝不把未解析的 `{...}` 当字面量发出去），
+    # 而且这条链会继续往下走、越走越离谱。
+    # 实测两处都是这个形状：`app/psc/_flow_alert_heal.yaml`（`replenish` 有 when、`verify` 没有）
+    # 与 nasa_pms 的 `_flow_tpm_alert_heal.yaml`（`triage` 有 when、`correct` 等没有）。
+    # 有了本判据，作者只需在**链首**写 `when` ✓。
+    missing = [k for k in (node.get("input") or []) if k not in state]
+    if missing:
+        return None
     output_key = node.get("output")
     max_loop = max(1, int(node.get("max_loop", 1)))
     ntype = node.get("type", "agent")
@@ -526,6 +547,11 @@ def run_flow(name: str, platform, user) -> dict:
         for nid, result in batch.items():
             node = node_by_id[nid]
             if result is None:
+                # ⚠ **跳过的节点也要标 done**（2026-09-25 修）：原来这里直接 `continue`，
+                # 于是它永远留在 `ready` 里 ⇒ 外层 `while len(done) < total` **永不结束**（死循环，
+                # 时间与 CPU 全烧光）。实测：`when` 恒真时看不出来（没有节点被跳过），
+                # 一旦条件**真的生效**就卡死 —— 条件分支越写对越卡，属最难发现的一类。
+                done.add(nid)
                 continue  # when 跳过：output 不写 state
             key = node.get("output")
             if key and result is not None:
