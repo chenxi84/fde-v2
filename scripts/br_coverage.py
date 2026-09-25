@@ -36,6 +36,15 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+# 输出编码：控制台代码页在本机默认是 GBK，而本脚本的结论里有 ✓/✗/⚠/⇒ 这类**非 GBK 码位** ——
+# 不钉住的话 print 自己会抛 UnicodeEncodeError（**崩在打印结论那一步**），
+# 而外层门禁把它显示成「该检查 FAIL」——像判据报了缺陷，其实判据根本没跑完。
+# 由 scripts/verify_test_script_encoding.py 守住别忘这一行（它的扫描范围已含 scripts/）。
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 ROOT = Path(__file__).resolve().parent.parent
 GROUP = "psc"
 
@@ -167,6 +176,14 @@ def br_output_fields(app):
     return out
 
 
+# **断言词汇表要认三种写法**（2026-09-25 加，实测 nasa_pms 因只认 `assert` 被判「79 条 BR 里 77 条未覆盖」）：
+#   · `assert <cond>`                       —— PSC 的写法
+#   · `record(<cond>, "…")`                 —— **⑤《测试执行.md》模板规定的记录器**
+#   · `rec(<cond>, "…")`                    —— ⑨ 前端范式（view 脚本）的记录器
+# 只认第一种时，按规格模板写的组会被整片误判成"BR 输出没被任何断言引用"。
+_HAS_ASSERT = re.compile(r"\bassert\b|(?<![\w.])(?:record|rec)\(")
+
+
 def tc_asserts():
     """{TC: [该步的代码文本]}（按 step() 切块）。"""
     out = defaultdict(list)
@@ -206,7 +223,7 @@ def evaluate():
             for disp, term in fields:
                 pat = re.compile(r'[\["(.]%s\b' % re.escape(term))
                 where = [tc for tc, blocks in tcs.items()
-                         if any(pat.search(b) and "assert" in b for b in blocks)]
+                         if any(pat.search(b) and _HAS_ASSERT.search(b) for b in blocks)]
                 got.append((disp, where))
             if all(w for _f, w in got):
                 stats["covered"] += 1

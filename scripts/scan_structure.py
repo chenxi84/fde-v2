@@ -42,6 +42,15 @@ import re
 import sys
 from pathlib import Path
 
+# 输出编码：控制台代码页在本机默认是 GBK，而本文件的判据文案里有 ⇒ 这类**非 GBK 码位** ——
+# 不钉住编码的话，print 自己会抛 UnicodeEncodeError（**崩在打印结论那一步**），
+# 在外层门禁里表现成「结构检查（不可达分支）FAIL」—— 像判据报了缺陷，其实判据根本没跑完。
+# 由 scripts/verify_test_script_encoding.py 守住别忘这一行（它的扫描范围已含 scripts/）。
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 
 def _project_root() -> Path:
     here = Path(__file__).resolve()
@@ -448,7 +457,13 @@ def _balanced(text, i):
     return text[i + 1:]
 
 
-_TC_RE = re.compile(r"(TC-[A-Z]+-\d+[a-z]?)")
+# 用例编号**两种形态都认**（2026-09-25 加；实测 nasa_pms 因此**崩在 .group() 上**）：
+#   · `TC-<字母>-<序号>`：组内**全局**编号（PSC / e2e：TC-DM-01 / TC-MC-04 / TC-ERR-20）
+#   · `TC-<序号>`：**逐应用内部**编号（nasa_pms 每个应用从 TC-01 重新起编）
+# 只认前者时，后者一条都匹配不到 ⇒ `_TC_RE.search(...)` 返回 None ⇒ 判据**崩在打印之前**，
+# 外层门禁把它显示成「结构检查 FAIL」—— 像报了缺陷，其实一条都没判（分母 0）。
+_TC_NUM = r"TC-(?:[A-Z]+-)?\d+[a-z]?"
+_TC_RE = re.compile(r"(" + _TC_NUM + ")")
 _CALL_RE = re.compile(r"\bcall\(\s*\"([a-z_][a-z0-9_]*)\"\s*,\s*\"([a-z_][a-z0-9_]*)\"\s*,")
 _DOC_CALL_RE = re.compile(r"`([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)\(([^`]*)\)`")
 
@@ -459,7 +474,7 @@ def _kwarg_names(args_text):
 
 # TC 编号**必须出现在行的开头**（前面只允许表格/列表标记），否则正文里"见 TC-ERR-05"这种
 # 交叉引用会被误当成"当前用例"。
-_TC_HEAD_RE = re.compile(r"^\s*[|>\-*#\s]*\**`?\s*(TC-[A-Z]+-\d+[a-z]?)")
+_TC_HEAD_RE = re.compile(r"^\s*[|>\-*#\s]*\**`?\s*(" + _TC_NUM + ")")
 
 
 def collect_doc_calls(spec: Path):
@@ -468,7 +483,7 @@ def collect_doc_calls(spec: Path):
     ⚠ 要**同时支持两种载体**（首版只认列表形态，于是 e2e 的表格形态一行都读不出来，
     分母为空、整条判据静默 SKIP）：
       · 列表载体（`app/psc`）：`- **TC-ERR-20 名称**`
-      · 表格载体（PRD 风格）：`| \`TC-MC-04\` 名称 | 步骤 | 期望 |`
+      · 表格载体（PRD 风格）：`` | `TC-MC-04` 名称 | 步骤 | 期望 | ``
     """
     out = {}
     cur = None
@@ -552,6 +567,15 @@ _DEGENERATE = re.compile(r"is not None|isinstance\(|len\(\w+\) >= 1")
 #   `assert r.get("success", 0) > 0` 误判成「退化断言」（**正则写窄 = 假红**）。
 #   放宽为「任何**字符串键**访问」+ 比较符。
 _BUSINESS = re.compile(r'\.get\(\s*"[a-z_]+"|\[\s*"[a-z_]+"\s*\]|==|!=|<=|>=|<|>')
+# 「有牙」的强信号：引用业务字段，或做了真比较（含 `==`/`!=`/`<`）—— 见 `check_vacuous_assertions`
+_STRONG = re.compile(r'\.get\(\s*"[a-z_]+"|\[\s*"[a-z_]+"\s*\]|==|!=|<|>|\bin\b')
+# 「退化」的形状：**首个实参**就是 `x is None` / `x is not None` / `isinstance(…)` / `len(…) >= 1`。
+# ⚠ 只判**首个实参**，不判"整行含这些词" —— 否则 `record(字段比较 and x is not None)` 这种
+#   常见的"保险式写法"会被误判成空转（2026-09-25 实测踩到，nasa_pms 假红 8 处）。
+_WEAK_ONLY = re.compile(
+    r'^\s*(?:assert|record|rec)\(\s*(?:[\w.\[\]\'"]+\s+is\s+(?:not\s+)?None\s*[,)]'
+    r'|isinstance\([^)]*\)\s*[,)]|len\([^)]*\)\s*>=\s*1\s*[,)]'
+    r'|True\s*[,)]|False\s*[,)])')
 
 
 def check_vacuous_assertions(group):
@@ -587,10 +611,21 @@ def check_vacuous_assertions(group):
                 continue          # 非用例步骤（前置造数 / 变异测试）不查
             tc_n += 1
             body = "\n".join(st["b"])
-            asserts = [l.strip() for l in st["b"] if re.match(r"\s*assert ", l)]
+            # **断言词汇表认三种写法**（2026-09-25 加）：`assert <cond>`（PSC）/
+            # `record(<cond>, "…")`（**⑤《测试执行.md》模板规定的记录器**）/ `rec(<cond>, "…")`（⑨ 范式）。
+            # 只认 `assert` 时，按规格模板写的组整片被判"无断言步"（实测 nasa_pms 报 114 处假警）。
+            asserts = [l.strip() for l in st["b"]
+                       if re.match(r"\s*(?:assert |(?<![\w.])(?:record|rec)\()", l)]
             has_err = "expect_err(" in body
-            ok = has_err or any(_BUSINESS.search(a) and not _DEGENERATE.search(a)
-                                for a in asserts)
+            # 口径 = **只有退化断言**才算空转（与本文档首段说明一致）。判定一条断言"有没有牙"：
+            #   有牙 = 引用了业务字段（`.get("k")` / `["k"]`）**或**做了真的比较（`==` `!=` `<` `>`）；
+            #   退化 = **首个实参本身**就是 `x is not None` / `isinstance(…)` / `len(…) >= 1` 这三种形状。
+            # ⚠ 2026-09-25 修（首版按行判 `_BUSINESS && !_DEGENERATE`，两处都错）：
+            #   · `record(ro["status"] == "obsolete" and call("get", …) is not None)`（**真比较 + is-not-None 保险**）
+            #     被整条否掉 ⇒ nasa_pms 报 8 处假红，其中断言其实很有牙；
+            #   · 而 `record(src.count("self.fde.call") == 0)` 这种"运算符不是 `<>=`"的又识别不了。
+            #   所以改成**看首个实参的形状**，不再"整行含退化词就否"。
+            ok = has_err or any(_STRONG.search(a) and not _WEAK_ONLY.match(a) for a in asserts)
             if not ok:
                 kind = "无任何断言" if not asserts else "只有退化断言（未引用业务字段）"
                 bad.append({"n": st["n"], "f": sp.name, "ln": st["ln"], "k": kind})

@@ -47,6 +47,7 @@ BR-15 只实现了四个分支的一部分。**"同一件事的所有路径"只�
 """
 import argparse
 import os
+import re
 import subprocess
 import sys
 import time
@@ -95,6 +96,17 @@ def _tiers(group):
             # 而且快（不起服务、不写盘）。由它守着的那个偏差见 `shadowdb._copy_all` 注释。
             ("影子库隔离自检", [PY, "scripts/verify_shadow_isolation.py"], False),
             ("智能体工具面结构", [PY, "scripts/verify_agent_tools.py"], False),
+            # **跨应用边对账**（2026-09-25 加）：架构声明的边 ↔ 代码里真实存在的边
+            # （后端 `self.fde.call` + 前端页面 `svc(...)` 字面量）。架构声明是第①步的产物、
+            # 下游全照它推，而"声明与实现不一致"**没有任何测试会红** —— 所以单独对账。
+            # 缺声明表的组：明示 SKIP（不是通过）。
+            ("跨应用边对账", [PY, "scripts/verify_app_edges.py", "--group", GROUP], False),
+            # **测试脚本输出编码**（2026-09-25 加）：抓「断言算完了、却崩在打印结果那一步」的脚本。
+            # 实测症状：`verify_view_nasa_pms_stakeholder.py` 在 GBK 控制台下崩在 print 上 ⇒
+            # FE-32 的断言结果**无人知晓**、其后用例**根本没跑**，而报出来的是 traceback（像断言失败）。
+            # 判据：`print/assert/raise` 的字符串里含**代码页编不出**的字符（GBK 现算：⇒ ✓ ✗ ⚠ − 编不出，
+            # 而 ≥ ≤ × → 在 GBK 里有码位 —— 硬编码符号清单会大面积误报）且文件未钉 `reconfigure(utf-8)`。
+            ("测试脚本输出编码", [PY, "scripts/verify_test_script_encoding.py"], False),
             # 结构检查：抓「参数被当 None 判定条件、但全部生产调用点都省略它 ⇒ 分支永不可达」。
             # 实测抓到 B-08（BR-06 富余档在生产上永不生效）—— 89 条用例全过、没有一条会红。
             # `--expect 0`：B-08 接线补齐后，「敏感参数全部调用点缺省」的命中数从 1 变 0。
@@ -112,11 +124,7 @@ def _tiers(group):
             # 那不是"这个组也体检过了"，而是"体检了另一个组"。故非 psc 时这一层直接跳过并说明。
             ("对账体检（含场景/穿透/注入）", [PY, "scripts/verify_psc_oracles.py", "--scenario"], False),
         ] if GROUP == "psc" else [],
-        "chain": [
-            # dirty=False：脚本内 `shadow_dbs()` + 副本上 `shadow_clear`，真库零字节接触（见文件头订正）
-            # `-u` 同理（挂住被强杀时不丢最后一屏输出，见 `_view_gates` 的注释）
-            ("后端主链端到端", [PY, "-u", f"app/{GROUP}/tests/verify_chain_{GROUP}.py"], False),
-        ] if (ROOT / f"app/{GROUP}/tests/verify_chain_{GROUP}.py").exists() else [],
+        "chain": _chain_gates(),
         "view": [],          # 运行时按 glob 填充
     }
 
@@ -127,6 +135,33 @@ DEFAULT_TIERS = ["static", "oracle"]
 # 每层单条命令的超时（秒）。参考量级：static 单条 <5s、oracle ~12s、chain ~2s、view 单脚本 20~40s；
 # 留 5~10 倍余量即够。**挂住的脚本要在几分钟内现形**，而不是拖满半小时。
 TIER_TIMEOUT = {"static": 300, "oracle": 900, "chain": 600, "view": 300}
+
+
+def _chain_gates():
+    """后端链测试：优先跑**编排器** `verify_chain_<组>.py`（一个入口跑全组）；
+    没有编排器时退化为逐个跑**分片** `verify_chain_<组>_<应用>.py`。
+
+    ⚠ 2026-09-25 加：此前这里是**精确名**判断（`verify_chain_<组>.py` 存在才有这一层），
+    而 nasa_pms 的产物是 11 个逐应用分片、**没有编排器** ⇒ `--tier chain --group nasa_pms`
+    取到**空层**，报告却照样显示"通过"（**判据静默塌成空集**）。同一天两处都补了：
+    编排器落地（`app/.../verify_chain_nasa_pms.py`，它自己也不是空集 —— 跑 0 分片会报错退出），
+    且这里放宽成"编排器优先、分片兜底"。
+    ⚠ `_part*.py` **排除**：那种片段没有模块级 import、靠父脚本 `exec` 进同一进程（PSC 形态），
+    单独跑必然崩 —— 它们由各自的编排器带。
+    """
+    d = ROOT / f"app/{GROUP}/tests"
+    orch = d / f"verify_chain_{GROUP}.py"
+    # dirty=False：脚本内 `shadow_dbs()` + 副本上清表，真库零字节接触（见文件头订正）；
+    # `-u` 同理（挂住被强杀时不丢最后一屏输出，见 `_view_gates` 的注释）
+    if orch.exists():
+        return [("后端主链端到端（编排器 · 全组）", [PY, "-u", str(orch.relative_to(ROOT))], False)]
+    out = []
+    for p in sorted(d.glob(f"verify_chain_{GROUP}_*.py")):
+        if p.stem.endswith("_part") or re.search(r"_part\d+$", p.stem):
+            continue
+        app = p.stem[len(f"verify_chain_{GROUP}_"):]
+        out.append((f"后端主链端到端 · {app}", [PY, "-u", str(p.relative_to(ROOT))], False))
+    return out
 
 
 def _view_gates(group=None):
@@ -182,6 +217,14 @@ def _port_up(port: int) -> bool:
 
 
 def main():
+    # Windows 控制台默认 GBK：本脚本与各子检查都打印 ✓/✗/⚠，不转码会
+    # `UnicodeEncodeError` **把跑手本身打挂**（失败明细变成异常、看不到真实结果）。
+    # 实测：2026-09-25 有一轮 4 个并行开发各自撞到，都只能靠外层 PYTHONIOENCODING 绕。
+    for _s in (sys.stdout, sys.stderr):
+        try:
+            _s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     ap = argparse.ArgumentParser(description="验证门禁跑手")
     ap.add_argument("--tier", action="append", choices=ORDER,
                     help="只跑指定层（可重复）；默认 static+oracle")
@@ -197,6 +240,18 @@ def main():
     TIERS["view"] = _view_gates()
     tiers = ORDER if args.all else (args.tier or DEFAULT_TIERS)
     gates = [(t, name, cmd, dirty) for t in tiers for name, cmd, dirty in TIERS[t]]
+    # **空层必须出声**（2026-09-25 加）：选了某一层，却一个检查项都没匹配到 ——
+    # 那不是"通过"，是**判据塌成了空集**（实测：`--tier chain --group nasa_pms` 曾取到 0 项
+    # 却报 PASS，因为该组当时只有逐应用分片、没有 `verify_chain_<组>.py`）。
+    # ⚠ 但**有些层按设计就是空的**（不是判据塌了）—— 那种要**说明**，不能一起判失败，
+    #   否则会把"设计如此"误报成红灯（本闸门自己也栽在"分不清空的原因"上）。
+    INTENTIONAL_EMPTY = {
+        "oracle": "本层是 PSC 专属（见 `_tiers` 注释：`verify_psc_oracles.py` 的应用清单与业务口径写死）"
+                  "—— 非 psc 组**按设计**没有它，空是预期的",
+    }
+    empty_all = [t for t in tiers if not TIERS[t]]
+    empty_intentional = [t for t in empty_all if t in INTENTIONAL_EMPTY]
+    empty_tiers = [t for t in empty_all if t not in INTENTIONAL_EMPTY]
 
     if args.list:
         for t in tiers:
@@ -227,8 +282,13 @@ def main():
         limit = TIER_TIMEOUT.get(tier, 1800)
         rc, out, retried = None, "", False
         for attempt in (1, 2):
+            # ⚠ `encoding="utf-8"` 只管**父进程怎么解码**；子进程默认按控制台码页（Windows GBK）
+            # 编码自己的 stdout ⇒ 子脚本打印 ✓/✗/⇒ 时**自身崩掉**，失败原因还被异常盖住
+            # （实测 2026-09-25：三个子检查都这么崩，一路靠外层 PYTHONIOENCODING 绕）。
+            # 这里把 `PYTHONIOENCODING` 传给子进程，与上面的 `encoding="utf-8"` 对齐。
             p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                 text=True, encoding="utf-8", errors="replace")
+                                 text=True, encoding="utf-8", errors="replace",
+                                 env={**os.environ, "PYTHONIOENCODING": "utf-8"})
             try:
                 out, _ = p.communicate(timeout=limit)
                 rc = p.returncode
@@ -270,7 +330,13 @@ def main():
         ok = rc == 0
         if retried and ok:
             print("  ⚠ 本次结果来自**重试**（第 1 次 Page crashed）—— 计数照记，别当成一次干净通过")
-        results.append((tier, name, ok, dt, out, is_dirty))
+        # 子检查可以输出 `VERIFY_NOTE: …` 声明自己的**覆盖范围/跳过原因** —— 带进表格，
+        # 否则"检查 PASS 但其实没覆盖本组"会静默（与 #45 的空层同一族）。
+        note = ""
+        for ln in (out or "").splitlines():
+            if ln.startswith("VERIFY_NOTE:"):
+                note = ln.split(":", 1)[1].strip()
+        results.append((tier, name, ok, dt, out, is_dirty, note))
         print(f"  {'✓ PASS' if ok else '✗ FAIL'}  {dt:.1f}s  (rc={rc})")
         if not ok:
             # 卡住类失败**要能被一眼认出来**：view 脚本的 watchdog 一旦报过现场，
@@ -287,16 +353,26 @@ def main():
     print("\n" + "=" * 78)
     print("门禁结果")
     print("=" * 78)
-    for tier, name, ok, dt, _, _ in results:
-        print(f"  {'✓' if ok else '✗'} [{tier:7s}] {dt:7.1f}s  {name}")
+    for row in results:
+        tier, name, ok, dt, _out, _dirty, note = row
+        extra = f"   ⚠ {note}" if note else ""
+        print(f"  {'✓' if ok else '✗'} [{tier:7s}] {dt:7.1f}s  {name}{extra}")
     bad = [r for r in results if not r[2]]
-    print(f"\n通过 {len(results) - len(bad)}/{len(results)}")
-    print(f"VERIFY_RESULT: {'PASS' if not bad else 'FAIL'}")
+    if empty_intentional:
+        for t in empty_intentional:
+            print(f"\n· [{t}] 0 项 —— {INTENTIONAL_EMPTY[t]}")
+    if empty_tiers:
+        print(f"\n⚠ 空层 {len(empty_tiers)} 个（选了这一层，却一个检查项都没匹配到 —— **空集不算通过**）：")
+        for t in empty_tiers:
+            print(f"  ⚠ [{t}] 0 项 —— 该组确实没有这类产物？还是 glob 与产物命名不一致？")
+    print(f"\n通过 {len(results) - len(bad)}/{len(results)}" + (f"（另有 {len(empty_tiers)} 个空层）" if empty_tiers else ""))
+    print(f"VERIFY_RESULT: {'PASS' if not bad and not empty_tiers else 'FAIL'}")
     if bad:
         print("\n失败的检查：")
-        for _, name, _, _, _, dirty in bad:
+        for row in bad:
+            name, dirty = row[1], row[5]
             print(f"  · {name}" + ("（该层会清业务数据，跑完记得重建演示环境）" if dirty else ""))
-    return 0 if not bad else 1
+    return 0 if not bad and not empty_tiers else 1
 
 
 if __name__ == "__main__":

@@ -14,6 +14,15 @@ from pathlib import Path
 
 import agentscope
 
+# 输出编码：控制台代码页在本机默认是 GBK，而本脚本的结论里有 ✓/✗/⚠/⇒ 这类**非 GBK 码位** ——
+# 不钉住的话 print 自己会抛 UnicodeEncodeError（**崩在打印结论那一步**），
+# 而外层门禁把它显示成「该检查 FAIL」——像判据报了缺陷，其实判据根本没跑完。
+# 由 scripts/verify_test_script_encoding.py 守住别忘这一行（它的扫描范围已含 scripts/）。
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 BASE = Path(agentscope.__file__).resolve().parent
 
 _FAILED = []  # 未命中/文件缺失的补丁名（脚本末尾据此决定退出码）

@@ -32,6 +32,15 @@ import re
 import sys
 from pathlib import Path
 
+# 输出编码：控制台代码页在本机默认是 GBK，而本脚本的结论里有 ✓/✗/⚠/⇒ 这类**非 GBK 码位** ——
+# 不钉住的话 print 自己会抛 UnicodeEncodeError（**崩在打印结论那一步**），
+# 而外层门禁把它显示成「该检查 FAIL」——像判据报了缺陷，其实判据根本没跑完。
+# 由 scripts/verify_test_script_encoding.py 守住别忘这一行（它的扫描范围已含 scripts/）。
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 ROOT = Path(__file__).resolve().parent.parent
 
 # 断言强度：未引用任何业务字段/值、只证明"没报错"的形态
@@ -121,7 +130,9 @@ def script_facts(group):
     out = {}
     for p in sorted((ROOT / "app" / group / "tests").glob("verify_view_*.py")):
         text = p.read_text(encoding="utf-8", errors="replace")
-        asserts = [ln.strip() for ln in text.splitlines() if re.match(r"\s*assert ", ln)]
+        # 断言计数同样认三种写法（口径与 `_ASSERT_RE` 一致；只认 assert 会把 rec 系的脚本数成 0）
+        asserts = [ln.strip() for ln in text.splitlines()
+                   if re.match(r"\s*(?:assert |(?<![\w.])(?:record|rec)\()", ln)]
         # 只认**标记行**里声明的编号，且排除缺口说明行（见 `_is_marker_line` / `_GAP_NOTE`）
         vts = set()
         for ln in text.splitlines():
@@ -216,7 +227,10 @@ def multiroot_xif():
 
 
 _STEP_RE = re.compile(r'\s*step\("([^"]+)"\)')
-_ASSERT_RE = re.compile(r"^\s*assert\s")
+# **断言词汇表要认三种写法**（2026-09-25 加，实测 nasa_pms 的 V7 因此假红 114 处）：
+#   `assert <cond>` / `record(<cond>, "…")`（⑤ 规格模板）/ `rec(<cond>, "…")`（⑨ 前端范式）
+# 只认 `assert` 时，按规格模板写的组会被判成"整片无断言步"。
+_ASSERT_RE = re.compile(r"^\s*(?:assert\s|(?<![\w.])(?:record|rec)\()")
 
 
 def step_assert_facts(group):
