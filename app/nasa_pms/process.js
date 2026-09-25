@@ -51,13 +51,13 @@ const DOMAINS = [
   { role: "nasa_requirements", name: "需求与验证域", apps: ["stakeholder", "requirement", "verification"] },
   { role: "nasa_risk_tpm", name: "风险与度量域", apps: ["risk", "technical_measure", "decision"] },
   { role: "nasa_cm", name: "配置与变更域", apps: ["configuration_item", "change_request", "interface"] },
-  { role: "nasa_planner", name: "计划与评审域", apps: ["tech_plan", "review"] },
+  { role: "nasa_planner", name: "计划与评审域", apps: ["tech_plan", "wbs", "review"] },
 ];
 const APP_LABEL = {
   stakeholder: "利益相关者", requirement: "需求", verification: "验证项",
   risk: "风险", technical_measure: "技术度量", decision: "决策",
   configuration_item: "配置项", change_request: "变更请求", interface: "接口",
-  tech_plan: "技术计划", review: "评审",
+  tech_plan: "技术计划", wbs: "WBS 元素", review: "评审",
 };
 
 /* 步骤间横向箭头（左→右）：域内应用有先后依赖，用它体现顺序（与 PSC 同款，暗色） */
@@ -110,7 +110,7 @@ export default function pageProcess() {
       self.loading = true;
 
       const call = (app, s, kw) => svc(app, s, kw || {}, { quiet: true }).catch(() => null);
-      const [req, ver, sh, risk, tpm, dec, ci, cr, itf, tp, rv, alerts] = await Promise.all([
+      const [req, ver, sh, risk, tpm, dec, ci, cr, itf, tp, rv, wb, alerts] = await Promise.all([
         call("requirement", "list", { page: 1, size: 1 }),
         call("verification", "list", { page: 1, size: 1 }),
         call("stakeholder", "list", { page: 1, size: 1 }),
@@ -122,6 +122,7 @@ export default function pageProcess() {
         call("interface", "list", { page: 1, size: 1 }),
         call("tech_plan", "list", { page: 1, size: 1 }),
         call("review", "list", { page: 1, size: 1 }),
+        call("wbs", "list", { page: 1, size: 1 }),
         call("technical_measure", "list_alerts", { status: "open", page: 1, size: 1 }),
       ]);
       const n = (r) => (r && r.total) ?? 0;
@@ -129,7 +130,8 @@ export default function pageProcess() {
       /* 关键闭环计数：用 filtered list 拿总数（各应用 list 都支持按状态筛） */
       const cnt = async (app, kw) => n(await call(app, "list", { ...kw, page: 1, size: 1 }));
       const [reqBase, reqPend, verPass, verFail, verClosed, riskClosed, ciRel, crReview,
-             itfFrozen, tpApproved, tpRevised, rvTrack, rvClosed, decDone] = await Promise.all([
+             itfFrozen, tpApproved, tpRevised, rvTrack, rvClosed, decDone,
+             wbsBase] = await Promise.all([
         cnt("requirement", { status: "baselined" }), cnt("requirement", { status: "pending_review" }),
         cnt("verification", { status: "passed" }), cnt("verification", { status: "failed" }),
         cnt("verification", { status: "closed" }), cnt("risk", {}),
@@ -137,6 +139,7 @@ export default function pageProcess() {
         cnt("interface", { status: "frozen" }), cnt("tech_plan", { status: "approved" }),
         cnt("tech_plan", { status: "revised" }), cnt("review", { status: "tracking" }),
         cnt("review", { status: "closed" }), cnt("decision", { status: "implemented" }),
+        cnt("wbs", { status: "baselined" }),
       ]);
       const riskTerminal = n(risk) - (await cnt("risk", { status: "identified" }))
         - (await cnt("risk", { status: "analyzing" })) - (await cnt("risk", { status: "mitigating" }));
@@ -157,6 +160,7 @@ export default function pageProcess() {
         tech_plan:    { sum: `${n(tp)} 份 · 已批准 ${tpApproved}`,
                         done: tpApproved > 0 },
         review:       { sum: `${n(rv)} 场 · 跟踪 ${rvTrack} / 已关 ${rvClosed}`, done: rvClosed > 0 },
+        wbs:          { sum: `${n(wb)} 个元素 · 已基线 ${wbsBase}`,   done: wbsBase > 0 },
       };
 
       self.stages = DOMAINS.map((d) => ({

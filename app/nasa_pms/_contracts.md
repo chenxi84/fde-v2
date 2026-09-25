@@ -513,3 +513,33 @@ update(ver_no*, method=None:string, phase=None:string, criteria=None:string, own
  "project_no": ""
 }
 ```
+
+
+## wbs
+
+### 服务契约
+```
+add_child(parent_no*, title*, kind='product':string, description=None:string, scope_ref=None:string, owner=None:string, req_nos=None:string)
+    — 在父元素下**按规则自动分配子号**并建立子元素（`parent.01` / `parent.02`…）。
+baseline(wbs_no*)
+    — 纳入基线（`draft → baselined`）或**落实变更**（`in_change → baselined`，版次 +1）。
+change(wbs_no*, change_no*, note=None:string)
+    — 对已基线的元素发起修订（`baselined → in_change`）。
+close(wbs_no*, note=None:string)
+    — 关闭元素（`baselined → closed`，终态）。
+coverage()
+    — 需求覆盖对账：返回**两侧缺口**（材料 §3.3.3 的交叉引用矩阵）。
+create(wbs_no*, title*, kind='product':string, parent_no=None:string, description=None:string, scope_ref=None:string, owner=None:string, req_nos=None:string)
+    — 建立一个元素（顶层或指定父元素）。落库为草稿状态，版次 0。
+get(wbs_no*)
+    — 按元素编号查询字典条目（全字段）；未命中返回 None，不抛异常。
+list(status=None:string, kind=None:string, parent_no=None:string, owner=None:string, keyword=None:string, page=None:integer, size=None:integer)
+    — 按状态 / 类型 / 父元素 / 责任方 / 关键词筛选，**分页返回 `{items, total}`**，默认按编号升序。
+tree(root=None:string)
+    — 返回嵌套树（`children` 递归）；`root` 为空时返回全部顶层。
+update(wbs_no*, title=None:string, description=None:string, scope_ref=None:string, spec_no=None:string, spec_title=None:string, charge_code=None:string, owner=None:string, req_nos=None:string, change_no=None:string)
+    — 修改字典字段（**编号不在可改字段里** —— BR-07）。
+```
+
+### get/list 示例
+（未造出样例 —— 字段请读源码 get()/INSERT 语句）

@@ -1,0 +1,276 @@
+<!-- 工作分解结构台账 · 独立创建（顶层元素自带 6 位编号）· 草稿/已基线/变更中/已关闭
+     元素树是本聚合内结构；控制账户/工作包/规划包是元素属性（不建 OBS） -->
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>工作分解结构台账</b>
+    <span class="muted">元素 · 编号 · 基线 · 变更</span>
+    <div class="right tagline" style="gap:8px">
+      <!-- ⚠ 枚举下拉的 <option> 一律**静态元素**：x-model + x-for 渲染的 option 会让回填静默停在第一项 -->
+      <select x-model="f_status" @change="search()" style="width:120px">
+        <option value="">全部状态</option>
+        <option value="draft">草稿</option>
+        <option value="baselined">已基线</option>
+        <option value="in_change">变更中</option>
+        <option value="closed">已关闭</option>
+      </select>
+      <select x-model="f_kind" @change="search()" style="width:130px">
+        <option value="">全部类型</option>
+        <option value="product">产品</option>
+        <option value="enabling">使能性工作</option>
+        <option value="ca">控制账户</option>
+        <option value="wp">工作包</option>
+        <option value="pp">规划包</option>
+      </select>
+      <input x-model="f_keyword" @keydown.enter="search()" placeholder="编号 / 名称 / 描述"
+        style="width:170px">
+      <button class="b-ghost b-sm" @click="search()">搜索</button>
+      <button class="b-ghost b-sm" @click="switchView(view === 'tree' ? 'list' : 'tree')"
+        x-text="view === 'tree' ? '列表视图' : '树视图'"></button>
+      <button class="b-pri b-sm" @click="openForm(null)">新建顶层元素</button>
+    </div>
+  </div>
+
+  <!-- 树视图：缩进索引（材料 §3.4.4 图 3-12） -->
+  <div data-role="tree" x-show="view === 'tree'" style="padding:4px 16px 14px">
+    <div class="muted" style="font-size:12px;margin-bottom:8px">
+      WBS 索引 —— 缩进体现层级；编号是点分十进制码（最多 7 层 / 24 字符，材料 §3.4.2）
+    </div>
+    <template x-if="!treeRows().length">
+      <div class="empty">还没有元素 —— 点「新建顶层元素」起一棵树</div>
+    </template>
+    <template x-for="r in treeRows()" :key="r.d.wbs_no">
+      <div class="sline" :style="'padding-left:' + (r.depth * 26) + 'px'">
+        <span class="mono" style="width:150px" x-text="r.d.wbs_no"></span>
+        <button class="b-link" @click="openDetail(r.d, 'view')" x-text="r.d.title"></button>
+        <span class="st" :class="stCls(r.d)" x-text="stName(r.d)"></span>
+        <span class="muted" x-text="kindOf(r.d)"></span>
+        <span class="muted mono" x-text="revText(r.d)"></span>
+      </div>
+    </template>
+  </div>
+
+  <div class="scroll-x" x-show="view === 'list'">
+    <table class="tbl tight">
+      <tr>
+        <th>元素编号</th><th>元素名称</th><th>类型</th><th>层级</th><th>父元素</th>
+        <th>状态</th><th>版次</th><th>责任方</th><th>范围定义出处</th><th>关联需求</th>
+        <th>内容描述</th><th>规范号</th><th>预算与报告号</th><th>修订授权</th><th>操作</th>
+      </tr>
+      <template x-if="!list.items.length">
+        <tr><td colspan="15" class="empty">暂无元素 —— 点「新建顶层元素」登记第一个工作包</td></tr>
+      </template>
+      <template x-for="d in list.items" :key="d.wbs_no">
+        <tr class="data">
+          <td><button class="b-link mono" @click="openDetail(d, 'view')" x-text="d.wbs_no"></button></td>
+          <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            x-text="d.title"></td>
+          <td x-text="kindOf(d)"></td>
+          <td class="mono" data-role="level" x-text="d.level"></td>
+          <td class="mono" x-text="parentText(d)"></td>
+          <td><span class="st" :class="stCls(d)" data-role="status" x-text="stName(d)"></span></td>
+          <td class="mono" x-text="revText(d)"></td>
+          <td x-text="dash(d.owner)"></td>
+          <td style="max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            x-text="dash(d.scope_ref)"></td>
+          <td class="mono" x-text="dash(d.req_nos)"></td>
+          <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            x-text="dash(d.description)"></td>
+          <td class="mono" x-text="dash(d.spec_no)"></td>
+          <td class="mono" x-text="dash(d.charge_code)"></td>
+          <td class="mono" x-text="dash(d.rev_authorization)"></td>
+          <!-- ⚠ 动作按钮用 x-show 隐藏（元素仍在 DOM），e2e 断言存在性必须带 `:visible` -->
+          <td>
+            <button class="b-link" @click="openDetail(d, 'view')">详情</button>
+            <button class="b-link" x-show="canAddChild(d)" @click="openForm(d)">加子元素</button>
+            <button class="b-link" x-show="canBaseline(d)" :disabled="needScope(d)"
+              @click="baseline(d)" x-text="baselineLabel(d)"></button>
+            <button class="b-link" x-show="canChange(d)" @click="openChange(d)">发起变更</button>
+            <button class="b-link" x-show="canClose(d)" @click="openClose(d)">关闭</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+</div></div>
+
+<!-- 详情 / 编辑 模态 -->
+<div x-show="modal.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:880px;max-height:88vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b x-text="modal.mode === 'edit' ? '编辑元素' : '元素详情（WBS 字典条目）'"></b>
+      <div class="right">
+        <button class="b-ghost b-sm" x-show="modal.mode === 'view' && canEdit(modal.d)"
+          @click="modal.mode = 'edit'">编辑</button>
+        <button class="b-pri b-sm" x-show="modal.mode === 'edit'" :disabled="modal.busy"
+          @click="saveEdit()">保存</button>
+        <button class="b-sm" @click="closeModal()">关闭</button>
+      </div>
+    </div>
+    <!-- ⚠ 必须用 x-if 而不是 x-show：x-show 只隐藏，Alpine **仍会求值**内部绑定，
+         而 modal.d 初始为 null → 满屏 "Cannot read properties of null" 报错（实测踩过） -->
+    <template x-if="modal.d">
+    <div class="bd">
+      <div class="muted" data-role="wbs-head" style="font-size:12px;margin-bottom:10px">
+        元素编号 <span class="mono" x-text="modal.d.wbs_no"></span>
+        <span x-text="' · 层级 ' + modal.d.level"></span>
+        <span x-text="' · 父元素 ' + parentText(modal.d)"></span>
+        <span x-text="' · 状态 '"></span><span class="st" :class="stCls(modal.d)" x-text="stName(modal.d)"></span>
+        <span data-role="head-rev" x-text="' · 版次 ' + revText(modal.d)"></span>
+      </div>
+      <div style="display:grid;grid-template-columns:110px 1fr;gap:8px 12px;align-items:center">
+        <label>元素名称</label>
+        <input data-role="modal-title" x-model="modal.d.title" :disabled="ro(modal.d)"
+          placeholder="必须按**产品**分解，不能用职能/组织/阶段/工种命名">
+        <label>元素类型</label>
+        <select x-model="modal.d.kind" :disabled="ro(modal.d)">
+          <option value="product">产品</option>
+          <option value="enabling">使能性工作</option>
+          <option value="ca">控制账户</option>
+          <option value="wp">工作包</option>
+          <option value="pp">规划包</option>
+        </select>
+        <label>内容描述</label>
+        <input x-model="modal.d.description" :disabled="ro(modal.d)"
+          placeholder="数量、相关工作、合同终项（材料 §3.4.4c）">
+        <label>范围定义出处</label>
+        <input data-role="modal-scope" x-model="modal.d.scope_ref" :disabled="ro(modal.d)"
+          placeholder="SOW / 需求文档的段落号（**没有它不得基线** —— BR-03）">
+        <label>关联规范</label>
+        <div style="display:flex;gap:8px">
+          <input x-model="modal.d.spec_no" :disabled="ro(modal.d)" placeholder="规范号" style="width:180px">
+          <input x-model="modal.d.spec_title" :disabled="ro(modal.d)" placeholder="规范名" style="flex:1">
+        </div>
+        <label>预算与报告号</label>
+        <input data-role="modal-charge" x-model="modal.d.charge_code" :disabled="ro(modal.d)" placeholder="Charge Code（§3.4.4h）">
+        <label>责任方</label>
+        <!-- 文本输入 + datalist 建议（**不用 select + x-for**：x-model 的选项回填会静默停在第一项）；
+             datalist **必须带 id**（不带 id 的裸 datalist 会让同名的按 id 查找的断言假通过，pitfalls #44） -->
+        <div>
+          <input x-model="modal.d.owner" list="wbs-sh-options" :disabled="ro(modal.d)"
+            placeholder="选填（可从利益相关者里选）" style="width:100%">
+          <datalist id="wbs-sh-options">
+            <template x-for="x in owners" :key="x.sh_no">
+              <option :value="x.name" x-text="x.name + ' · ' + (x.type || '')"></option>
+            </template>
+          </datalist>
+        </div>
+        <label>关联需求</label>
+        <!-- 交叉引用矩阵的 X（材料 §3.3.3）：本元素覆盖了哪些需求，逗号分隔 -->
+        <input data-role="modal-reqnos" x-model="modal.d.req_nos" :disabled="ro(modal.d)"
+          placeholder="逗号分隔，如 REQ-001,REQ-002（覆盖对账按它求差）">
+        <label>修订授权</label>
+        <div class="mono muted" data-role="modal-rev-auth" x-text="dash(modal.d.rev_authorization)"></div>
+        <label>当前变更号</label>
+        <div class="mono muted" x-text="dash(modal.d.change_no)"></div>
+        <label>关闭说明</label>
+        <div class="muted" x-text="dash(modal.d.close_note)"></div>
+      </div>
+      <div class="tagline" style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
+        <span x-show="modal.mode === 'edit'">编号落库后不可变（BR-07）—— 界面上没有编号输入框</span>
+        <span x-show="modal.mode === 'view' && inStatus(modal.d, ['baselined'])" class="muted">
+          已基线：改动需先「发起变更」进入变更中，改完再「落实变更」（BR-05）
+        </span>
+        <span x-show="modal.mode === 'view' && inStatus(modal.d, ['closed'])" class="muted">
+          已关闭（终态）：内容不可再改（BR-06）
+        </span>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>
+
+<!-- 新建（顶层元素 / 子元素）模态 -->
+<div x-show="form.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:41;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:620px;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b x-text="form.parent ? ('在 ' + form.parent.wbs_no + ' 下新增子元素') : '新建顶层元素'"></b>
+      <div class="right"><button class="b-sm" @click="form.open = false">取消</button></div>
+    </div>
+    <div class="bd" style="display:grid;grid-template-columns:110px 1fr;gap:8px 12px;align-items:center">
+      <label x-show="!form.parent">元素编号</label>
+      <input data-role="form-no" x-show="!form.parent" x-model="form.no" placeholder="6 位数字，如 123456（顶层）">
+      <label>元素名称</label>
+      <input data-role="form-title" x-model="form.title" placeholder="按产品命名，如「星务分系统」">
+      <label>元素类型</label>
+      <select x-model="form.kind">
+        <option value="product">产品</option>
+        <option value="enabling">使能性工作</option>
+        <option value="ca">控制账户</option>
+        <option value="wp">工作包</option>
+        <option value="pp">规划包</option>
+      </select>
+      <label>范围定义出处</label>
+      <input x-model="form.scope_ref" placeholder="选填；不填则不能基线（BR-03）">
+      <label>责任方</label>
+      <input x-model="form.owner" list="wbs-sh-options-form" placeholder="选填">
+      <datalist id="wbs-sh-options-form">
+        <template x-for="x in owners" :key="'f' + x.sh_no">
+          <option :value="x.name"></option>
+        </template>
+      </datalist>
+      <label>关联需求</label>
+      <input x-model="form.req_nos" placeholder="选填，逗号分隔">
+    </div>
+    <div class="tagline" style="padding:12px 16px;border-top:1px solid var(--line)">
+      <span class="muted" x-text="form.parent
+        ? '子号由系统按规则分配（父号 + .两位数字）'
+        : '顶层元素必须自带编号：6 位数字，最多 7 层、含句点不超过 24 字符（材料 §3.4.2）'"></span>
+      <div class="right">
+        <button class="b-pri b-sm" data-role="form-submit" :disabled="form.saving" @click="submitForm()">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 发起变更 模态（变更号候选只列已批准的 —— 后端还会再校验一次） -->
+<div x-show="fm.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:42;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:600px;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b>发起修订</b>
+      <div class="right"><button class="b-sm" @click="fm.open = false">取消</button></div>
+    </div>
+    <div class="bd" style="display:grid;grid-template-columns:110px 1fr;gap:8px 12px;align-items:center">
+      <label>元素</label><div class="mono" x-text="fm.d && fm.d.wbs_no"></div>
+      <label>变更请求</label>
+      <!-- 文本输入 + datalist 建议（候选来自跨应用只读，值仍是文本；datalist 必须带 id） -->
+      <div>
+        <input data-role="change-cr" x-model="fm.change_no" list="wbs-cr-options" placeholder="必须是**已批准**的变更请求号"
+          style="width:100%">
+        <datalist id="wbs-cr-options">
+          <template x-for="c in crs" :key="c.cr_no">
+            <option :value="c.cr_no" x-text="c.cr_no + ' · ' + (c.title || '')"></option>
+          </template>
+        </datalist>
+      </div>
+      <label>修订说明</label>
+      <input x-model="fm.note" placeholder="选填；会并入内容描述留痕">
+    </div>
+    <div class="tagline" style="padding:12px 16px;border-top:1px solid var(--line)">
+      <span class="muted">已基线的元素只能按已批准的变更修订（材料 §3.3.6）</span>
+      <div class="right">
+        <button class="b-pri b-sm" data-role="change-submit" :disabled="fm.saving" @click="submitChange()">发起</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 关闭 模态 -->
+<div x-show="cm.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:43;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:560px;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b>关闭元素</b>
+      <div class="right"><button class="b-sm" @click="cm.open = false">取消</button></div>
+    </div>
+    <div class="bd" style="display:grid;grid-template-columns:110px 1fr;gap:8px 12px;align-items:center">
+      <label>元素</label><div class="mono" x-text="cm.d && cm.d.wbs_no"></div>
+      <label>关闭说明</label>
+      <input x-model="cm.note" placeholder="选填；落库到 close_note，详情里可见">
+    </div>
+    <div class="tagline" style="padding:12px 16px;border-top:1px solid var(--line)">
+      <span class="muted">子元素必须全部关闭、且元素不在变更中（BR-06）</span>
+      <div class="right">
+        <button class="b-pri b-sm" data-role="close-submit" :disabled="cm.saving" @click="submitClose()">确认关闭</button>
+      </div>
+    </div>
+  </div>
+</div>

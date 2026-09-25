@@ -368,9 +368,12 @@ def main():
             page.wait_for_selector('[data-role="process-svg"] svg', timeout=15000)
             page.wait_for_timeout(600)
             n_nodes = page.locator('[data-role="process-svg"] svg g[data-page]').count()
-            assert n_nodes == 15, (
+            # ⚠ 期望值**现算**，别写死（原先写死 15 = 4 + 11，2026-09-26 并入第 12 个应用时当场红）：
+            #   业务页数（来自各页 PAGE_META）减去两个组级页（dashboard / process）＝ 应用节点数
+            n_apps = len(_expected_business_menu()) - 2
+            assert n_nodes == 4 + n_apps, (
                 f"VT-PROCESS-01 流程总览渲染 {n_nodes} 个可点节点"
-                "（4 个职能域胶囊 + 11 个应用节点 = 15）")
+                f"（4 个职能域胶囊 + {n_apps} 个应用节点）")
             p_txt = page.locator('[data-role="process-svg"]').inner_text()
             assert "绿" in p_txt and "灰" in p_txt, "VT-PROCESS-01 图例含「绿/灰」说明"
             # 读数来自各应用服务（不是硬编码）：需求节点带「已基线」、技术度量节点带「未了结告警」
@@ -425,7 +428,7 @@ def main():
             # VT-PROCESS-04 「已声明的流程」表：本组 3 条 flow 全部列出，且标出节点构成
             n_flows = page.locator('[data-role="flows"] tr.data').count()
             f_txt = page.locator('[data-role="flows"]').inner_text()
-            assert n_flows == 3, (
+            assert n_flows == 4, (
                 f"VT-PROCESS-04 「已声明的流程」列出 {n_flows} 条（= app/nasa_pms/_flow_*.yaml 份数）")
             # ⚠ 作用域：节点构成在表内；「去流程编排页」按钮在**表格上方的 tagline** 里（不在本表内）
             assert "智能体" in f_txt and "直调" in f_txt, (

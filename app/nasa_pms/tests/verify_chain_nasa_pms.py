@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """nasa_pms 后端链测试**运行入口**（编排器）—— 第⑤步产物。
 
-    python app/nasa_pms/tests/verify_chain_nasa_pms.py              # 跑全部 11 个分片
+    python app/nasa_pms/tests/verify_chain_nasa_pms.py              # 跑全部分片（12 个）
     python app/nasa_pms/tests/verify_chain_nasa_pms.py --app risk   # 只跑一个（逗号分隔可多个）
     python app/nasa_pms/tests/verify_chain_nasa_pms.py --list       # 只看有哪些分片
 
@@ -23,7 +23,7 @@ app/nasa_pms/tests/
 
 ## 编排器做三件事（也解释了它为什么必须存在）
 
-> ⚠ **2026-09-25 补**：此前**没有这个文件** —— 11 个分片各自绿，而
+> ⚠ **2026-09-25 补**：此前**没有这个文件** —— 12 个分片各自绿，而
 > `run_gates.py --group nasa_pms --tier chain` 的 glob 是**精确名** `verify_chain_nasa_pms.py`，
 > 匹配不到任何文件 ⇒ **chain 层是空的、却照样报"通过"**（判据静默塌成空集）。
 > 同时 ④《测试用例.md》第 9 行早就写着"执行：`python app/nasa_pms/tests/verify_chain_nasa_pms.py`" ——
@@ -56,9 +56,9 @@ except Exception:
 
 GROUP = "nasa_pms"
 
-# 与 architecture.md ① 同序（11 个聚合根）
+# 与 architecture.md ① 同序（12 个聚合根；wbs 是 2026-09-26 并入的第 12 个，排最后）
 ORDER = ["requirement", "risk", "configuration_item", "change_request", "review", "verification",
-         "technical_measure", "decision", "interface", "tech_plan", "stakeholder"]
+         "technical_measure", "decision", "interface", "tech_plan", "stakeholder", "wbs"]
 
 RESULT_RE = re.compile(r"用例\s*(\d+)\s*项\s*·\s*通过\s*(\d+)\s*·\s*失败\s*(\d+)")
 VERDICT_RE = re.compile(r"VERIFY_RESULT:\s*(\S+)")

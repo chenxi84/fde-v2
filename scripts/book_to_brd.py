@@ -3,9 +3,15 @@
 """书籍 → BRD 分章 md（一次性预处理，接在平台外）。
 
     python scripts/book_to_brd.py <组名> [--force] [--dry-run]
+    python scripts/book_to_brd.py <组名> --only 3404 --prefix WBS    # 往已有组里追加一本
 
 把 `app/<组>/book/` 下的原始书籍（pdf / epub / docx / html，或已是 md / txt）
 转成 Markdown，切成章，落到 `app/<组>/brd/第NN章-<标题>.md`。
+
+⚠ **一个组放多本书**：每本书的章号都从「第00章-前言」重启，
+不区分就会**后写的覆盖先写的**（且不报错），所以第二本起必须给 `--prefix`
+（`WBS-第01章-….md`）。`--only <子串>` 用来只处理其中一本 —— 不加它会把整个
+`book/` 重转一遍，把已冻结的那本书的章节文件也重写掉。
 
 切章依据依次降级（见 `_split_chapters`）：
   1. Markdown 一级标题 `# `（EPUB / 手写 md 的正常情况）
@@ -154,8 +160,13 @@ def _split_by_h1(text: str) -> list[tuple[str, str, bool]]:
 
 # 主体一级章节：`1.0 Introduction` / `4.0 System Design Processes`
 _BODY_SEC = re.compile(r"^([1-9])\.0\s+([A-Z][^\n]{2,70})$")
+# 另一种常见的章标题写法：`Chapter 1: Introduction`（NASA WBS 手册就是这种）。
+# ⚠ 它**优先于** `N.0`：这类书里 `2.2.1 …` 是**节**，拿它当章会把一章碎成几十份。
+_CHAPTER_KW = re.compile(r"^Chapter\s+([1-9]\d*)\s*[:.]?\s+([A-Z][^\n]{2,70})$")
 # 附录标题：`Appendix A: Acronyms` / `Appendix H: Integration Plan Outline`
-_APPENDIX = re.compile(r"^(Appendix\s+([A-Z]))\b[:.]?\s*(.{0,70})$")
+# ⚠ 要 `re.I`：有的手册全大写印「APPENDIX A: ACRONYM LISTING」（NASA WBS 手册就是），
+#   不忽略大小写这些附录不会单独成章、被并进上一章里（实测：49k 字符的一大坨）
+_APPENDIX = re.compile(r"^(Appendix\s+([A-Z]))\b[:.]?\s*(.{0,70})$", re.I)
 # 目录行末尾带页码，不是真标题
 _TAIL_PAGE = re.compile(r"\s\d{1,3}$")
 
@@ -219,30 +230,37 @@ def _split_by_structure(text: str) -> list[tuple[str, str, bool]]:
       4. 页眉页脚丢弃（保留首次出现）。
     """
     lines = text.splitlines()
-    marks: list[tuple[str, str]] = []          # [(标题, key)]
-    seen: set[str] = set()
-    in_appendix = False
 
-    for ln in lines:
-        s = ln.strip()
-        if not s or _TAIL_PAGE.search(s):      # 目录行/带页码 → 跳过
-            continue
-        ma = _APPENDIX.match(s)
-        if ma and _appendix_ok(s):
-            key, title = "app:" + ma.group(2), s
-            in_appendix = True
-        elif not in_appendix:
-            mb = _BODY_SEC.match(s)
-            if not mb:
+    def scan(rx: re.Pattern, tag: str) -> list[tuple[str, str]]:
+        """认一遍章标题（附录另算）。`seen` 去重，目录里的重复标题被丢掉。"""
+        marks: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        in_appendix = False
+        for ln in lines:
+            s = ln.strip()
+            if not s or _TAIL_PAGE.search(s):  # 目录行/带页码 → 跳过
                 continue
-            key, title = "sec:" + mb.group(1), s
-        else:
-            continue
-        if key in seen:
-            continue
-        seen.add(key)
-        marks.append((title, key))
+            ma = _APPENDIX.match(s)
+            if ma and _appendix_ok(s):
+                key, title = "app:" + ma.group(2), s
+                in_appendix = True
+            elif not in_appendix:
+                m = rx.match(s)
+                if not m:
+                    continue
+                key, title = f"{tag}:{m.group(1)}", s
+            else:
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            marks.append((title, key))
+        return marks
 
+    # 优先显式章标题（`Chapter N:`）；认不出才退到 `N.0` 编号章
+    marks = scan(_CHAPTER_KW, "chap")
+    if len([m for m in marks if m[1].startswith("chap")]) < 2:
+        marks = scan(_BODY_SEC, "sec")
     if len(marks) < 2:                          # 认不出结构 → 交给按长度切
         return []
 
@@ -359,6 +377,12 @@ def main() -> int:
     ap.add_argument("group", help="应用组名（对应 app/<组>/）")
     ap.add_argument("--force", action="store_true", help="覆盖 brd/ 下已有 .md（默认拒绝）")
     ap.add_argument("--dry-run", action="store_true", help="只列出会产出什么，不写文件")
+    ap.add_argument("--only", default="", metavar="子串",
+                    help="只处理文件名含该子串的书（一个组里放了多本书时用）")
+    ap.add_argument("--prefix", default="", metavar="前缀",
+                    help="章节文件名前缀，如 `--prefix WBS` → `WBS-第01章-….md`。"
+                         "**一个组放多本书时必须给** —— 每本书的章号都从「第00章-前言」重启，"
+                         "不给前缀就是后写的把那本覆盖掉，而且**不报错**")
     args = ap.parse_args()
 
     book_dir = APP_DIR / args.group / "book"
@@ -368,11 +392,19 @@ def main() -> int:
         return 1
 
     srcs = sorted(p for p in book_dir.rglob("*") if p.is_file() and not p.name.startswith("."))
+    if args.only:
+        srcs = [p for p in srcs if args.only in p.name]
+        if not srcs:
+            print(f"✗ book/ 里没有文件名含「{args.only}」的书"
+                  f"（现有：{'、'.join(p.name for p in book_dir.iterdir())}）")
+            return 1
     if not srcs:
         print(f"✗ {book_dir} 是空的")
         return 1
 
-    existing = sorted(brd_dir.glob("*.md")) if brd_dir.is_dir() else []
+    # 给了前缀就只认**本前缀**的既有产物：这样往一个已有组里**追加一本**书是允许的
+    existing = sorted(brd_dir.glob(f"{args.prefix}-*.md" if args.prefix else "*.md")) \
+        if brd_dir.is_dir() else []
     if existing and not args.force and not args.dry_run:
         print(f"✗ {brd_dir} 已有 {len(existing)} 份 .md（如 {'、'.join(p.name for p in existing[:3])} …）")
         print("  本脚本不覆盖已有 BRD。确认要重建请加 --force；")
@@ -432,6 +464,8 @@ def main() -> int:
             else:
                 seq += 1
                 name = _chapter_filename(seq, title)     # 正文从第01章起
+            if args.prefix:                              # 多本书：靠前缀分家（否则章号撞车）
+                name = f"{args.prefix}-{name}"
             print(f"     {name}  ({len(body)} 字符)")
             if args.dry_run:
                 continue

@@ -30,6 +30,9 @@ ROLES = [
     {
         "type": "nasa_planner",
         "label": "技术计划与评审主管",
-        "apps": ["nasa_pms/tech_plan", "nasa_pms/review"],
+        # ⚠ WBS 归这一域：材料里它是"技术规划过程的产物"（SE 手册 6.1 与 SEMP、进度表并列），
+        #   2026-09-26 并入。角色绑定的应用**必须有 HOWTOUSE.md**，否则 verify_agent_tools 查不到
+        #   （漏写不报错，只是静默地不注入 —— 所以 wbs 也补了那份文件）。
+        "apps": ["nasa_pms/tech_plan", "nasa_pms/wbs", "nasa_pms/review"],
     },
 ]

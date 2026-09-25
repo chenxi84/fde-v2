@@ -47,7 +47,8 @@ except Exception:
 
 GROUP = "nasa_pms"
 APPS = ["stakeholder", "requirement", "tech_plan", "configuration_item", "change_request",
-        "verification", "risk", "technical_measure", "review", "decision", "interface"]
+        "verification", "risk", "technical_measure", "review", "decision", "interface",
+        "wbs"]
 
 
 def clear():
@@ -357,6 +358,50 @@ def seed(pf):
          provider="总体设计部", consumer="运载火箭", icd_content="包络 2.2 m × 3.6 m；质量 ≤ 1200 kg",
          owner="总体设计部")
 
+    # ── ⑩ 工作分解结构（产品树 + 使能性工作 + 变更中 + 已收口）─────────────
+    # 先备一条**已批准**的变更（只有「已批准」能被 wbs.change 接受，BR-05）
+    call("change_request", "create", title="WBS 载荷分系统子项调整", requester="载荷分系统",
+         ci_nos=["CI-001"], description="载荷分系统下需调整子项划分，按配置控制流程走变更")
+    call("change_request", "analyze", cr_no="CR-004",
+         impact_analysis="仅影响 WBS 分解与工作包归属，不触发设计变更")
+    call("change_request", "submit_review", cr_no="CR-004")
+    call("change_request", "approve", cr_no="CR-004", comment="分解合理，同意实施",
+         approver="项目经理")
+
+    # 一棵三层的产品树；子号由系统按规则分配（**不手写**）
+    call("wbs", "create", wbs_no="400000", title="遥感卫星系统", scope_ref="SOW §3 整星范围",
+         owner="总体设计部", description="EO-3 遥感卫星，按产品分解")
+    call("wbs", "add_child", parent_no="400000", title="星务分系统", owner="星务分系统")
+    call("wbs", "add_child", parent_no="400000", title="载荷分系统", owner="载荷分系统")
+    # 使能性工作：不是产品，但计入了批准范围（材料 §3.2 图 3-2）；**故意不给范围出处**，
+    # 于是停在草稿 —— 演示"没有范围出处不得基线"（BR-03）
+    call("wbs", "add_child", parent_no="400000", title="地面支持系统", kind="enabling",
+         owner="总体设计部")
+    call("wbs", "add_child", parent_no="400000.01", title="星务计算机", owner="星务分系统")
+    call("wbs", "add_child", parent_no="400000.01.01", title="星务软件", kind="wp",
+         owner="星务分系统")
+    # 范围出处与需求覆盖（交叉引用矩阵的 X，材料 §3.3.3）
+    call("wbs", "update", wbs_no="400000.01", scope_ref="SOW §3.2 星务范围", req_nos="REQ-010")
+    call("wbs", "update", wbs_no="400000.02", scope_ref="SOW §3.3 载荷范围", req_nos="REQ-002")
+    call("wbs", "update", wbs_no="400000.01.01", scope_ref="SOW §3.2.1")
+    call("wbs", "update", wbs_no="400000.01.01.01", scope_ref="SOW §3.2.1.1")
+    # **自顶向下**基线（父未基线时子会被拒，BR-02）
+    for no in ("400000", "400000.01", "400000.02", "400000.01.01", "400000.01.01.01"):
+        call("wbs", "baseline", wbs_no=no)
+    # 变更中：已基线的元素用 CR-004 发起修订（改动挂上变更号，尚未落实）
+    call("wbs", "change", wbs_no="400000.02", change_no="CR-004",
+         note="载荷分系统子项划分调整，待落实")
+
+    # 另一棵小树：走完 基线 → 逐级收口（已关闭是终态）
+    call("wbs", "create", wbs_no="500000", title="地面站配套", scope_ref="SOW §4 地面段",
+         owner="地面站")
+    call("wbs", "add_child", parent_no="500000", title="天线阵")
+    call("wbs", "update", wbs_no="500000.01", scope_ref="SOW §4.1")
+    call("wbs", "baseline", wbs_no="500000")
+    call("wbs", "baseline", wbs_no="500000.01")
+    call("wbs", "close", wbs_no="500000.01", note="天线阵交付完成")
+    call("wbs", "close", wbs_no="500000", note="地面站配套整枝收口")
+
     return {
         "stakeholder": 5, "expectations": 4,
         "requirement": 13, "baselined": 4, "baseline_ver": "B1",
@@ -368,6 +413,8 @@ def seed(pf):
         "review": 3, "review_closed": 1, "review_tracking": 1,
         "decision": 3, "decision_decided": 2, "decision_implemented": 1,
         "interface": 4, "if_frozen": 1, "if_released": 2,
+        # WBS（2026-09-26 并入）：8 个元素 —— 已基线 4 / 变更中 1 / 已关闭 2 / 草稿 1
+        "wbs": 8, "wbs_baselined": 4, "wbs_in_change": 1, "wbs_closed": 2, "wbs_draft": 1,
     }
 
 

@@ -9,7 +9,7 @@
 最好别在浏览器里同时改同一批数据（那会撞 BR 校验，报错倒是会明确指出来）。
 
 与 PSC 演示环境的分工：
-  · 本脚本只负责**业务数据**（11 个聚合根的故事线）；
+  · 本脚本只负责**业务数据**（12 个聚合根的故事线；WBS 是 2026-09-26 并入的第 12 个）；
   · **智能体资产**（技能库 / 定时任务 / 集成接口）没有对应产物 —— nasa_pms 未声明
     `_roles.py` / `_flow_*.yaml`（九步法第⑩⑪步是可选增强），见 `README.md` §未做。
 """
@@ -62,7 +62,8 @@ def main() -> int:
     import demo_seed
 
     if not args.keep:
-        sys.stdout.write("\n① 清空本组 11 个应用库的表\n")
+        # 数量按 APPS 现算，别再写死 —— 加一个应用就漏一处（"11" 已经过时过一轮）
+        sys.stdout.write("\n① 清空本组 %d 个应用库的表\n" % len(demo_seed.APPS))
         demo_seed.clear()
     else:
         sys.stdout.write("\n① （--keep）跳过清空\n")
@@ -79,7 +80,8 @@ def main() -> int:
     sys.stdout.write("   设计态：%s\n" % {k: want[k] for k in ("requirement", "risk", "configuration_item",
                                                           "change_request", "verification",
                                                           "technical_measure", "review", "decision",
-                                                          "interface", "tech_plan", "stakeholder")})
+                                                          "interface", "tech_plan", "stakeholder",
+                                                          "wbs")})
 
     sys.stdout.write("\n③ 体检（verify_demo.py）\n")
     rc = subprocess.run([sys.executable, str(HERE / "verify_demo.py")]).returncode
@@ -92,7 +94,7 @@ def main() -> int:
         return subprocess.run([sys.executable, "main.py"], cwd=str(ROOT)).returncode
 
     sys.stdout.write("\n✓ 演示环境就绪。起服务：python main.py → http://127.0.0.1:4000 （admin/admin）\n"
-                     "  看板会显示各应用状态分布；11 个台账都有数据可点。\n")
+                     f"  看板会显示各应用状态分布；{len(demo_seed.APPS)} 个台账都有数据可点。\n")
     return 0
 
 

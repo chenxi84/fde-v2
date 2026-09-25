@@ -62,6 +62,13 @@ CHECKS = [
     ("decision.get(dec_no=DC-001)", "status", "implemented", "决策已实施"),
     ("decision.get(dec_no=DC-003)", "status", "weighing", "有权衡中的决策"),
     ("interface.get(if_no=IF-002)", "status", "frozen", "接口已冻结"),
+    # WBS（2026-09-26 并入）：四个状态档位各有样本，且**父子关系**可查
+    ("wbs.get(wbs_no=400000)", "status", "baselined", "整星 WBS 已基线（受配置控制）"),
+    ("wbs.get(wbs_no=400000.02)", "status", "in_change", "有一条挂在变更中的元素（变更号 CR-004）"),
+    ("wbs.get(wbs_no=400000.03)", "kind", "enabling", "有使能性工作样本（非产品但计入范围）"),
+    ("wbs.get(wbs_no=400000.03)", "status", "draft", "它没有范围出处 → 停在草稿（BR-03）"),
+    ("wbs.get(wbs_no=400000.01.01.01)", "kind", "wp", "最低层是工作包（第三层）"),
+    ("wbs.get(wbs_no=500000)", "status", "closed", "另一棵树走完基线→收口（终态）"),
     ("interface.get(if_no=IF-001)", "status", "released", "接口已发布"),
 ]
 COUNT_CHECKS = [
@@ -69,6 +76,7 @@ COUNT_CHECKS = [
     ("requirement", "list", {}, 13, "需求"),
     ("risk", "list", {}, 6, "风险"),
     ("technical_measure", "list", {}, 4, "技术度量"),
+    ("wbs", "list", {}, 8, "WBS 元素"),
 ]
 
 
