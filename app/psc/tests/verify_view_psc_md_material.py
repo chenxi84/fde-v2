@@ -47,6 +47,15 @@ users.seed_admin()
 # 首次登录强制改密（password_changed=0）会把 admin 拦去 /change-password；
 # 测试会话提前标记已改密，登录后直达首页。
 import sqlite3  # noqa: E402
+
+# 输出编码：控制台代码页在本机默认是 GBK，而断言文案里有 ⇒ / ✓ / ✗ / ⚠ / − 这类**非 GBK 码位** ——
+# 不钉住编码的话，print 自己会抛 UnicodeEncodeError（**崩在打印结果那一步**：断言算完了却报不出来，
+# 其后用例也不再执行 —— 实测 nasa_pms 的 stakeholder 脚本里有一条断言就这么"消失"过）。与 scripts/run_gates.py 给
+# 子进程设 PYTHONIOENCODING 同一根因；由 scripts/verify_test_script_encoding.py 守住别忘这一行。
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 try:
     auth_db = auth_db_path()
     if auth_db.exists():
