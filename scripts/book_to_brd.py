@@ -163,12 +163,34 @@ _BODY_SEC = re.compile(r"^([1-9])\.0\s+([A-Z][^\n]{2,70})$")
 # 另一种常见的章标题写法：`Chapter 1: Introduction`（NASA WBS 手册就是这种）。
 # ⚠ 它**优先于** `N.0`：这类书里 `2.2.1 …` 是**节**，拿它当章会把一章碎成几十份。
 _CHAPTER_KW = re.compile(r"^Chapter\s+([1-9]\d*)\s*[:.]?\s+([A-Z][^\n]{2,70})$")
+# 最后兜底：**裸章号 + 标题**（`4 Schedule Management Planning`）。
+# ⚠ 只在上面两种都认不出时才用（优先级最低）—— 否则会把别的书里的普通编号行当章标题。
+# ⚠ 长度放到 78：PDF 里长标题会**折行**（实测「2 NASA Schedule Management: Life Cycle,
+#   Requirements, and Best / Practices」被切成两行，标题只到 "…and Best"）。
+_BARE_CHAP = re.compile(r"^([1-9]\d?)\s{1,3}([A-Z][^\n]{2,78})$")
 # 附录标题：`Appendix A: Acronyms` / `Appendix H: Integration Plan Outline`
 # ⚠ 要 `re.I`：有的手册全大写印「APPENDIX A: ACRONYM LISTING」（NASA WBS 手册就是），
 #   不忽略大小写这些附录不会单独成章、被并进上一章里（实测：49k 字符的一大坨）
 _APPENDIX = re.compile(r"^(Appendix\s+([A-Z]))\b[:.]?\s*(.{0,70})$", re.I)
 # 目录行末尾带页码，不是真标题
 _TAIL_PAGE = re.compile(r"\s\d{1,3}$")
+
+
+def _bare_ok(s: str) -> bool:
+    """裸章号行的可用性判据（挡 PDF 里的三类假标题）。
+
+    实测踩到的三种：
+      · `3 SCoPe website, https://community.max.gov/…` —— **脚注**（带 URL）
+      · `54 CADRe/ONCE – Data Collection and Database.` —— 脚注（编号过大、带斜杠、以句点结尾）
+      · `4 O c t '1 4` —— 页脚日期被逐字加了空格
+    """
+    if "http" in s or "/" in s or s.endswith("."):
+        return False
+    body = s.split(None, 1)[1] if " " in s else ""
+    # 逐字加空格的乱码：连续出现 3 个以上"单字符词"
+    if len(re.findall(r"(?:^|\s)\S(?=\s|$)", body)) >= 3:
+        return False
+    return True
 
 
 def _appendix_ok(s: str) -> bool:
@@ -231,8 +253,8 @@ def _split_by_structure(text: str) -> list[tuple[str, str, bool]]:
     """
     lines = text.splitlines()
 
-    def scan(rx: re.Pattern, tag: str) -> list[tuple[str, str]]:
-        """认一遍章标题（附录另算）。`seen` 去重，目录里的重复标题被丢掉。"""
+    def scan(rx: re.Pattern, tag: str, ok=None) -> list[tuple[str, str]]:
+        """认一遍章标题（附录另算）。`seen` 去重，目录里的重复标题被丢掉。`ok` 是可选可用性判据。"""
         marks: list[tuple[str, str]] = []
         seen: set[str] = set()
         in_appendix = False
@@ -246,7 +268,7 @@ def _split_by_structure(text: str) -> list[tuple[str, str, bool]]:
                 in_appendix = True
             elif not in_appendix:
                 m = rx.match(s)
-                if not m:
+                if not m or (ok is not None and not ok(s)):
                     continue
                 key, title = f"{tag}:{m.group(1)}", s
             else:
@@ -258,9 +280,13 @@ def _split_by_structure(text: str) -> list[tuple[str, str, bool]]:
         return marks
 
     # 优先显式章标题（`Chapter N:`）；认不出才退到 `N.0` 编号章
+    # ⚠ 必须是**嵌套回退**，不能写成两个并列的 if —— 并列时第三级会在"第二级没用到"时
+    #   无条件覆盖第一级已经认出来的结果（实测：WBS 那本从 9 章掉回 5 章，附录全丢）。
     marks = scan(_CHAPTER_KW, "chap")
     if len([m for m in marks if m[1].startswith("chap")]) < 2:
         marks = scan(_BODY_SEC, "sec")
+        if len([m for m in marks if m[1].startswith("sec")]) < 2:
+            marks = scan(_BARE_CHAP, "bare", _bare_ok)   # 最后兜底，只在上面都认不出时用
     if len(marks) < 2:                          # 认不出结构 → 交给按长度切
         return []
 

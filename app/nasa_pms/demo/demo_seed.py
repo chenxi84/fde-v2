@@ -48,7 +48,7 @@ except Exception:
 GROUP = "nasa_pms"
 APPS = ["stakeholder", "requirement", "tech_plan", "configuration_item", "change_request",
         "verification", "risk", "technical_measure", "review", "decision", "interface",
-        "wbs"]
+        "wbs", "activity"]
 
 
 def clear():
@@ -402,6 +402,28 @@ def seed(pf):
     call("wbs", "close", wbs_no="500000.01", note="天线阵交付完成")
     call("wbs", "close", wbs_no="500000", note="地面站配套整枝收口")
 
+    # ── ⑪ 进度活动（活动网络 + 基线 + 实绩；挂在 WBS **叶子**上）──────────
+    # 一条单链网络：起始里程碑 → 编写 → 单元测试 → 完成里程碑（都在「星务软件」工作包下）
+    call("activity", "add_milestone", name="星务软件开工", wbs_no="400000.01.01.01",
+         phase="start", owner="星务分系统")
+    call("activity", "create", name="编写星务软件", wbs_no="400000.01.01.01",
+         duration_days=10, predecessors="ACT-001", owner="星务分系统")
+    call("activity", "create", name="星务软件单元测试", wbs_no="400000.01.01.01",
+         duration_days=5, predecessors="ACT-002", owner="测试组")
+    call("activity", "add_milestone", name="星务软件交付", wbs_no="400000.01.01.01",
+         predecessors="ACT-003", phase="finish")
+    # 另一条挂到「载荷分系统」叶子：**故意不连逻辑链** —— 演示"开口端"（体检会报出来）
+    call("activity", "create", name="载荷相机标定", wbs_no="400000.02",
+         duration_days=4, owner="载荷分系统")
+    # 基线：**显式给 project_start**，免得基线随"今天"漂（BR-07 的基准要可复现）
+    call("activity", "baseline", act_nos=["ACT-001", "ACT-002", "ACT-003", "ACT-004"],
+         project_start="2026-10-05")
+    # 实绩：一条已完成（演示 BR-08：基线不动）、一条进行中
+    call("activity", "record_progress", act_no="ACT-001", percent_complete=100,
+         actual_start="2026-10-05", actual_finish="2026-10-05")
+    call("activity", "record_progress", act_no="ACT-002", percent_complete=60,
+         actual_start="2026-10-06")
+
     return {
         "stakeholder": 5, "expectations": 4,
         "requirement": 13, "baselined": 4, "baseline_ver": "B1",
@@ -415,6 +437,9 @@ def seed(pf):
         "interface": 4, "if_frozen": 1, "if_released": 2,
         # WBS（2026-09-26 并入）：8 个元素 —— 已基线 4 / 变更中 1 / 已关闭 2 / 草稿 1
         "wbs": 8, "wbs_baselined": 4, "wbs_in_change": 1, "wbs_closed": 2, "wbs_draft": 1,
+        # 进度活动（2026-09-26 并入）：5 条 —— 已基线 4 / 已完成 1 / 进行中 1 / 计划 3
+        "activity": 5, "activity_baselined": 4, "activity_completed": 1,
+        "activity_in_progress": 1,
     }
 
 

@@ -69,6 +69,15 @@ CHECKS = [
     ("wbs.get(wbs_no=400000.03)", "status", "draft", "它没有范围出处 → 停在草稿（BR-03）"),
     ("wbs.get(wbs_no=400000.01.01.01)", "kind", "wp", "最低层是工作包（第三层）"),
     ("wbs.get(wbs_no=500000)", "status", "closed", "另一棵树走完基线→收口（终态）"),
+    # 进度活动（2026-09-26 并入）：三态齐，且**基线冻在派生日期上**、实绩没改基线
+    ("activity.get(act_no=ACT-001)", "status", "completed", "起始里程碑回填 100% → 已完成"),
+    ("activity.get(act_no=ACT-002)", "status", "in_progress", "有一条进行中的活动（60%）"),
+    ("activity.get(act_no=ACT-003)", "status", "planned", "有一条还没开工的活动"),
+    ("activity.get(act_no=ACT-004)", "kind", "milestone", "完成里程碑（工期恒 0）"),
+    ("activity.get(act_no=ACT-001)", "baseline_start", "2026-10-05",
+     "基线冻在**派生日期**上（不是手填的）"),
+    ("activity.get(act_no=ACT-005)", "baseline_start", None,
+     "有一条未基线的活动（它还是开口端）"),
     ("interface.get(if_no=IF-001)", "status", "released", "接口已发布"),
 ]
 COUNT_CHECKS = [
@@ -77,6 +86,7 @@ COUNT_CHECKS = [
     ("risk", "list", {}, 6, "风险"),
     ("technical_measure", "list", {}, 4, "技术度量"),
     ("wbs", "list", {}, 8, "WBS 元素"),
+    ("activity", "list", {}, 5, "进度活动"),
 ]
 
 

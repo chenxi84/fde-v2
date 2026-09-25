@@ -58,7 +58,8 @@ GROUP = "nasa_pms"
 
 # 与 architecture.md ① 同序（12 个聚合根；wbs 是 2026-09-26 并入的第 12 个，排最后）
 ORDER = ["requirement", "risk", "configuration_item", "change_request", "review", "verification",
-         "technical_measure", "decision", "interface", "tech_plan", "stakeholder", "wbs"]
+         "technical_measure", "decision", "interface", "tech_plan", "stakeholder", "wbs",
+         "activity"]
 
 RESULT_RE = re.compile(r"用例\s*(\d+)\s*项\s*·\s*通过\s*(\d+)\s*·\s*失败\s*(\d+)")
 VERDICT_RE = re.compile(r"VERIFY_RESULT:\s*(\S+)")

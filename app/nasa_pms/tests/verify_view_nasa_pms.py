@@ -425,11 +425,14 @@ def main():
               }).filter(x => x.tw > x.rw - 20)""")
             assert not _ovf, f"VT-PROCESS-05 有 {len(_ovf)} 处文字溢出节点：{_ovf[:3]}"
 
-            # VT-PROCESS-04 「已声明的流程」表：本组 3 条 flow 全部列出，且标出节点构成
+            # VT-PROCESS-04 「已声明的流程」表：本组每条 flow 都要列出，且标出节点构成
+            # ⚠ 期望值**现算**（`_flow_*.yaml` 的份数），别写死条数 —— 写死过一次（3→4→5 每加一条
+            #   都要来改测试，且改漏了就假红）
             n_flows = page.locator('[data-role="flows"] tr.data').count()
             f_txt = page.locator('[data-role="flows"]').inner_text()
-            assert n_flows == 4, (
-                f"VT-PROCESS-04 「已声明的流程」列出 {n_flows} 条（= app/nasa_pms/_flow_*.yaml 份数）")
+            n_expect = len(list((ROOT / "app" / "nasa_pms").glob("_flow_*.yaml")))
+            assert n_flows == n_expect, (
+                f"VT-PROCESS-04 「已声明的流程」列出 {n_flows} 条（= app/nasa_pms/_flow_*.yaml 份数 {n_expect}）")
             # ⚠ 作用域：节点构成在表内；「去流程编排页」按钮在**表格上方的 tagline** 里（不在本表内）
             assert "智能体" in f_txt and "直调" in f_txt, (
                 "VT-PROCESS-04 每条标出节点构成（智能体 N / 直调 N）")

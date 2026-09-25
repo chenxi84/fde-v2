@@ -81,7 +81,7 @@ def main() -> int:
                                                           "change_request", "verification",
                                                           "technical_measure", "review", "decision",
                                                           "interface", "tech_plan", "stakeholder",
-                                                          "wbs")})
+                                                          "wbs", "activity")})
 
     sys.stdout.write("\n③ 体检（verify_demo.py）\n")
     rc = subprocess.run([sys.executable, str(HERE / "verify_demo.py")]).returncode

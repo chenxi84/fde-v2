@@ -3,6 +3,42 @@
 > 字段以此文件与 `app/nasa_pms/<应用>/<应用>.py` 源码为准；list 示例取自库中现有数据（无数据项以源码为准；造数级样例经平台⑧契约冻结任务生成）。
 
 
+## activity
+
+### 服务契约
+```
+add_milestone(name*, wbs_no*, predecessors=None:string, owner=None:string, phase=None:string, note=None:string)
+    — 建里程碑（工期恒 0 的便捷入口 —— 里程碑是**事件**不是工作，§5.5.7.1）。
+baseline(act_nos*, project_start=None:string)
+    — 建立进度基线：把**派生日期**冻进 `baseline_start` / `baseline_finish`。
+change(act_no*, change_no*, note=None:string)
+    — 对已基线的活动发起修订：挂上**已批准**的变更号（跨应用只读校验 `change_request.get`）。
+check_network()
+    — 网络体检：返回四类**图论可判**的问题 + 一类跨应用问题。
+create(name*, wbs_no*, duration_days=1:integer, kind='activity':string, predecessors=None:string, owner=None:string, phase=None:string, note=None:string)
+    — 建一个活动（或汇总活动）。编号系统生成；`wbs_no` 必须是 **WBS 的叶子元素**。
+critical_path()
+    — 只取关键路径（浮时为 0 的活动，按最早开始排序）。
+get(act_no*)
+    — 按编号查活动；未命中返回 None，不抛异常。
+link(act_no*, predecessor_no*)
+    — 给活动加一条前置（逻辑链，完成→开始）。
+list(status=None:string, kind=None:string, wbs_no=None:string, owner=None:string, baselined=None:string, keyword=None:string, page=None:integer, size=None:integer)
+    — 按状态 / 类型 / 挂靠元素 / 责任方 / 是否已基线 / 关键词筛选，**分页返回 `{items,total}`**。
+record_progress(act_no*, percent_complete=None:integer, actual_start=None:string, actual_finish=None:string, note=None:string)
+    — 回填实绩：实际开始 / 完成 / 完成百分比。
+schedule_view(project_start=None:string)
+    — **派生排程**：正推最早日期、逆推最晚日期、算浮时、标关键路径。
+unlink(act_no*, predecessor_no*)
+    — 断掉一条前置。已基线的活动同样要走变更流程（BR-07）。
+update(act_no*, name=None:string, duration_days=None:integer, predecessors=None:string, wbs_no=None:string, owner=None:string, note=None:string, change_no=None:string)
+    — 改**计划字段**（名称 / 工期 / 前置 / 挂靠元素 / 责任方 / 备注）。
+```
+
+### get/list 示例
+（未造出样例 —— 字段请读源码 get()/INSERT 语句）
+
+
 ## change_request
 
 ### 服务契约
@@ -543,3 +579,26 @@ update(wbs_no*, title=None:string, description=None:string, scope_ref=None:strin
 
 ### get/list 示例
 （未造出样例 —— 字段请读源码 get()/INSERT 语句）
+
+### list 返回项示例
+```json
+{
+ "wbs_no": "400000",
+ "title": "遥感卫星系统",
+ "parent_no": null,
+ "level": 1,
+ "kind": "product",
+ "description": "EO-3 遥感卫星，按产品分解",
+ "scope_ref": "SOW §3 整星范围",
+ "spec_no": null,
+ "spec_title": null,
+ "charge_code": null,
+ "owner": "总体设计部",
+ "req_nos": null,
+ "rev_no": 0,
+ "rev_authorization": null,
+ "change_no": null,
+ "status": "baselined",
+ "close_note": null
+}
+```

@@ -1,0 +1,329 @@
+<!-- 进度活动台账 · IMS 里的活动 / 里程碑；日期是**派生量**（台账视图 + 排程视图两态） -->
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>进度活动台账</b>
+    <span class="muted">活动 · 逻辑链 · 基线 · 实绩</span>
+    <div class="right tagline" style="gap:8px">
+      <!-- ⚠ 枚举下拉的 <option> 一律**静态元素**：x-model + x-for 渲染的 option 会让回填静默停在第一项 -->
+      <select x-model="f_status" @change="search()" style="width:110px">
+        <option value="">全部状态</option>
+        <option value="planned">计划</option>
+        <option value="in_progress">进行中</option>
+        <option value="completed">已完成</option>
+      </select>
+      <select x-model="f_kind" @change="search()" style="width:110px">
+        <option value="">全部类型</option>
+        <option value="summary">汇总</option>
+        <option value="activity">活动</option>
+        <option value="milestone">里程碑</option>
+      </select>
+      <input x-model="f_keyword" @keydown.enter="search()" placeholder="编号 / 名称 / 挂靠元素"
+        style="width:170px">
+      <button class="b-ghost b-sm" @click="search()">搜索</button>
+      <button class="b-ghost b-sm" @click="runCheck()">网络体检</button>
+      <button class="b-ghost b-sm" @click="switchView(view === 'schedule' ? 'list' : 'schedule')"
+        x-text="view === 'schedule' ? '台账视图' : '排程视图'"></button>
+      <button class="b-pri b-sm" @click="openForm('activity')">新建活动</button>
+      <button class="b-sm" @click="openForm('milestone')">新建里程碑</button>
+    </div>
+  </div>
+
+  <!-- 网络体检面板：四类图论问题 + 一类跨应用问题（都是服务现算） -->
+  <div data-role="network-check" x-show="check" x-cloak style="padding:4px 16px 12px">
+    <div class="muted" style="font-size:12px;margin-bottom:6px">
+      网络体检 —— 开口端 / 冗余链接 / 环 / 工期异常 / 挂靠非叶子（材料 §5.5.8 的横向可追溯）
+    </div>
+    <div class="stats">
+      <div class="s"><div class="v" data-role="check-total" x-text="check ? check.total : 0"></div>
+        <div class="k">问题合计</div></div>
+      <div class="s"><div class="v" x-text="check ? check.open_ends.length : 0"></div><div class="k">开口端</div></div>
+      <div class="s"><div class="v" x-text="check ? check.redundant.length : 0"></div><div class="k">冗余链接</div></div>
+      <div class="s"><div class="v" x-text="check ? check.cycles.length : 0"></div><div class="k">环</div></div>
+      <div class="s"><div class="v" x-text="check ? check.non_leaf.length : 0"></div><div class="k">挂靠非叶子</div></div>
+    </div>
+    <template x-if="check && check.open_ends.length">
+      <div class="tagline" data-role="check-open-ends"
+        x-text="'开口端：' + check.open_ends.map(x => x.act_no + '（缺' + x.missing + '）').join('、')"></div>
+    </template>
+  </div>
+
+  <!-- 排程视图：**派生**日期 + 浮时 + 关键路径（不落库） -->
+  <div data-role="schedule" x-show="view === 'schedule'" x-cloak style="padding:4px 16px 14px">
+    <div class="muted" style="font-size:12px;margin-bottom:8px">
+      派生排程 —— 日期由**工期与逻辑链**正推（材料 §5.5.9.3）；工期按工作日计，不含节假日
+      <span x-show="schedule" x-text="schedule ? ('　·　项目起始 ' + schedule.project_start + '　完工 ' + schedule.project_finish) : ''"></span>
+    </div>
+    <table class="tbl tight">
+      <tr><th>活动编号</th><th>名称</th><th>类型</th><th>工期</th><th>最早开始</th>
+        <th>最早完成</th><th>最晚开始</th><th>浮时</th><th>关键路径</th></tr>
+      <template x-if="!schedule || !schedule.items.length">
+        <tr><td colspan="9" class="empty">还没有活动 —— 点「新建活动」建第一条</td></tr>
+      </template>
+      <template x-for="s in ((schedule && schedule.items) || [])" :key="s.act_no">
+        <tr class="data">
+          <td class="mono" x-text="s.act_no"></td>
+          <td x-text="s.name"></td>
+          <td x-text="kindName(s.kind)"></td>
+          <td class="mono" x-text="s.duration_days + ' 天'"></td>
+          <td class="mono" data-role="sch-start" x-text="s.early_start"></td>
+          <td class="mono" data-role="sch-finish" x-text="s.early_finish"></td>
+          <td class="mono muted" x-text="s.late_start"></td>
+          <td class="mono" data-role="sch-float" x-text="s.float_days"></td>
+          <td><span class="st" :class="s.critical ? 'st-amber' : 'st-slate'"
+            data-role="sch-critical" x-text="s.critical ? '关键路径' : '—'"></span></td>
+        </tr>
+      </template>
+    </table>
+  </div>
+
+  <div class="scroll-x" x-show="view === 'list'">
+    <table class="tbl tight">
+      <tr>
+        <th>活动编号</th><th>名称</th><th>类型</th><th>挂靠元素</th><th>工期</th><th>前置</th>
+        <th>状态</th><th>完成</th><th>基线</th><th>责任方</th><th>实绩</th><th>变更号</th><th>操作</th>
+      </tr>
+      <template x-if="!list.items.length">
+        <tr><td colspan="13" class="empty">暂无活动 —— 点「新建活动」或「新建里程碑」开始排程</td></tr>
+      </template>
+      <template x-for="d in list.items" :key="d.act_no">
+        <tr class="data">
+          <td><button class="b-link mono" @click="openDetail(d, 'view')" x-text="d.act_no"></button></td>
+          <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            x-text="d.name"></td>
+          <td x-text="kindOf(d)"></td>
+          <td class="mono" x-text="d.wbs_no"></td>
+          <td class="mono" data-role="duration" x-text="d.duration_days + ' 天'"></td>
+          <td class="mono" style="max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            x-text="dash(d.predecessors)"></td>
+          <td><span class="st" :class="stCls(d)" data-role="status" x-text="stName(d)"></span></td>
+          <td class="mono" x-text="(d.percent_complete || 0) + '%'"></td>
+          <td class="mono" style="max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            data-role="baseline" x-text="baseText(d)"></td>
+          <td x-text="dash(d.owner)"></td>
+          <td class="mono" x-text="dash(d.actual_start) + (d.actual_finish ? (' → ' + d.actual_finish) : '')"></td>
+          <td class="mono" x-text="dash(d.change_no)"></td>
+          <!-- ⚠ 动作按钮用 x-show 隐藏（元素仍在 DOM），e2e 断言存在性必须按可见性判 -->
+          <td>
+            <button class="b-link" @click="openDetail(d, 'view')">详情</button>
+            <button class="b-link" x-show="!baselined(d)" @click="openLink(d)">连前置</button>
+            <button class="b-link" x-show="!baselined(d)" @click="baseline(d)">基线</button>
+            <button class="b-link" x-show="baselined(d)" @click="openChange(d)">发起修订</button>
+            <button class="b-link" @click="openProgress(d)">回填实绩</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+</div></div>
+
+<!-- 详情 / 编辑 模态 -->
+<div x-show="modal.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:880px;max-height:88vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b x-text="modal.mode === 'edit' ? '编辑活动' : '活动详情'"></b>
+      <div class="right">
+        <button class="b-ghost b-sm" x-show="modal.mode === 'view' && canEdit(modal.d)"
+          @click="modal.mode = 'edit'">编辑</button>
+        <button class="b-pri b-sm" x-show="modal.mode === 'edit'" :disabled="modal.busy"
+          @click="saveEdit()">保存</button>
+        <button class="b-sm" @click="closeModal()">关闭</button>
+      </div>
+    </div>
+    <!-- ⚠ 必须用 x-if 而不是 x-show：x-show 只隐藏，Alpine **仍会求值**内部绑定，
+         而 modal.d 初始为 null → 满屏 "Cannot read properties of null" 报错 -->
+    <template x-if="modal.d">
+    <div class="bd">
+      <div class="muted" data-role="act-head" style="font-size:12px;margin-bottom:10px">
+        活动编号 <span class="mono" x-text="modal.d.act_no"></span>
+        <span x-text="' · 类型 ' + kindOf(modal.d)"></span>
+        <span x-text="' · 挂靠 '"></span><span class="mono" x-text="modal.d.wbs_no"></span>
+        <span x-text="' · 状态 '"></span><span class="st" :class="stCls(modal.d)" x-text="stName(modal.d)"></span>
+        <span data-role="head-baseline" x-text="' · 基线 ' + baseText(modal.d)"></span>
+      </div>
+      <div style="display:grid;grid-template-columns:110px 1fr;gap:8px 12px;align-items:center">
+        <label>名称</label>
+        <input data-role="modal-name" x-model="modal.d.name" :disabled="ro(modal.d)"
+          placeholder="名称必须唯一（BR-06）；离散活动名建议含动词（材料 §5.5.5）">
+        <label>工期（工作日）</label>
+        <input data-role="modal-duration" type="number" x-model="modal.d.duration_days"
+          :disabled="ro(modal.d)" placeholder="里程碑恒为 0">
+        <label>前置活动</label>
+        <div class="mono muted" x-text="dash(modal.d.predecessors)"></div>
+        <label>责任方</label>
+        <!-- 文本输入 + datalist 建议；datalist **必须带 id**（否则按 id 查找的断言会假通过） -->
+        <div>
+          <input x-model="modal.d.owner" list="act-sh-options" :disabled="ro(modal.d)"
+            placeholder="选填（可从利益相关者里选）" style="width:100%">
+          <datalist id="act-sh-options">
+            <template x-for="x in owners" :key="x.sh_no">
+              <option :value="x.name" x-text="x.name + ' · ' + (x.type || '')"></option>
+            </template>
+          </datalist>
+        </div>
+        <label>实绩</label>
+        <div class="mono muted"
+          x-text="dash(modal.d.actual_start) + ' → ' + dash(modal.d.actual_finish) + '　（' + (modal.d.percent_complete || 0) + '%）'"></div>
+        <label>变更号</label>
+        <div class="mono muted" data-role="modal-change" x-text="dash(modal.d.change_no)"></div>
+        <label>备注</label>
+        <input x-model="modal.d.note" :disabled="ro(modal.d)" placeholder="选填">
+      </div>
+      <div class="tagline" style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
+        <span x-show="modal.mode === 'view' && baselined(modal.d)" class="muted">
+          已基线：改计划字段要先「发起修订」挂上已批准的变更号（BR-07）；**回填实绩不受影响**（BR-08）
+        </span>
+        <span x-show="modal.mode === 'view' && !baselined(modal.d)" class="muted">
+          未基线：可以直接改；纳入基线后计划字段就锁住了
+        </span>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>
+
+<!-- 新建（活动 / 里程碑）模态 -->
+<div x-show="form.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:41;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:660px;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b x-text="form.kind === 'milestone' ? '新建里程碑' : '新建活动'"></b>
+      <div class="right"><button class="b-sm" @click="form.open = false">取消</button></div>
+    </div>
+    <div class="bd" style="display:grid;grid-template-columns:120px 1fr;gap:8px 12px;align-items:center">
+      <label>名称</label>
+      <input data-role="form-name" x-model="form.name" placeholder="如「装配舱板」（全组唯一）">
+      <label>挂靠的 WBS 元素</label>
+      <!-- 候选来自跨应用只读（wbs）；**只列叶子**（父元素不挂活动，BR-05） -->
+      <div>
+        <input data-role="form-wbs" x-model="form.wbs_no" list="act-wbs-options"
+          placeholder="只能挂**最底层**元素（BR-05）" style="width:100%">
+        <datalist id="act-wbs-options">
+          <template x-for="x in leaves" :key="x.wbs_no">
+            <option :value="x.wbs_no" x-text="x.wbs_no + ' · ' + (x.title || '')"></option>
+          </template>
+        </datalist>
+      </div>
+      <label>类型</label>
+      <select x-model="form.kind">
+        <option value="activity">活动</option>
+        <option value="milestone">里程碑</option>
+        <option value="summary">汇总</option>
+      </select>
+      <label>工期（工作日）</label>
+      <input data-role="form-duration" type="number" x-model="form.duration_days"
+        placeholder="里程碑恒为 0（填了会被拒）">
+      <label>前置活动</label>
+      <input x-model="form.predecessors" placeholder="选填，逗号分隔如 ACT-001（禁冗余、禁成环）">
+      <label>边界标记</label>
+      <select x-model="form.phase">
+        <option value="">（无）</option>
+        <option value="start">起始（允许没有前置）</option>
+        <option value="finish">完成（允许没有后续）</option>
+      </select>
+      <label>责任方</label>
+      <input x-model="form.owner" list="act-sh-options-form" placeholder="选填">
+      <datalist id="act-sh-options-form">
+        <template x-for="x in owners" :key="'f' + x.sh_no">
+          <option :value="x.name"></option>
+        </template>
+      </datalist>
+    </div>
+    <div class="tagline" style="padding:12px 16px;border-top:1px solid var(--line)">
+      <span class="muted">除起始 / 完成两个边界里程碑外，每个活动都要有前置与后续（BR-01，§5.5.8）</span>
+      <div class="right">
+        <button class="b-pri b-sm" data-role="form-submit" :disabled="form.saving"
+          @click="submitForm()">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 连前置 模态 -->
+<div x-show="lm.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:42;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:600px;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b>连前置（逻辑链）</b>
+      <div class="right"><button class="b-sm" @click="lm.open = false">取消</button></div>
+    </div>
+    <div class="bd" style="display:grid;grid-template-columns:120px 1fr;gap:8px 12px;align-items:center">
+      <label>活动</label><div class="mono" x-text="lm.d && lm.d.act_no"></div>
+      <label>前置活动</label>
+      <div>
+        <input data-role="link-pred" x-model="lm.predecessor_no" list="act-pred-options"
+          placeholder="如 ACT-001（禁冗余、禁成环）" style="width:100%">
+        <datalist id="act-pred-options">
+          <template x-for="x in list.items" :key="'p' + x.act_no">
+            <option :value="x.act_no" x-text="x.act_no + ' · ' + (x.name || '')"></option>
+          </template>
+        </datalist>
+      </div>
+    </div>
+    <div class="tagline" style="padding:12px 16px;border-top:1px solid var(--line)">
+      <span class="muted">冗余链接与环都会被拒（BR-02 / BR-03，材料 §5.5.8）</span>
+      <div class="right">
+        <button class="b-pri b-sm" data-role="link-submit" :disabled="lm.saving"
+          @click="submitLink()">连上</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 发起修订 模态（变更号候选只列已批准的） -->
+<div x-show="fm.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:43;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:620px;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b>发起修订</b>
+      <div class="right"><button class="b-sm" @click="fm.open = false">取消</button></div>
+    </div>
+    <div class="bd" style="display:grid;grid-template-columns:120px 1fr;gap:8px 12px;align-items:center">
+      <label>活动</label><div class="mono" x-text="fm.d && fm.d.act_no"></div>
+      <label>变更请求</label>
+      <div>
+        <input data-role="change-cr" x-model="fm.change_no" list="act-cr-options"
+          placeholder="必须是**已批准**的变更请求号" style="width:100%">
+        <datalist id="act-cr-options">
+          <template x-for="c in crs" :key="c.cr_no">
+            <option :value="c.cr_no" x-text="c.cr_no + ' · ' + (c.title || '')"></option>
+          </template>
+        </datalist>
+      </div>
+      <label>修订说明</label>
+      <input x-model="fm.note" placeholder="选填；会记进备注留痕">
+    </div>
+    <div class="tagline" style="padding:12px 16px;border-top:1px solid var(--line)">
+      <span class="muted">挂上变更号之后才可以改工期 / 逻辑链（BR-07，材料 §7.3）</span>
+      <div class="right">
+        <button class="b-pri b-sm" data-role="change-submit" :disabled="fm.saving"
+          @click="submitChange()">发起</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 回填实绩 模态（写集合里没有基线列 —— BR-08） -->
+<div x-show="pm.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:44;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:620px;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b>回填实绩</b>
+      <div class="right"><button class="b-sm" @click="pm.open = false">取消</button></div>
+    </div>
+    <div class="bd" style="display:grid;grid-template-columns:120px 1fr;gap:8px 12px;align-items:center">
+      <label>活动</label><div class="mono" x-text="pm.d && pm.d.act_no"></div>
+      <label>完成百分比</label>
+      <input data-role="progress-pct" type="number" x-model="pm.percent_complete" placeholder="0–100">
+      <label>实际开始</label>
+      <input data-role="progress-start" x-model="pm.actual_start" placeholder="YYYY-MM-DD，选填">
+      <label>实际完成</label>
+      <input data-role="progress-finish" x-model="pm.actual_finish"
+        placeholder="100% 时填了才算完成">
+      <label>备注</label>
+      <input x-model="pm.note" placeholder="选填">
+    </div>
+    <div class="tagline" style="padding:12px 16px;border-top:1px solid var(--line)">
+      <span class="muted">回填实绩**不修改基线**（BR-08，材料 §7.3：against that baseline）</span>
+      <div class="right">
+        <button class="b-pri b-sm" data-role="progress-submit" :disabled="pm.saving"
+          @click="submitProgress()">回填</button>
+      </div>
+    </div>
+  </div>
+</div>

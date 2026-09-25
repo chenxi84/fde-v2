@@ -1,7 +1,7 @@
 # nasa_pms 架构设计
 
 > 产出技能：`fde-aggregate-identification`（第①步，规格 `design-plus/架构设计.md`）
-> 输入：`brd/`（SE 手册 27 章 + WBS 手册 9 章）+ `本体对象.md`（实体提及清单）+ `术语表.md`
+> 输入：`brd/`（SE 手册 27 章 + WBS 手册 9 章 + 进度手册 10 章）+ `本体对象.md`（实体提及清单）+ `术语表.md`
 > 依据说明：本材料的**过程**（需求管理、风险管理、配置管理、决策分析…）决定了**要管理什么对象** ——
 > 聚合根来自「这些过程产出与跟踪的东西」，不是材料里出现过的所有名词（后者 2786 条，绝大多数是方法论步骤）。
 
@@ -23,6 +23,7 @@
 | 10 | 技术计划 | `tech_plan` | `TechPlan` | 计划类文档（SEMP、验证计划、集成计划…）的统一管理 | `plan_no` | 否 |
 | 11 | 利益相关者 | `stakeholder` | `Stakeholder` | 项目相关方及其期望 —— **主数据**，外部同步 | `sh_no` | **是** |
 | 12 | 工作分解结构元素 | `wbs` | `Wbs` | 项目工作的**产品导向层级分解**：一个元素 = 一块可计划、可归集、可跟踪的工作 | `wbs_no` | 否 |
+| 13 | 进度活动 | `activity` | `Activity` | IMS 里的一个**离散可度量工作单元**（活动 / 里程碑）：挂在 WBS 叶子元素上，带工期与逻辑链 | `act_no` | 否 |
 
 > 业务名**逐字取自 `app/nasa_pms/术语表.md`**（宽松匹配；如 `SEMP` → 「系统工程管理计划（SEMP）」写成一句话定义）。
 
@@ -188,6 +189,34 @@
 - **来源**：`NASA/SP-20250006071`《NASA WBS Handbook》(2025-06) —— SE 手册 6.1 把 WBS 的细则
   **外链**给这本书（当时是 SP-2010-3404），故它是本聚合的依据
 
+### 13. 进度活动 `activity` / `Activity`
+
+- **标识**：`act_no`（`ACT-001` 起，系统生成；活动名另有唯一性约束）
+- **核心属性**：名称、类型（汇总 / 活动 / 里程碑）、挂靠的 WBS 元素、**工期（工作日）**、
+  前置活动、责任方、状态、完成百分比、实绩（实际起止）、**基线日期**、变更号
+- **对外操作**：`create` / `add_milestone` / `update` / `link` / `unlink` / `baseline` / `change` /
+  `record_progress` / `get` / `list` / `schedule_view` / `critical_path` / `check_network`
+- **关键不变量**：
+  - **I-1 禁开口端** —— 除项目起始/完成两个边界里程碑外，每个活动与里程碑**至少一个前置、至少一个后续**
+    （§5.5.8「Every milestone and activity … should have at least one predecessor and at least one
+    successor (i.e., no "open ends")」）
+  - **I-2 禁冗余链接** —— A→B、B→C 时再连 A→C 即冗余，拒绝（§5.5.8 原文举的就是这个例子）
+  - **I-3 逻辑链完整且无环** —— 前置必须存在，且不得成环（成环则无可行执行序）
+  - **I-4 里程碑工期为 0**；活动工期 > 0（里程碑是**事件**，不是工作）
+  - **I-5 必须挂在 WBS 的叶子元素上** —— §5.5.7/§4.3「Tasks and events are identified for the effort
+    contained in **each lowest-level WBS element**」；父元素不挂活动（跨应用校验 `wbs.get` + 查子元素）
+  - **I-6 名称唯一**（§5.5.5「activity and milestone descriptions need to be **unique**」）
+  - **I-7 基线后改动走变更流程**：已基线的活动改工期/逻辑必须带**已批准**的变更号
+    （§7.3「The schedule baseline … is controlled through the P/p's change control process」）
+  - **I-8 回填实绩不动基线** —— `record_progress` 只写实绩与百分比，**不碰**基线日期
+    （§7.3「This procedure does not change any baseline data … but reports actuals and current
+    performance against that baseline」）
+- **引用的聚合**：`wbs`（挂靠，弱引用）、`change_request`（基线后修订）
+- **跨应用调用**：`wbs.get`（+ 查子元素判叶子）、`change_request.get`
+- **状态机**：`计划 planned → 进行中 in_progress → 已完成 completed`（基线是**正交维度**：
+  `baseline_start` 非空即已基线，不改状态）
+- **来源**：`NASA/SP-2010-3403`《NASA Schedule Management Handbook》(Rev 1, 2020)
+
 ---
 
 ## ③ 聚合关系图
@@ -242,6 +271,11 @@
 | `wbs` | `requirement.list` | 覆盖对账：找「有需求但无 WBS 元素」的那一侧（3.3.3 的交叉引用矩阵） | **后端** |
 | `wbs` | `change_request.list` | 「发起变更」的变更号候选（**只列已批准的**；值仍是文本，后端另做已批准校验） | **视图层**（页面 `svc(...)`） |
 | `wbs` | `stakeholder.list` | 「责任方」候选（值仍是**文本姓名**，后端不校验） | **视图层** |
+| `activity` | `wbs.get` + `wbs.list` | 挂靠校验：元素必须存在、**且是叶子**（父元素不挂活动） | **后端** |
+| `activity` | `change_request.get` | 基线后修订：校验变更号**已批准** | **后端** |
+| `activity` | `wbs.list` | 「挂靠元素」候选（值仍是文本 `wbs_no`） | **视图层** |
+| `activity` | `change_request.list` | 「变更号」候选（**只列已批准的**） | **视图层** |
+| `activity` | `stakeholder.list` | 「责任方」候选（值仍是文本） | **视图层** |
 
 > ⚠ **「视图层」这一列是本表的关键**（2026-09-25 加，由 `scripts/verify_app_edges.py` 对账）：
 > 这些边**只在前端页面的字面量 `svc(...)` 里存在**，后端**一个 `self.fde.call` 都没有** ——
@@ -268,6 +302,11 @@
    事务边界是版本与批准；WBS 的事务边界是**元素树 + 元素级修订**。二者合并会让"改一个元素"
    与"改一份计划的批准状态"互相锁死 —— 与决策 5 同一条理由。
 
+8. **进度活动独立成聚合，而非塞进 `wbs`**（2026-09-26 补）—— 材料把两者分得很清楚：WBS 提供**框架与
+   编码**，活动与里程碑挂在**最底层 WBS 元素**上，日期由**逻辑与工期**派生（§4.3 / §5.5.7）。事务边界
+   也不同：元素树按**产品**分解（改动是元素级变更），活动按**日期**排程（改动是进度基线）。合成一个，
+   "挪一个日期"与"改一次分解"会互相锁死 —— 与决策 5 同一条理由。
+
 ---
 
 ## ⑤ 待确认
@@ -277,3 +316,4 @@
 | 1 | ✅ **已裁决（2026-09-26）：管** —— WBS 作为**第 12 个聚合**纳入本组。依据为 `NASA/SP-20250006071`《NASA WBS Handbook》(2025-06)，已随 `book/` 入库、分章落在 `brd/WBS-第NN章-*.md`（9 章） | 已执行：`architecture.md` 第 12 张聚合根卡 + `wbs` 应用 |
 | 2 | **技术数据（Technical Data）** 是否独立成聚合？材料 6.6 节专门讲它，但本清单里"技术数据管理过程"是过程、数据项本身未抽出 | 决定是否加聚合 |
 | 3 | 基线（需求基线 / 配置基线）作为**状态**还是**独立实体**？本次按状态处理 | 影响 I-1/I-2 的落法 |
+| 4 | ✅ **已裁决（2026-09-26）：建进度侧** —— 依 `NASA/SP-2010-3403`《Schedule Management Handbook》(Rev 1)，作为**第 13 个聚合** `activity` 纳入本组；已随 `book/` 入库、分章落在 `brd/SCH-第NN章-*.md`（10 章） | 已执行：`architecture.md` 第 13 张卡 + `activity` 应用 |

@@ -38,6 +38,7 @@ const STATUS = {
   interface: { defined: "定义中", released: "已发布", changing: "变更中", frozen: "已冻结" },
   tech_plan: { draft: "草稿", in_review: "审批中", approved: "已批准", revised: "已修订" },
   wbs: { draft: "草稿", baselined: "已基线", in_change: "变更中", closed: "已关闭" },
+  activity: { planned: "计划", in_progress: "进行中", completed: "已完成" },
 };
 
 /* 状态 → 徽标色（**语义**映射，本页本地维护）：起始/中性 slate · 进行中 amber · 终态-好 green · 终态-坏 red */
