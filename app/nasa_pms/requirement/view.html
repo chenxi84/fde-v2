@@ -1,0 +1,175 @@
+<!-- 需求台账 · 独立创建（保留新建入口）· 派生/基线/作废 -->
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>需求台账</b>
+    <span class="muted">派生 · 基线 · 作废（记录保留）</span>
+    <div class="right tagline" style="gap:8px">
+      <select x-model="f_type" @change="search()" style="width:130px">
+        <option value="">全部类型</option>
+        <template x-for="t in types" :key="t[0]">
+          <option :value="t[0]" x-text="t[1]"></option>
+        </template>
+      </select>
+      <select x-model="f_status" @change="search()" style="width:130px">
+        <option value="">全部状态</option>
+        <option value="draft">草稿</option>
+        <option value="baselined">已基线</option>
+        <option value="obsolete">已废弃</option>
+      </select>
+      <button class="b-pri b-sm" @click="openForm()">新建需求</button>
+    </div>
+  </div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr><th>需求编号</th><th>标题</th><th>需求类型</th><th>验证方法</th><th>状态</th><th>责任人</th><th>操作</th></tr>
+      <template x-if="!list.items.length">
+        <tr><td colspan="7" class="empty">暂无需求 —— 点「新建需求」录入第一条</td></tr>
+      </template>
+      <template x-for="d in list.items" :key="d.req_no">
+        <tr class="data">
+          <td><button class="b-link mono" @click="openDetail(d, 'view')" x-text="d.req_no"></button></td>
+          <td x-text="d.title"></td>
+          <td x-text="typeName(d.req_type)"></td>
+          <td x-text="methodName(d.verify_method)"></td>
+          <td><span class="st" :class="'st-' + statusHue(d.status)" x-text="statusName(d.status)"></span></td>
+          <td x-text="dash(d.owner)"></td>
+          <td>
+            <button class="b-link" @click="openDetail(d, 'edit')">编辑</button>
+            <!-- 动作入口与服务端同口径：`submit_review` 只认草稿；纳入基线的前置门就是它 -->
+            <template x-if="d.status === 'draft'">
+              <button class="b-link" @click="submitReview(d)">提交评审</button>
+            </template>
+            <button class="b-link" x-show="d.status !== 'obsolete'" @click="obsolete(d)">作废</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:8px 16px" x-show="list && list.total > list.size">
+    <span class="muted" x-text="'共 ' + (list ? list.total : 0) + ' 条'"></span>
+    <div class="right tagline" style="gap:6px">
+      <button class="b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">上一页</button>
+      <span class="muted" x-text="'第 ' + (list ? list.page : 1) + ' 页'"></span>
+      <button class="b-sm" :disabled="list.page * list.size >= list.total" @click="list.load(list.page + 1)">下一页</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- 详情 / 编辑 模态 -->
+<div x-show="modal.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:640px;max-height:86vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b x-text="modal.mode === 'edit' ? '编辑需求' : '需求详情'"></b>
+      <div class="right"><button class="b-sm" @click="closeModal()">关闭</button></div>
+    </div>
+    <!-- ⚠ 必须用 x-if 而不是 x-show：x-show 只隐藏，Alpine **仍会求值**内部绑定，
+         而 modal.d 初始为 null → 满屏 "Cannot read properties of null" 报错（实测踩过） -->
+    <template x-if="modal.d">
+    <div class="bd">
+      <div class="muted" style="font-size:12px;margin-bottom:8px">
+        需求编号 <span class="mono" x-text="modal.d.req_no"></span>
+        <span x-show="modal.d && modal.d.baseline_ver" x-text="' · 基线 ' + modal.d.baseline_ver"></span>
+        <span x-show="modal.d && modal.d.change_no" x-text="' · 变更 ' + modal.d.change_no"></span>
+        <!-- 作废理由：`obsolete(reason=…)` 落库到 `void_reason`（2026-09-25 起留痕） -->
+        <span x-show="modal.d && modal.d.void_reason" x-text="' · 作废理由：' + modal.d.void_reason"></span>
+      </div>
+      <div style="display:grid;grid-template-columns:88px 1fr;gap:8px 12px;align-items:center">
+        <label>标题</label>
+        <input x-model="modal.d.title" :disabled="modal.mode === 'view' || locked(modal.d)">
+        <label>正文</label>
+        <textarea x-model="modal.d.statement" rows="4" :disabled="modal.mode === 'view' || (locked(modal.d) && !modal.changeNo)"></textarea>
+        <label>验证方法</label>
+        <select x-model="modal.d.verify_method" :disabled="modal.mode === 'view' || (locked(modal.d) && !modal.changeNo)">
+          <option value="inspection">检验</option><option value="analysis">分析</option><option value="demonstration">演示</option><option value="test">测试</option>
+        </select>
+        <label>责任人</label>
+        <!-- ⚠ 这里**不能**用 `<select>` + x-for 选项：`x-model` 在选项插入前就写完值，回填会静默
+             停在第一项（本组实测踩到，见 前端详设 附）。改为「文本输入 + datalist 建议」——
+             值就是文本、回填天然正确；候选来自跨应用 `stakeholder.list`（失败静默兜底为空）。 -->
+        <div>
+          <input x-model="modal.d.owner" list="sh-options-modal" placeholder="选填（可从利益相关者里选）"
+            :disabled="modal.mode === 'view'" style="width:100%">
+          <datalist id="sh-options-modal">
+            <template x-for="s in owners" :key="s.sh_no">
+              <option :value="s.name" x-text="s.name + ' · ' + s.sh_no"></option>
+            </template>
+          </datalist>
+        </div>
+        <!-- BR-04：已基线须填变更号才解锁 -->
+        <template x-if="modal.mode === 'edit' && locked(modal.d)">
+          <div style="display:contents">
+            <label style="color:var(--amber)">变更号</label>
+            <div>
+              <input x-model="modal.changeNo" placeholder="如 CR-001（BR-04：已基线需求须带变更号）" style="width:100%">
+              <div class="muted" style="font-size:11px;margin-top:2px">填了才解锁正文与验证方法；本次修改将记为该变更</div>
+            </div>
+          </div>
+        </template>
+      </div>
+      <div class="tagline" style="margin-top:12px" x-show="modal.mode === 'edit'">
+        <div class="right"><button class="b-pri b-sm" :disabled="modal.saving" @click="saveEdit()"
+          x-text="modal.saving ? '保存中…' : '保存'"></button></div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>
+
+<!-- 新建 模态 -->
+<div x-show="form.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:640px;max-height:86vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b>新建需求</b>
+      <div class="right"><button class="b-sm" @click="closeForm()">取消</button></div>
+    </div>
+    <!-- ⚠ 同详情模态：必须 x-if（x-show 仍会求值 null 上的绑定） -->
+    <template x-if="form.d">
+    <div class="bd">
+      <div style="display:grid;grid-template-columns:88px 1fr;gap:8px 12px;align-items:center">
+        <label>标题</label><input x-model="form.d.title" placeholder="一句话概括">
+        <label>正文</label><textarea x-model="form.d.statement" rows="3" placeholder="应可验证（材料附录 C）"></textarea>
+        <label>需求类型</label>
+        <select x-model="form.d.req_type">
+          <option value="system">系统需求</option><option value="technical">技术需求</option><option value="interface">接口需求</option><option value="derived">派生需求</option>
+        </select>
+        <!-- BR-02：类型=派生 时上游需求必填 -->
+        <template x-if="form.d.req_type === 'derived'">
+          <div style="display:contents">
+            <label style="color:var(--amber)">上游需求</label>
+            <!-- 文本输入 + datalist 建议（**不用 select + x-for**：回填会静默停第一项）；
+                 候选来自**本应用自身**的 requirement.list，值仍是 req_no 文本（BR-02 只校验非空） -->
+            <div>
+              <input x-model="form.d.source_req_no" list="req-options-form" placeholder="必填（BR-02），如 REQ-001" style="width:100%">
+              <datalist id="req-options-form">
+                <template x-for="r in reqs" :key="r.req_no">
+                  <option :value="r.req_no" x-text="r.req_no + ' · ' + (r.title || '')"></option>
+                </template>
+              </datalist>
+            </div>
+          </div>
+        </template>
+        <label>验证方法</label>
+        <select x-model="form.d.verify_method">
+          <option value="">请选择（必选）</option>
+          <option value="inspection">检验</option><option value="analysis">分析</option><option value="demonstration">演示</option><option value="test">测试</option>
+        </select>
+        <label>责任人</label>
+        <div>
+          <input x-model="form.d.owner" list="sh-options-form" placeholder="选填（可从利益相关者里选）"
+            style="width:100%">
+          <datalist id="sh-options-form">
+            <template x-for="s in owners" :key="s.sh_no">
+              <option :value="s.name" x-text="s.name + ' · ' + s.sh_no"></option>
+            </template>
+          </datalist>
+        </div>
+      </div>
+      <div class="tagline" style="margin-top:12px">
+        <span class="muted" style="font-size:11px">未选验证方法或（派生时）未填上游需求时不可提交</span>
+        <div class="right"><button class="b-pri b-sm" :disabled="!canSubmit() || form.saving" @click="saveForm()"
+          x-text="form.saving ? '提交中…' : '提交'"></button></div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>

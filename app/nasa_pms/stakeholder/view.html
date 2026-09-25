@@ -1,0 +1,288 @@
+<!-- 利益相关者台账 · 主数据（外部同步：机构与人员）· 只读引用 + 期望随相关方维护
+     ⚠ 本页**没有「新建」按钮**（唯一入口是「同步相关方」= upsert）、**没有删除**、**没有状态徽标**（卡片 11：状态机 无） -->
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>利益相关者台账</b>
+    <span class="muted">主数据 · 外部同步（机构与人员）· 期望随相关方维护（卡片 I-1）</span>
+    <div class="right tagline" style="gap:8px">
+      <!-- ⚠ 枚举下拉的 option **必须是静态元素**：x-model + x-for 生成选项时，
+           数据→DOM 的回填会静默停在第一项（effect 跑在选项插入之前、此后不再重跑） -->
+      <select x-model="f_sh_type" data-role="f-type" @change="search()" style="width:130px">
+        <option value="">全部类型</option>
+        <option value="customer">客户</option>
+        <option value="contractor">承包商</option>
+        <option value="internal_org">内部组织</option>
+      </select>
+      <input x-model="f_keyword" data-role="f-keyword" @keydown.enter="search()"
+        placeholder="编号 / 名称 / 机构 / 职责（模糊）" style="width:220px">
+      <button class="b-ghost b-sm" @click="search()">搜索</button>
+      <!-- 「同步」而不是「新建」：本页新增的是"从外部主数据同步进来的一条"（upsert） -->
+      <button class="b-pri b-sm" data-role="btn-sync" @click="openSync()">同步相关方</button>
+    </div>
+  </div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr>
+        <th>相关方编号</th><th>名称</th><th>类型</th><th>职责</th><th>所属机构</th>
+        <th>期望 已承诺/总</th><th>联系方式</th><th>所属项目</th><th>操作</th>
+      </tr>
+      <template x-if="!list.items.length">
+        <tr><td colspan="9" class="empty">暂无利益相关者 —— 点「同步相关方」把外部主数据里的相关方同步进来</td></tr>
+      </template>
+      <template x-for="d in list.items" :key="d.sh_no">
+        <tr class="data">
+          <td><button class="b-link mono" data-role="sh-no" @click="openDetail(d, 'view')"
+            x-text="d.sh_no"></button></td>
+          <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            data-role="sh-name" x-text="d.name"></td>
+          <!-- 业务名唯一来源是术语表：类型列上码下名两行（CUSTOMER / 客户） -->
+          <td>
+            <span class="mono" data-role="sh-type" x-text="typeCode(d.sh_type)"></span>
+            <div class="muted" style="font-size:11px" x-text="typeName(d.sh_type)"></div>
+          </td>
+          <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            x-text="dash(d.duty)"></td>
+          <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            data-role="sh-org" x-text="dash(d.org)"></td>
+          <td class="mono" data-role="exp-count" x-text="expCount(d)"></td>
+          <td x-text="dash(d.contact)"></td>
+          <td x-text="dash(d.project_no)"></td>
+          <!-- ⚠ 动作按钮用 x-show 隐藏（元素仍在 DOM），e2e 断言存在性必须带 `:visible` -->
+          <td>
+            <button class="b-link" @click="openDetail(d, 'view')">详情</button>
+            <button class="b-link" data-role="row-sync" @click="openSync(d)">维护</button>
+            <button class="b-link" data-role="row-add-exp"
+              @click="openAddExp(d.sh_no, d.name)">加期望</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:8px 16px" x-show="list && list.total > list.size">
+    <span class="muted" x-text="'共 ' + (list ? list.total : 0) + ' 条'"></span>
+    <div class="right tagline" style="gap:6px">
+      <button class="b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">上一页</button>
+      <span class="muted" x-text="'第 ' + (list ? list.page : 1) + ' 页'"></span>
+      <button class="b-sm" :disabled="list.page * list.size >= list.total" @click="list.load(list.page + 1)">下一页</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- 详情 / 维护 模态（模态根带 data-role，供 e2e 精确 scope —— 好过按 `.modal-mask:last` 猜） -->
+<div x-show="modal.open" x-cloak data-role="detail-modal" class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:900px;max-height:88vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b x-text="modal.mode === 'edit' ? '维护相关方' : '利益相关者详情'"></b>
+      <div class="right"><button class="b-sm" @click="closeModal()">关闭</button></div>
+    </div>
+    <!-- ⚠ 必须用 x-if 而不是 x-show：x-show 只隐藏，Alpine **仍会求值**内部绑定，
+         而 modal.d 初始为 null → 满屏 "Cannot read properties of null" 报错（实测踩过） -->
+    <template x-if="modal.d">
+    <div class="bd">
+      <!-- 只读信息条：`data-role` 供 e2e 精确断言这一段（不像 select 会把全部 option 文本带进 inner_text）
+           ⚠ 主数据没有状态位 —— 这一段里**没有**状态徽标，那是刻意的（卡片 11：状态机 无） -->
+      <div class="muted" data-role="sh-head" style="font-size:12px;margin-bottom:10px">
+        相关方编号 <span class="mono" data-role="head-no" x-text="modal.d.sh_no"></span>
+        <span x-text="' · 类型 '"></span>
+        <span class="mono" x-text="typeCode(modal.d.sh_type)"></span>
+        <span x-text="' '"></span><span data-role="head-type" x-text="typeName(modal.d.sh_type)"></span>
+        <span data-role="head-exp"
+          x-text="' · 期望 ' + (modal.d.committed_total || 0) + '/' + (modal.d.expectation_total || 0)"></span>
+        <span x-text="' · 所属机构 '"></span>
+        <span data-role="head-org" x-text="dash(modal.d.org)"></span>
+      </div>
+      <div style="display:grid;grid-template-columns:96px 1fr;gap:8px 12px;align-items:center">
+        <label>编号</label>
+        <!-- 编号由外部来源系统给定、落库不可变（BR-01）—— 这里恒只读 -->
+        <div class="muted mono" x-text="modal.d.sh_no"></div>
+        <label>名称</label>
+        <input x-model="modal.d.name" :disabled="modal.mode === 'view'">
+        <label>相关方类型</label>
+        <!-- ⚠ 静态 option：这个 select 的值要由**数据回填**（openDetail 后 modal.d.sh_type），
+             用 x-for 生成选项会静默停在第一项 -->
+        <select x-model="modal.d.sh_type" :disabled="modal.mode === 'view'">
+          <option value="customer">客户</option>
+          <option value="contractor">承包商</option>
+          <option value="internal_org">内部组织</option>
+        </select>
+        <label>职责</label>
+        <input x-model="modal.d.duty" placeholder="选填：在项目里承担什么"
+          :disabled="modal.mode === 'view'">
+        <label>所属机构</label>
+        <input x-model="modal.d.org" placeholder="选填：机构名（人员相关方靠它归口）"
+          :disabled="modal.mode === 'view'">
+        <label>联系方式</label>
+        <input x-model="modal.d.contact" placeholder="选填：找得到人（材料 §4.1.1.2.2 的 elicit 手段）"
+          :disabled="modal.mode === 'view'">
+        <label>所属项目</label>
+        <input x-model="modal.d.project_no" :disabled="modal.mode === 'view'">
+      </div>
+
+      <!-- 期望清单（聚合内子表：无独立标识，随相关方一起维护 —— 卡片 I-1） -->
+      <div class="muted" style="font-size:12px;font-weight:700;margin:14px 0 6px"
+        data-role="exp-title"
+        x-text="'期望清单（' + (modal.d.expectation_total || 0) + ' 条 · 已获承诺 '
+          + (modal.d.committed_total || 0) + ' 条）'"></div>
+      <div class="scroll-x">
+        <table class="tbl tight">
+          <tr><th>序号</th><th>期望陈述</th><th>类别</th><th>期望来源</th><th>度量口径</th>
+            <th>承诺</th><th>备注</th><th>操作</th></tr>
+          <template x-if="!expsOf(modal.d).length">
+            <tr><td colspan="8" class="empty">还没有期望 —— 点「加期望」登记第一条（期望随相关方维护，卡片 I-1）</td></tr>
+          </template>
+          <template x-for="e in expsOf(modal.d)" :key="e.seq">
+            <tr class="sub" data-role="exp-row">
+              <td class="mono" data-role="exp-seq" x-text="e.seq"></td>
+              <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                data-role="exp-statement" x-text="e.statement"></td>
+              <td>
+                <span class="mono" data-role="exp-kind" x-text="kindCode(e.kind)"></span>
+                <div class="muted" style="font-size:11px" x-text="kindName(e.kind)"></div>
+              </td>
+              <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                data-role="exp-source" x-text="e.source"></td>
+              <td class="mono" data-role="exp-moe" x-text="dash(e.moe)"></td>
+              <td>
+                <span class="st" :class="expFrozenRow(e) ? 'st-green' : 'st-slate'"
+                  data-role="exp-committed" x-text="expFrozenRow(e) ? '已承诺' : '未承诺'"></span>
+              </td>
+              <td class="muted" style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                data-role="exp-note" x-text="dash(e.note)"></td>
+              <td>
+                <button class="b-link" data-role="exp-edit"
+                  @click="openEditExp(modal.d.sh_no, modal.d.name, e)">编辑</button>
+              </td>
+            </tr>
+          </template>
+        </table>
+      </div>
+
+      <div class="tagline" style="margin-top:12px">
+        <span class="muted" style="font-size:11px" data-role="readonly-hint">
+          相关方本体来自<b>外部同步</b>（机构与人员）—— 本系统只读引用、不维护源数据；
+          本系统维护的是它的<b>期望</b>（卡片 I-1：期望随相关方维护，无独立标识）
+        </span>
+        <div class="right" style="gap:8px">
+          <button class="b-pri b-sm" x-show="modal.mode === 'edit'" :disabled="modal.saving"
+            @click="saveEdit()" x-text="modal.saving ? '保存中…' : '保存'"></button>
+          <button class="b-ghost b-sm" x-show="modal.mode === 'view'"
+            @click="openSync(modal.d)">维护</button>
+          <button class="b-pri b-sm" x-show="modal.mode === 'view'"
+            @click="openAddExp(modal.d.sh_no, modal.d.name)">加期望</button>
+        </div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>
+
+<!-- 同步相关方 模态（唯一写主档的入口 = upsert：存在即更新，幂等） -->
+<div x-show="form.open" x-cloak data-role="sync-modal" class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:740px;max-height:88vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b x-text="form.editing ? '维护相关方（同步更新）' : '同步相关方'"></b>
+      <div class="right"><button class="b-sm" @click="closeForm()">取消</button></div>
+    </div>
+    <!-- ⚠ 同详情模态：必须 x-if（x-show 仍会求值 null 上的绑定） -->
+    <template x-if="form.d">
+    <div class="bd">
+      <div class="muted" style="font-size:11.5px;margin-bottom:8px" data-role="sync-hint">
+        编号由<b>外部来源系统</b>给定 —— 同一编号再次同步即更新（幂等）；本系统不生成编号、也不删除相关方
+      </div>
+      <div style="display:grid;grid-template-columns:96px 1fr;gap:8px 12px;align-items:center">
+        <label style="color:var(--amber)">相关方编号</label>
+        <input x-model="form.d.sh_no" placeholder="必填，如 SH-001（外部主数据的编号）"
+          :disabled="form.editing">
+        <label style="color:var(--amber)">名称</label>
+        <input x-model="form.d.name" placeholder="必填：机构名或人员名">
+        <!-- 类型不给默认值：字典校验（BR-03）要在选择上落得实 -->
+        <label style="color:var(--amber)">相关方类型</label>
+        <select x-model="form.d.sh_type">
+          <option value="">请选择（必选）</option>
+          <option value="customer">客户</option>
+          <option value="contractor">承包商</option>
+          <option value="internal_org">内部组织</option>
+        </select>
+        <label>职责</label><input x-model="form.d.duty" placeholder="选填">
+        <label>所属机构</label><input x-model="form.d.org" placeholder="选填">
+        <label>联系方式</label><input x-model="form.d.contact" placeholder="选填">
+        <label>所属项目</label><input x-model="form.d.project_no" placeholder="选填">
+      </div>
+      <div class="tagline" style="margin-top:12px">
+        <span class="muted" style="font-size:11px">
+          选填字段留空即<b>清空</b>该字段；不传的字段不会被改动（同步是增量的）
+        </span>
+        <div class="right"><button class="b-pri b-sm" data-role="sync-submit"
+          :disabled="!canSubmit() || form.saving" @click="saveForm()"
+          x-text="form.saving ? '提交中…' : (form.editing ? '保存' : '同步')"></button></div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>
+
+<!-- 期望 模态（新增 / 编辑；期望是聚合内子表，无独立标识 —— 卡片 I-1）
+     ⚠ 叠加在详情模态之上：本体按 data-role="exp-modal" 定位，不靠 `.modal-mask:last` 猜 -->
+<div x-show="em.open" x-cloak data-role="exp-modal" class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:720px;max-height:88vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b x-text="emTitle()"></b>
+      <div class="right"><button class="b-sm" @click="closeExp()">取消</button></div>
+    </div>
+    <!-- ⚠ 同详情模态：必须 x-if -->
+    <template x-if="em.d">
+    <div class="bd">
+      <div class="muted" style="font-size:12px;margin-bottom:8px">
+        <span class="mono" x-text="em.sh_no"></span>
+        <span x-text="' · ' + (em.sh_name || '')"></span>
+        <span x-show="em.mode === 'edit'" x-text="' · 第 '"></span>
+        <span class="mono" x-show="em.mode === 'edit'" x-text="em.d.seq"></span>
+        <span x-show="em.mode === 'edit'" x-text="' 条'"></span>
+      </div>
+      <div style="display:grid;grid-template-columns:96px 1fr;gap:8px 12px;align-items:start">
+        <label style="color:var(--amber)">期望陈述</label>
+        <textarea x-model="em.d.statement" rows="3" data-role="em-statement"
+          :disabled="expFrozen()"
+          placeholder="必填：写成可接受的陈述（材料 §4.1.1.2.5 Define Stakeholder Expectations in Acceptable Statements）"></textarea>
+        <label style="color:var(--amber)">期望类别</label>
+        <!-- ⚠ 静态 option：编辑态要由数据回填 em.d.kind，x-for 生成会静默停在第一项 -->
+        <select x-model="em.d.kind" data-role="em-kind" :disabled="expFrozen()">
+          <option value="">请选择（必选）</option>
+          <option value="need">需要（Need）</option>
+          <option value="goal">目标（Goal）</option>
+          <option value="objective">指标（Objective）</option>
+          <option value="moe">度量有效性（MOE）</option>
+          <option value="constraint">约束（Constraint）</option>
+        </select>
+        <label style="color:var(--amber)">期望来源</label>
+        <input x-model="em.d.source" data-role="em-source" :disabled="expFrozen()"
+          placeholder="必填：访谈 / 调查 / SOW / 上级需求…（材料 §4.1.1.2.7 要求记下来源）">
+        <label :style="needMoe() ? 'color:var(--amber)' : ''">度量口径</label>
+        <input x-model="em.d.moe" data-role="em-moe" :disabled="expFrozen()"
+          placeholder="选填；类别选「度量有效性（MOE）」时必填（材料 §4.1.1.2.6）">
+        <label>已获相关方承诺</label>
+        <!-- 承诺是**可撤回**的：取消勾选即刻解锁上方四个字段（BR-07 的解锁入口就在这一格） -->
+        <label class="tagline" style="gap:6px;font-size:12px">
+          <input type="checkbox" x-model="em.d.committed" data-role="em-committed">
+          <span class="muted" style="font-size:11.5px">材料 §4.1.1.2.8 Obtain Stakeholder Commitments</span>
+        </label>
+        <label>备注</label>
+        <input x-model="em.d.note" data-role="em-note" placeholder="选填（承诺之后仍可写 —— 留痕不受冻结影响）">
+      </div>
+      <div class="tagline" style="margin-top:12px">
+        <!-- BR-07：已获承诺 ⇒ 口径冻结（**可解锁**，与同组「已结论一律只读」不同） -->
+        <span class="muted" style="font-size:11px" data-role="em-frozen-hint"
+          x-show="expFrozen()" x-text="expFrozenText()"></span>
+        <!-- BR-06：MOE 类期望必须有度量口径（前端镜像，后端仍是权威） -->
+        <span class="muted" style="font-size:11px" data-role="em-moe-hint"
+          x-show="needMoe()">类别选了「度量有效性（MOE）」—— 度量口径必填，否则它和「目标」没有区别（BR-06）</span>
+        <span class="muted" style="font-size:11px" data-role="em-req-hint"
+          x-show="!expFrozen() && !needMoe()">陈述 / 类别 / 来源三项必填</span>
+        <div class="right"><button class="b-pri b-sm" data-role="em-submit"
+          :disabled="!canExp() || em.saving" @click="saveExp()"
+          x-text="em.saving ? '提交中…' : '保存'"></button></div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>

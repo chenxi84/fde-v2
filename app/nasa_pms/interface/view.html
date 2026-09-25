@@ -1,0 +1,360 @@
+<!-- 接口台账 · 独立创建（保留「定义接口」入口）· 定义中/已发布/变更中/已冻结
+     ⚠ 「接口」= 系统/分系统之间的接口约定（ICD），不是代码 API。
+     版本变更通知记录是**聚合内子表**（随版本变更同事务产生）；跨接口的「变更通知台账」是**查询视图** -->
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>接口台账</b>
+    <span class="muted">系统/分系统之间的接口约定（ICD）· 定义中 · 已发布 · 变更中 · 已冻结</span>
+    <div class="right tagline" style="gap:8px">
+      <!-- ⚠ 枚举下拉一律静态 option（x-model + x-for 生成选项会让回填静默停在第一项） -->
+      <select x-model="f_type" @change="search()" style="width:168px">
+        <option value="">全部类型</option>
+        <option value="icd">接口控制文档（ICD）</option>
+        <option value="ird">接口需求文档（IRD）</option>
+        <option value="idd">接口定义文档（IDD）</option>
+        <option value="icp">接口控制计划（ICP）</option>
+      </select>
+      <select x-model="f_status" @change="search()" style="width:118px">
+        <option value="">全部状态</option>
+        <option value="defined">定义中</option>
+        <option value="released">已发布</option>
+        <option value="changing">变更中</option>
+        <option value="frozen">已冻结</option>
+      </select>
+      <input x-model="f_provider" @change="search()" @keyup.enter="search()"
+             placeholder="按提供方筛选" style="width:132px">
+      <input x-model="f_consumer" @change="search()" @keyup.enter="search()"
+             placeholder="按使用方筛选" style="width:132px">
+      <button class="b-pri b-sm" @click="openForm()">定义接口</button>
+    </div>
+  </div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr>
+        <th>接口编号</th><th>接口名称</th><th>类型</th><th>提供方</th><th>使用方</th>
+        <th>版本</th><th>状态</th><th>变更通知</th><th>关联配置项</th><th>责任人</th>
+        <th>约定内容</th><th>冻结说明</th><th>所属项目</th><th>操作</th>
+      </tr>
+      <template x-if="!list.items.length">
+        <tr><td colspan="14" class="empty">暂无接口 —— 点「定义接口」登记第一条系统间接口约定</td></tr>
+      </template>
+      <template x-for="d in list.items" :key="d.if_no">
+        <tr class="data">
+          <td><button class="b-link mono" @click="openDetail(d, 'view')" x-text="d.if_no"></button></td>
+          <td style="max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="d.if_name"></td>
+          <!-- 业务名唯一来源是术语表：类型列上码下名两行（ICD / 接口控制文档（ICD）） -->
+          <td>
+            <span class="mono" x-text="typeCode(d.if_type)"></span>
+            <div class="muted" style="font-size:11px" x-text="typeName(d.if_type)"></div>
+          </td>
+          <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="d.provider"></td>
+          <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="d.consumer"></td>
+          <td class="mono" x-text="versionText(d)"></td>
+          <td><span class="st" :class="statusCls(d.status)" x-text="statusName(d.status)"></span></td>
+          <td class="mono" data-role="row-notices" x-text="(d.change_total || 0) + ' 条'"></td>
+          <td class="mono" x-text="dash(d.ci_no)"></td>
+          <td x-text="dash(d.owner)"></td>
+          <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="dash(d.icd_content)"></td>
+          <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="dash(d.freeze_note)"></td>
+          <td x-text="dash(d.project_no)"></td>
+          <!-- ⚠ 动作按钮用 x-show 隐藏（元素仍在 DOM），e2e 断言存在性必须带 `:visible` -->
+          <td>
+            <button class="b-link" @click="openDetail(d, 'view')">详情</button>
+            <button class="b-link" x-show="!isFrozen(d)" @click="openDetail(d, 'edit')">编辑</button>
+            <button class="b-link" x-show="isStatus(d, 'defined') || isStatus(d, 'changing')"
+              @click="release(d)" x-text="releaseLabel(d)"></button>
+            <button class="b-link" x-show="isStatus(d, 'released')" @click="openRevise(d)">版本变更</button>
+            <button class="b-link" x-show="isStatus(d, 'released')" @click="freeze(d)">冻结</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:8px 16px" x-show="list && list.total > list.size">
+    <span class="muted" x-text="'共 ' + (list ? list.total : 0) + ' 条'"></span>
+    <div class="right tagline" style="gap:6px">
+      <button class="b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">上一页</button>
+      <span class="muted" x-text="'第 ' + (list ? list.page : 1) + ' 页'"></span>
+      <button class="b-sm" :disabled="list.page * list.size >= list.total" @click="list.load(list.page + 1)">下一页</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- 变更通知台账 —— **查询视图**（list_changes），不是第二个聚合。
+     卡片 I-2 的视图面：每次版本变更，两端各一条记录（提供方 + 使用方） -->
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>变更通知台账</b>
+    <span class="muted">跨接口 · 版本变更必须通知两端（并入接口聚合，无独立标识）</span>
+    <div class="right tagline" style="gap:8px">
+      <div class="chips">
+        <template x-for="p in ['provider', 'consumer', '']" :key="p || '全部'">
+          <span class="fchip" :class="{on: sum.party === p}"
+            @click="setSumParty(p)"
+            x-text="p === 'provider' ? '提供方' : (p === 'consumer' ? '使用方' : '全部')"></span>
+        </template>
+      </div>
+    </div>
+  </div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr><th>接口</th><th>接口名称</th><th>起因</th><th>版本</th><th>端</th><th>通知对象</th><th>变更原因</th><th>通知时间</th></tr>
+      <template x-if="!sum.items.length">
+        <tr><td colspan="8" class="empty">没有符合条件的变更通知</td></tr>
+      </template>
+      <template x-for="c in sum.items" :key="c.if_no + '#' + c.seq">
+        <!-- 子表行用 class="sub"（**不是 data**）：主列表的 tr.data 选择器才不会误命中这里 -->
+        <tr class="sub" data-role="notice-row">
+          <td><span class="mono" data-role="nt-if" x-text="c.if_no"></span></td>
+          <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" data-role="nt-name" x-text="c.if_name"></td>
+          <td data-role="nt-action" x-text="actionName(c.action)"></td>
+          <td class="mono" data-role="nt-version" x-text="versionPair(c)"></td>
+          <td><span class="st" :class="partyCls(c.party)" data-role="nt-party" x-text="partyName(c.party)"></span></td>
+          <td data-role="nt-party-name" x-text="c.party_name"></td>
+          <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" data-role="nt-reason" x-text="dash(c.reason)"></td>
+          <td class="mono" data-role="nt-time" x-text="dash(c.created_at)"></td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:8px 16px">
+    <span class="muted" data-role="sum-total"
+      x-text="'共 ' + sum.total + ' 条通知（每次版本变更两端各一条）'"></span>
+  </div>
+</div></div>
+
+<!-- 详情 / 编辑 模态 -->
+<div x-show="modal.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:880px;max-height:88vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b x-text="modal.mode === 'edit' ? '编辑接口' : '接口详情'"></b>
+      <div class="right"><button class="b-sm" @click="closeModal()">关闭</button></div>
+    </div>
+    <!-- ⚠ 必须用 x-if 而不是 x-show：x-show 只隐藏，Alpine **仍会求值**内部绑定，
+         而 modal.d 初始为 null → 满屏 "Cannot read properties of null" 报错（实测踩过） -->
+    <template x-if="modal.d">
+    <div class="bd">
+      <!-- 只读信息条：`data-role` 供 e2e 精确断言这一段（不像 select 会把全部 option 文本带进 inner_text） -->
+      <div class="muted" data-role="if-head" style="font-size:12px;margin-bottom:10px">
+        接口编号 <span class="mono" x-text="modal.d.if_no"></span>
+        <span x-text="' · 状态 '"></span><span class="st" :class="statusCls(modal.d.status)" x-text="statusName(modal.d.status)"></span>
+        <span x-text="' · 版本 '"></span><span class="mono" data-role="head-version" x-text="versionText(modal.d)"></span>
+        <span data-role="head-notices" x-text="' · 变更通知 ' + (modal.d.change_total || 0) + ' 条'"></span>
+      </div>
+      <div style="display:grid;grid-template-columns:96px 1fr;gap:8px 12px;align-items:center">
+        <label>接口名称</label>
+        <input x-model="modal.d.if_name" :disabled="modal.mode === 'view' || isFrozen(modal.d)">
+        <label>接口类型</label>
+        <select x-model="modal.d.if_type" :disabled="modal.mode === 'view' || isFrozen(modal.d)">
+          <option value="icd">接口控制文档（ICD）</option>
+          <option value="ird">接口需求文档（IRD）</option>
+          <option value="idd">接口定义文档（IDD）</option>
+          <option value="icp">接口控制计划（ICP）</option>
+        </select>
+        <!-- 两端只在「定义中」可写（BR-05）：一旦发布，两端就是被通知的对象 -->
+        <label>提供方</label>
+        <input x-model="modal.d.provider" :disabled="modal.mode === 'view' || !canEditEnds(modal.d)"
+          placeholder="接口的一端（必填）">
+        <label>使用方</label>
+        <input x-model="modal.d.consumer" :disabled="modal.mode === 'view' || !canEditEnds(modal.d)"
+          placeholder="接口的另一端（必填，且不能与提供方相同）">
+        <label>约定内容</label>
+        <textarea x-model="modal.d.icd_content" rows="3"
+          placeholder="ICD 正文摘要 / 关键条款（选填；已定版后改它须走版本变更）"
+          :disabled="modal.mode === 'view' || !canEditEnds(modal.d)"></textarea>
+        <label>关联配置项</label>
+        <!-- ⚠ 这里**不能**用 `<select>` + x-for 选项：`x-model` 在选项插入前就写完值，
+             回填会静默停在第一项（本页实测踩到，日志见 前端测试用例.md §9 坑 1）。
+             改为「文本输入 + datalist 建议」—— 值就是文本，回填天然正确；
+             选项来自跨应用 configuration_item.list（失败静默兜底为空列表）。 -->
+        <div>
+          <input x-model="modal.d.ci_no" list="ci-options-modal" placeholder="如 CI-001（选填，可留空）"
+            :disabled="modal.mode === 'view' || isFrozen(modal.d)" style="width:100%">
+          <datalist id="ci-options-modal">
+            <template x-for="c in cis" :key="c.ci_no">
+              <option :value="c.ci_no" x-text="c.ci_no + ' · ' + c.name"></option>
+            </template>
+          </datalist>
+        </div>
+        <label>责任人</label>
+        <!-- 文本输入 + datalist 建议（**不用 select + x-for**：回填会静默停第一项）；
+             候选来自跨应用 stakeholder.list，值仍是文本姓名 -->
+        <div>
+          <input x-model="modal.d.owner" list="sh-options-modal" placeholder="选填（可从利益相关者里选）"
+            :disabled="modal.mode === 'view' || isFrozen(modal.d)" style="width:100%">
+          <datalist id="sh-options-modal">
+            <template x-for="x in owners" :key="x.name">
+              <option :value="x.name" x-text="x.name + ' · ' + (x.sh_no || '')"></option>
+            </template>
+          </datalist>
+        </div>
+        <label>所属项目</label>
+        <input x-model="modal.d.project_no" :disabled="modal.mode === 'view' || isFrozen(modal.d)">
+        <!-- 冻结说明是 freeze 的产物，本模态只读回显 -->
+        <template x-if="modal.d.freeze_note">
+          <div style="display:contents">
+            <label>冻结说明</label>
+            <div class="muted" x-text="modal.d.freeze_note"></div>
+          </div>
+        </template>
+      </div>
+
+      <!-- BR-05：已定版后两端与约定内容锁住 —— 给出**为什么不能改**与改的路径，而不是只把输入框弄灰 -->
+      <div class="muted" style="font-size:11px;margin-top:8px" data-role="ends-lock-hint"
+        x-show="modal.mode === 'edit' && modal.d && !canEditEnds(modal.d)"
+        x-text="'已定版（' + statusName(modal.d && modal.d.status) + '）—— 两端与约定内容不可直接改，请用「版本变更」（BR-05）'"></div>
+
+      <!-- 版本变更通知记录（聚合内子表 —— 卡片 I-2 的落点：每次变更两端各一条） -->
+      <div class="muted" style="font-size:12px;font-weight:700;margin:14px 0 6px"
+        data-role="change-title" x-text="'版本变更通知记录（' + changesOf(modal.d).length + '）'"></div>
+      <div class="scroll-x">
+        <table class="tbl tight">
+          <tr><th>序号</th><th>起因</th><th>版本</th><th>端</th><th>通知对象</th><th>变更原因</th><th>通知时间</th></tr>
+          <template x-if="!changesOf(modal.d).length">
+            <tr><td colspan="7" class="empty">还没有版本变更 —— 首次发布会定版 A 并通知两端</td></tr>
+          </template>
+          <template x-for="c in changesOf(modal.d)" :key="c.seq">
+            <tr class="sub" data-role="change-row">
+              <td class="mono" data-role="chg-seq" x-text="c.seq"></td>
+              <td data-role="chg-action" x-text="actionName(c.action)"></td>
+              <td class="mono" data-role="chg-version" x-text="versionPair(c)"></td>
+              <td><span class="st" :class="partyCls(c.party)" data-role="chg-party" x-text="partyName(c.party)"></span></td>
+              <td data-role="chg-party-name" x-text="c.party_name"></td>
+              <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" data-role="chg-reason" x-text="dash(c.reason)"></td>
+              <td class="mono" data-role="chg-time" x-text="dash(c.created_at)"></td>
+            </tr>
+          </template>
+        </table>
+      </div>
+
+      <div class="tagline" style="margin-top:12px">
+        <!-- BR-07：已冻结是硬终态 —— 前端把写入口全部收掉，并说清是终态 -->
+        <span class="muted" style="font-size:11px" data-role="frozen-hint"
+          x-show="modal.d && isFrozen(modal.d)" x-text="frozenText()"></span>
+        <span class="muted" style="font-size:11px" x-show="modal.d && modal.mode === 'view' && isStatus(modal.d, 'defined')">
+          定义中 —— 先「发布」定版 A，之后才谈得上版本变更
+        </span>
+        <div class="right" style="gap:8px">
+          <button class="b-pri b-sm" x-show="modal.mode === 'edit' && !isFrozen(modal.d)"
+            :disabled="!canSaveEdit() || modal.saving" @click="saveEdit()"
+            x-text="modal.saving ? '保存中…' : '保存'"></button>
+          <button class="b-ghost b-sm"
+            x-show="modal.mode === 'view' && (isStatus(modal.d, 'defined') || isStatus(modal.d, 'changing'))"
+            @click="release(modal.d)" x-text="releaseLabel(modal.d)"></button>
+          <button class="b-pri b-sm" x-show="modal.mode === 'view' && isStatus(modal.d, 'released')"
+            @click="openRevise(modal.d)">版本变更</button>
+          <button class="b-ghost b-sm" x-show="modal.mode === 'view' && isStatus(modal.d, 'released')"
+            @click="freeze(modal.d)">冻结</button>
+        </div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>
+
+<!-- 版本变更 模态（唯一改版本的入口；通知两端与版本号同事务） -->
+<div x-show="rm.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:700px;max-height:88vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b>版本变更</b>
+      <div class="right"><button class="b-sm" @click="closeRevise()">取消</button></div>
+    </div>
+    <!-- ⚠ 同详情模态：必须 x-if -->
+    <template x-if="rm.open">
+    <div class="bd">
+      <div class="muted" style="font-size:12px;margin-bottom:8px">
+        <span class="mono" x-text="rm.if_no"></span>
+        <span x-text="' · ' + (rm.name || '')"></span>
+        <span x-text="' · 当前版本 '"></span><span class="mono" data-role="rm-cur" x-text="rm.cur || '未定版'"></span>
+      </div>
+      <div style="display:grid;grid-template-columns:110px 1fr;gap:8px 12px;align-items:center">
+        <label style="color:var(--amber)">新版本号</label>
+        <div class="tagline" style="gap:8px">
+          <input x-model="rm.new_version" placeholder="单个大写字母，如 B" style="width:150px" maxlength="1">
+          <button class="b-ghost b-sm" @click="rm.new_version = nextVersion()">填入下一个版本</button>
+        </div>
+        <label>变更原因</label>
+        <textarea x-model="rm.reason" rows="2"
+          placeholder="必填：为什么改这一版（记入通知台账，BR-04）"></textarea>
+        <label>约定内容</label>
+        <textarea x-model="rm.icd_content" rows="3"
+          placeholder="选填：本次变更后的 ICD 约定内容"></textarea>
+      </div>
+      <div class="tagline" style="margin-top:12px">
+        <span class="muted" style="font-size:11px" data-role="revise-hint"
+          x-show="!canRevise()" x-text="reviseHint()"></span>
+        <span class="muted" style="font-size:11px" x-show="canRevise()">
+          提交后版本改为 <b class="mono" x-text="rm.new_version"></b>、状态转「变更中」，并同时通知<b>两端</b>（提供方 + 使用方）
+        </span>
+        <div class="right"><button class="b-pri b-sm" :disabled="!canRevise() || rm.saving"
+          @click="saveRevise()" x-text="rm.saving ? '提交中…' : '提交变更'"></button></div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>
+
+<!-- 定义接口 模态 -->
+<div x-show="form.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:760px;max-height:88vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b>定义接口</b>
+      <div class="right"><button class="b-sm" @click="closeForm()">取消</button></div>
+    </div>
+    <!-- ⚠ 同详情模态：必须 x-if（x-show 仍会求值 null 上的绑定） -->
+    <template x-if="form.d">
+    <div class="bd">
+      <div style="display:grid;grid-template-columns:96px 1fr;gap:8px 12px;align-items:center">
+        <label>接口名称</label>
+        <input x-model="form.d.if_name" placeholder="如：飞控计算机—舵机控制器 总线接口（必填）">
+        <!-- 类型不给默认值：字典校验（BR-02）要在选择上落得实 -->
+        <label>接口类型</label>
+        <select x-model="form.d.if_type">
+          <option value="">请选择（必选）</option>
+          <option value="icd">接口控制文档（ICD）</option>
+          <option value="ird">接口需求文档（IRD）</option>
+          <option value="idd">接口定义文档（IDD）</option>
+          <option value="icp">接口控制计划（ICP）</option>
+        </select>
+        <label>提供方</label>
+        <input x-model="form.d.provider" placeholder="接口的一端，如：飞控计算机（FCC）（必填）">
+        <label>使用方</label>
+        <input x-model="form.d.consumer" placeholder="接口的另一端，如：舵机控制器（SACU）（必填）">
+        <label>约定内容</label>
+        <textarea x-model="form.d.icd_content" rows="3"
+          placeholder="选填：ICD 正文摘要 / 关键条款（如总线类型、周期、消息格式）"></textarea>
+        <label>关联配置项</label>
+        <div>
+          <input x-model="form.d.ci_no" list="ci-options-form" placeholder="如 CI-001（选填，可留空）"
+            style="width:100%">
+          <datalist id="ci-options-form">
+            <template x-for="c in cis" :key="c.ci_no">
+              <option :value="c.ci_no" x-text="c.ci_no + ' · ' + c.name"></option>
+            </template>
+          </datalist>
+        </div>
+        <label>责任人</label>
+        <div>
+          <input x-model="form.d.owner" list="sh-options-form" placeholder="选填（可从利益相关者里选）" style="width:100%">
+          <datalist id="sh-options-form">
+            <template x-for="x in owners" :key="x.name">
+              <option :value="x.name" x-text="x.name + ' · ' + (x.sh_no || '')"></option>
+            </template>
+          </datalist>
+        </div>
+        <label>所属项目</label>
+        <input x-model="form.d.project_no" placeholder="选填，如 P-2026-01">
+      </div>
+      <div class="tagline" style="margin-top:12px">
+        <span class="muted" style="font-size:11px" data-role="form-hint" x-show="!canSubmit()"
+          x-text="submitHint()"></span>
+        <span class="muted" style="font-size:11px" x-show="canSubmit()">
+          新接口以「定义中」落库，编号自动生成（IF-001 起）；发布时才定版为 A 并通知两端
+        </span>
+        <div class="right"><button class="b-pri b-sm" :disabled="!canSubmit() || form.saving"
+          @click="saveForm()" x-text="form.saving ? '提交中…' : '提交'"></button></div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>

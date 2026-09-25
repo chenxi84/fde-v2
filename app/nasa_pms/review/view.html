@@ -1,0 +1,395 @@
+<!-- 评审台账 · 独立创建（保留新建入口）· 计划/进行中/已结论/行动项跟踪/已关闭
+     行动项是**聚合内子表**（随结论同事务产生）；「跨评审行动项汇总」是**查询视图**（list_actions） -->
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>评审台账</b>
+    <span class="muted">计划 · 进行中 · 已结论 · 行动项跟踪 · 已关闭</span>
+    <div class="right tagline" style="gap:8px">
+      <select x-model="f_type" @change="search()" style="width:170px">
+        <option value="">全部类型</option>
+        <template x-for="t in types" :key="t[0]">
+          <option :value="t[0]" x-text="t[1]"></option>
+        </template>
+      </select>
+      <select x-model="f_phase" @change="search()" style="width:110px">
+        <option value="">全部阶段</option>
+        <template x-for="p in phases" :key="p[0]">
+          <option :value="p[0]" x-text="p[1]"></option>
+        </template>
+      </select>
+      <select x-model="f_status" @change="search()" style="width:130px">
+        <option value="">全部状态</option>
+        <option value="planned">计划</option>
+        <option value="in_progress">进行中</option>
+        <option value="concluded">已结论</option>
+        <option value="tracking">行动项跟踪中</option>
+        <option value="closed">已关闭</option>
+      </select>
+      <select x-model="f_conclusion" @change="search()" style="width:120px">
+        <option value="">全部结论</option>
+        <template x-for="c in conclusions" :key="c[0]">
+          <option :value="c[0]" x-text="c[1]"></option>
+        </template>
+      </select>
+      <button class="b-pri b-sm" @click="openForm()">新建评审</button>
+    </div>
+  </div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr>
+        <th>评审编号</th><th>标题</th><th>评审类型</th><th>阶段</th><th>评审对象</th>
+        <th>依据计划</th><th>状态</th><th>结论</th><th>行动项 未/总</th><th>责任人</th>
+        <th>评审纪要</th><th>关闭说明</th><th>所属项目</th><th>操作</th>
+      </tr>
+      <template x-if="!list.items.length">
+        <tr><td colspan="14" class="empty">暂无评审 —— 点「新建评审」计划第一次评审</td></tr>
+      </template>
+      <template x-for="d in list.items" :key="d.review_no">
+        <tr class="data">
+          <td><button class="b-link mono" @click="openDetail(d, 'view')" x-text="d.review_no"></button></td>
+          <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="d.title"></td>
+          <!-- 业务名唯一来源是术语表：类型列上码下名两行（PDR / 初步设计评审（PDR）） -->
+          <td>
+            <span class="mono" x-text="typeCode(d.review_type)"></span>
+            <div class="muted" style="font-size:11px" x-text="typeName(d.review_type)"></div>
+          </td>
+          <td x-text="phaseName(d.phase)"></td>
+          <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="d.subject"></td>
+          <td class="mono" x-text="dash(d.plan_no)"></td>
+          <td><span class="st" :class="statusCls(d.status)" x-text="statusName(d.status)"></span></td>
+          <td>
+            <span class="st" x-show="d.conclusion" :class="conclusionCls(d.conclusion)"
+              x-text="conclusionName(d.conclusion)"></span>
+            <span class="muted" x-show="!d.conclusion" x-text="'—'"></span>
+          </td>
+          <td class="mono" x-text="(d.action_open || 0) + '/' + (d.action_total || 0)"></td>
+          <td x-text="dash(d.owner)"></td>
+          <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="dash(d.minutes)"></td>
+          <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="dash(d.close_note)"></td>
+          <td x-text="dash(d.project_no)"></td>
+          <!-- ⚠ 动作按钮用 x-show 隐藏（元素仍在 DOM），e2e 断言存在性必须带 `:visible` -->
+          <td>
+            <button class="b-link" @click="openDetail(d, 'view')">详情</button>
+            <button class="b-link" x-show="!frozen(d)" @click="openDetail(d, 'edit')">编辑</button>
+            <button class="b-link" x-show="d.status === 'planned'" @click="start(d)">启动评审</button>
+            <button class="b-link" x-show="d.status === 'in_progress'" @click="openConclude(d)">出结论</button>
+            <button class="b-link" x-show="d.status === 'concluded' || d.status === 'tracking'"
+              :disabled="!canClose(d)" @click="closeReview(d)">关闭评审</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:8px 16px" x-show="list && list.total > list.size">
+    <span class="muted" x-text="'共 ' + (list ? list.total : 0) + ' 条'"></span>
+    <div class="right tagline" style="gap:6px">
+      <button class="b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">上一页</button>
+      <span class="muted" x-text="'第 ' + (list ? list.page : 1) + ' 页'"></span>
+      <button class="b-sm" :disabled="list.page * list.size >= list.total" @click="list.load(list.page + 1)">下一页</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- 跨评审行动项汇总 —— **查询视图**（list_actions），不是第二个聚合 -->
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>行动项汇总</b>
+    <span class="muted">跨评审 · 随评审结论同事务产生（并入评审聚合，无独立标识）</span>
+    <div class="right tagline" style="gap:8px">
+      <div class="chips">
+        <template x-for="s in ['open', 'done', '']" :key="s || '全部'">
+          <span class="fchip" :class="{on: sum.status === s}"
+            @click="setSumStatus(s)"
+            x-text="s === 'open' ? '未完成' : (s === 'done' ? '已完成' : '全部')"></span>
+        </template>
+      </div>
+    </div>
+  </div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr><th>评审</th><th>类型</th><th>序号</th><th>行动项</th><th>责任人</th><th>期限</th><th>状态</th><th>操作</th></tr>
+      <template x-if="!sum.items.length">
+        <tr><td colspan="8" class="empty">没有符合条件的行动项</td></tr>
+      </template>
+      <template x-for="a in sum.items" :key="a.review_no + '#' + a.seq">
+        <!-- 子表行用 class="sub"（**不是 data**）：主列表的 tr.data 选择器才不会误命中这里 -->
+        <tr class="sub" data-role="action-row">
+          <td><span class="mono" data-role="act-review" x-text="a.review_no"></span></td>
+          <td><span class="mono" x-text="typeCode(a.review_type)"></span></td>
+          <td class="mono" data-role="act-seq" x-text="a.seq"></td>
+          <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" data-role="act-content" x-text="a.content"></td>
+          <td data-role="act-owner" x-text="a.owner"></td>
+          <td class="mono" data-role="act-due" x-text="a.due_date"></td>
+          <td><span class="st" :class="actionStatusCls(a.status)" x-text="actionStatusName(a.status)"></span></td>
+          <td>
+            <button class="b-link" x-show="a.status === 'open'"
+              @click="completeAction(a.review_no, a.seq)">完成</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:8px 16px">
+    <span class="muted" data-role="sum-total" x-text="'共 ' + sum.total + ' 条行动项'"></span>
+  </div>
+</div></div>
+
+<!-- 详情 / 编辑 模态 -->
+<div x-show="modal.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:820px;max-height:88vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b x-text="modal.mode === 'edit' ? '编辑评审' : '评审详情'"></b>
+      <div class="right"><button class="b-sm" @click="closeModal()">关闭</button></div>
+    </div>
+    <!-- ⚠ 必须用 x-if 而不是 x-show：x-show 只隐藏，Alpine **仍会求值**内部绑定，
+         而 modal.d 初始为 null → 满屏 "Cannot read properties of null" 报错（实测踩过） -->
+    <template x-if="modal.d">
+    <div class="bd">
+      <!-- 只读信息条：`data-role` 供 e2e 精确断言这一段（不像 select 会把全部 option 文本带进 inner_text） -->
+      <div class="muted" data-role="review-head" style="font-size:12px;margin-bottom:10px">
+        评审编号 <span class="mono" x-text="modal.d.review_no"></span>
+        <span x-text="' · 状态 '"></span><span class="st" :class="stCls(modal.d)" x-text="stName(modal.d)"></span>
+        <span x-show="modal.d && modal.d.conclusion" x-text="' · 结论 '"></span>
+        <span class="st" x-show="modal.d && modal.d.conclusion" :class="conclCls(modal.d)" x-text="conclName(modal.d)"></span>
+        <span data-role="action-count" x-text="' · 行动项 ' + (modal.d.action_open || 0) + '/' + (modal.d.action_total || 0)"></span>
+      </div>
+      <div style="display:grid;grid-template-columns:96px 1fr;gap:8px 12px;align-items:center">
+        <label>标题</label>
+        <input x-model="modal.d.title" :disabled="modal.mode === 'view' || frozen(modal.d)">
+        <label>评审类型</label>
+        <select x-model="modal.d.review_type" :disabled="modal.mode === 'view' || frozen(modal.d)">
+          <template x-for="t in types" :key="t[0]"><option :value="t[0]" x-text="t[1]"></option></template>
+        </select>
+        <label>阶段</label>
+        <select x-model="modal.d.phase" :disabled="modal.mode === 'view' || frozen(modal.d)">
+          <template x-for="p in phases" :key="p[0]"><option :value="p[0]" x-text="p[1]"></option></template>
+        </select>
+        <label>评审对象</label>
+        <input x-model="modal.d.subject" :disabled="modal.mode === 'view' || frozen(modal.d)">
+        <label>依据计划</label>
+        <!-- 文本输入 + datalist 建议（**不用 select + x-for**：回填会静默停第一项）；候选来自
+             跨应用 `tech_plan.list`，值仍是 plan_no 文本（弱引用口径不变）。 -->
+        <div>
+          <input x-model="modal.d.plan_no" list="tp-options-modal" placeholder="选填，如 SEMP-001（弱引用技术计划）"
+            :disabled="modal.mode === 'view' || frozen(modal.d)" style="width:100%">
+          <datalist id="tp-options-modal">
+            <template x-for="p in plans" :key="p.plan_no">
+              <option :value="p.plan_no" x-text="p.plan_no + ' · ' + p.name"></option>
+            </template>
+          </datalist>
+        </div>
+        <label>责任人</label>
+        <div>
+          <input x-model="modal.d.owner" list="sh-options-modal" placeholder="选填（可从利益相关者里选）"
+            :disabled="modal.mode === 'view' || frozen(modal.d)" style="width:100%">
+          <datalist id="sh-options-modal">
+            <template x-for="s in owners" :key="s.sh_no">
+              <option :value="s.name" x-text="s.name + ' · ' + s.sh_no"></option>
+            </template>
+          </datalist>
+        </div>
+        <!-- 结论与纪要是 conclude 的产物，本模态只读回显（BR-06：结论是快照） -->
+        <label>评审纪要</label>
+        <div class="muted" x-text="dash(modal.d.minutes)"></div>
+        <template x-if="modal.d.close_note">
+          <div style="display:contents">
+            <label>关闭说明</label>
+            <div class="muted" x-text="modal.d.close_note"></div>
+          </div>
+        </template>
+      </div>
+
+      <!-- 评审项清单（聚合内子表） -->
+      <div class="muted" style="font-size:12px;font-weight:700;margin:14px 0 6px"
+        data-role="item-title" x-text="'评审项清单（' + itemsOf(modal.d).length + '）'"></div>
+      <div class="scroll-x">
+        <table class="tbl tight">
+          <tr><th>序号</th><th>评审项</th><th>评审准则 / 判据</th></tr>
+          <template x-if="!itemsOf(modal.d).length">
+            <tr><td colspan="3" class="empty">还没有评审项 —— 结论前至少要有一条（BR-03）</td></tr>
+          </template>
+          <template x-for="it in itemsOf(modal.d)" :key="it.seq">
+            <tr class="sub" data-role="item-row">
+              <td class="mono" data-role="item-seq" x-text="it.seq"></td>
+              <td data-role="item-text" x-text="it.item"></td>
+              <td class="muted" data-role="item-criterion" x-text="dash(it.criterion)"></td>
+            </tr>
+          </template>
+        </table>
+      </div>
+      <!-- 加评审项：未结论 / 未关闭时可见（写操作放编辑态，避免只读视图被误改） -->
+      <div class="tagline" style="gap:8px;margin-top:8px" x-show="modal.mode === 'edit' && !frozen(modal.d)">
+        <input x-model="modal.item" placeholder="评审项内容（必填）" style="width:300px">
+        <input x-model="modal.criterion" placeholder="评审准则 / 判据（选填）" style="width:240px">
+        <button class="b-ghost b-sm" :disabled="!canAddItem() || modal.saving" @click="saveItem()">加评审项</button>
+      </div>
+
+      <!-- 行动项清单（聚合内子表，随结论同事务产生） -->
+      <div class="muted" style="font-size:12px;font-weight:700;margin:14px 0 6px"
+        data-role="action-title" x-text="'行动项（' + (modal.d.action_open || 0) + ' 未完成 / ' + (modal.d.action_total || 0) + ' 总）'"></div>
+      <div class="scroll-x">
+        <table class="tbl tight">
+          <tr><th>序号</th><th>行动项</th><th>责任人</th><th>期限</th><th>状态</th><th>操作</th></tr>
+          <template x-if="!actionsOf(modal.d).length">
+            <tr><td colspan="6" class="empty">本次评审没有行动项（结论为「有条件通过」时必须有，BR-01）</td></tr>
+          </template>
+          <template x-for="a in actionsOf(modal.d)" :key="a.seq">
+            <tr class="sub" data-role="modal-action-row">
+              <td class="mono" data-role="act-seq" x-text="a.seq"></td>
+              <td data-role="act-content" x-text="a.content"></td>
+              <td data-role="act-owner" x-text="a.owner"></td>
+              <td class="mono" data-role="act-due" x-text="a.due_date"></td>
+              <td><span class="st" :class="actionStatusCls(a.status)" x-text="actionStatusName(a.status)"></span></td>
+              <td>
+                <button class="b-link" x-show="isStatus(modal.d, 'tracking') && a.status === 'open'"
+                  @click="completeAction(modal.d.review_no, a.seq)">完成</button>
+              </td>
+            </tr>
+          </template>
+        </table>
+      </div>
+
+      <div class="tagline" style="margin-top:12px">
+        <!-- BR-06：已结论 → 内容冻结；已关闭 → 硬终态。两者的前端表现都是只读，文案区分 -->
+        <span class="muted" style="font-size:11px" data-role="frozen-hint" x-show="frozen(modal.d)"
+          x-text="frozenText(modal.d)"></span>
+        <!-- BR-07：未清零时给出**为什么不能关**，而不是只把按钮藏掉 -->
+        <span class="muted" style="font-size:11px" data-role="close-block-hint"
+          x-show="showCloseBlock(modal.d)" x-text="closeBlockText(modal.d)"></span>
+        <span class="muted" style="font-size:11px" x-show="modal.mode === 'view' && isStatus(modal.d, 'planned')">
+          计划态 —— 先「启动评审」进入进行中，才能出结论
+        </span>
+        <div class="right" style="gap:8px">
+          <button class="b-pri b-sm" x-show="modal.mode === 'edit' && !frozen(modal.d)"
+            :disabled="modal.saving" @click="saveEdit()"
+            x-text="modal.saving ? '保存中…' : '保存'"></button>
+          <button class="b-ghost b-sm" x-show="modal.mode === 'view' && isStatus(modal.d, 'planned')"
+            @click="start(modal.d)">启动评审</button>
+          <button class="b-pri b-sm" x-show="modal.mode === 'view' && isStatus(modal.d, 'in_progress')"
+            @click="openConclude(modal.d)">出结论</button>
+          <button class="b-ghost b-sm"
+            x-show="modal.mode === 'view' && inStatus(modal.d, ['concluded', 'tracking'])"
+            :disabled="!canClose(modal.d)" @click="closeReview(modal.d)">关闭评审</button>
+        </div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>
+
+<!-- 出结论 模态（结论 + 纪要 + 行动项动态行） -->
+<div x-show="cm.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:760px;max-height:88vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b>出结论</b>
+      <div class="right"><button class="b-sm" @click="closeConclude()">取消</button></div>
+    </div>
+    <!-- ⚠ 同详情模态：必须 x-if -->
+    <template x-if="cm.open">
+    <div class="bd">
+      <div class="muted" style="font-size:12px;margin-bottom:8px">
+        <span class="mono" x-text="cm.review_no"></span>
+        <span x-text="' · ' + (cm.title || '')"></span>
+      </div>
+      <div style="display:grid;grid-template-columns:96px 1fr;gap:8px 12px;align-items:center">
+        <label style="color:var(--amber)">评审结论</label>
+        <select x-model="cm.conclusion">
+          <option value="">请选择结论（必选）</option>
+          <template x-for="c in conclusions" :key="c[0]">
+            <option :value="c[0]" x-text="c[1]"></option>
+          </template>
+        </select>
+        <label>评审纪要</label>
+        <textarea x-model="cm.minutes" rows="2" placeholder="选填：评审会要点、逐项判定摘要"></textarea>
+      </div>
+
+      <div class="muted" style="font-size:12px;font-weight:700;margin:12px 0 6px"
+        data-role="cm-action-title" x-text="'行动项（' + cm.actions.length + ' 条）'"></div>
+      <div class="scroll-x">
+        <table class="tbl tight">
+          <tr><th>行动项内容</th><th>责任人</th><th>期限</th><th>操作</th></tr>
+          <template x-if="!cm.actions.length">
+            <tr><td colspan="4" class="empty">尚未添加行动项 —— 结论为「有条件通过」时必须至少有一条（BR-01）</td></tr>
+          </template>
+          <template x-for="(a, i) in cm.actions" :key="i">
+            <tr class="sub" data-role="cm-action-row">
+              <td><input x-model="a.content" placeholder="整改内容（必填）" style="width:100%"></td>
+              <td><input x-model="a.owner" placeholder="责任人（必填）" style="width:110px"></td>
+              <td><input x-model="a.due_date" placeholder="YYYY-MM-DD" style="width:130px"></td>
+              <td><button class="b-link" @click="delActionRow(i)">删除</button></td>
+            </tr>
+          </template>
+        </table>
+      </div>
+      <div class="tagline" style="gap:8px;margin-top:6px">
+        <button class="b-ghost b-sm" @click="addActionRow()">+ 添加行动项</button>
+        <span class="muted" style="font-size:11px">每条行动项必须填全内容 / 责任人 / 期限（BR-02）</span>
+      </div>
+
+      <div class="tagline" style="margin-top:12px">
+        <span class="muted" style="font-size:11px" x-show="!canConclude()"
+          x-text="cm.conclusion === 'conditional' && !cm.actions.length
+            ? '结论为「有条件通过」时必须给出行动项（BR-01）'
+            : '结论必选，且已添加的行动项必须填全（BR-02）'"></span>
+        <div class="right"><button class="b-pri b-sm" :disabled="!canConclude() || cm.saving"
+          @click="saveConclude()" x-text="cm.saving ? '提交中…' : '提交结论'"></button></div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>
+
+<!-- 新建评审 模态 -->
+<div x-show="form.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:720px;max-height:88vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b>新建评审</b>
+      <div class="right"><button class="b-sm" @click="closeForm()">取消</button></div>
+    </div>
+    <!-- ⚠ 同详情模态：必须 x-if（x-show 仍会求值 null 上的绑定） -->
+    <template x-if="form.d">
+    <div class="bd">
+      <div style="display:grid;grid-template-columns:96px 1fr;gap:8px 12px;align-items:center">
+        <label>标题</label><input x-model="form.d.title" placeholder="如：飞控软件初步设计评审（必填）">
+        <!-- 类型与阶段都不给默认值：字典校验（BR-05）要在选择上落得实 -->
+        <label>评审类型</label>
+        <select x-model="form.d.review_type">
+          <option value="">请选择（必选）</option>
+          <template x-for="t in types" :key="t[0]"><option :value="t[0]" x-text="t[1]"></option></template>
+        </select>
+        <label>阶段</label>
+        <select x-model="form.d.phase">
+          <option value="">请选择（必选）</option>
+          <template x-for="p in phases" :key="p[0]"><option :value="p[0]" x-text="p[1]"></option></template>
+        </select>
+        <label>评审对象</label><input x-model="form.d.subject" placeholder="被评审的产品 / 文档 / 设计（必填）">
+        <label>依据计划</label>
+        <div>
+          <input x-model="form.d.plan_no" list="tp-options-form" placeholder="选填，如 SEMP-001"
+            style="width:100%">
+          <datalist id="tp-options-form">
+            <template x-for="p in plans" :key="p.plan_no">
+              <option :value="p.plan_no" x-text="p.plan_no + ' · ' + p.name"></option>
+            </template>
+          </datalist>
+        </div>
+        <label>责任人</label>
+        <div>
+          <input x-model="form.d.owner" list="sh-options-form" placeholder="选填（可从利益相关者里选）"
+            style="width:100%">
+          <datalist id="sh-options-form">
+            <template x-for="s in owners" :key="s.sh_no">
+              <option :value="s.name" x-text="s.name + ' · ' + s.sh_no"></option>
+            </template>
+          </datalist>
+        </div>
+      </div>
+      <div class="tagline" style="margin-top:12px">
+        <span class="muted" style="font-size:11px">新评审以「计划」状态落库，编号自动生成（RV-001 起）；四项必填未齐时不可提交</span>
+        <div class="right"><button class="b-pri b-sm" :disabled="!canSubmit() || form.saving" @click="saveForm()"
+          x-text="form.saving ? '提交中…' : '提交'"></button></div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>

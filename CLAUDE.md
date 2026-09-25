@@ -13,6 +13,7 @@ python scripts/verify_agent_quality.py            # 与平台智能体真对话�
 python scripts/br_coverage.py                     # BR 输出字段级覆盖取证（详设的「输出」↔ 脚本里 TC 步的断言；--write 刷新《测试用例.md》§4 的表）
 python scripts/run_gates.py                       # 验证门禁：static+oracle 两层，约 12 秒，**不停服、不动业务数据** —— 改完代码先跑这个
 python scripts/verify_psc_oracles.py --scenario   # PSC 对账体检：冗余双路径对账 + 不变式 + 静态探针 + 影子库全链/穿透/注入
+python app/nasa_pms/demo/demo_build.py            # nasa_pms 演示环境一键重建（清空 → 造数 → 体检）；见 app/nasa_pms/demo/README.md
 ```
 
 测试（每个脚本自包含、独立运行；**必须先停掉 dev server**）：

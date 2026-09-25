@@ -1,0 +1,435 @@
+<!-- 技术度量台账 · 独立创建（保留新建入口）· 定义/度量中/超阈值/已纠正/已关闭
+     实测值序列与告警台账是**聚合内子表**（随 record 同事务产生）；「跨度量告警汇总」是**查询视图**（list_alerts） -->
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>技术度量台账</b>
+    <span class="muted">定义 · 度量中 · 超阈值 · 已纠正 · 已关闭</span>
+    <div class="right tagline" style="gap:8px">
+      <!-- ⚠ 枚举下拉的 option **必须是静态元素**：x-model + x-for 生成选项时，
+           数据→DOM 的回填会静默停在第一项（effect 跑在选项插入之前、此后不再重跑） -->
+      <select x-model="f_category" @change="search()" style="width:180px">
+        <option value="">全部类别</option>
+        <option value="tpm">技术绩效指标（TPM）</option>
+        <option value="mop">性能度量（MOP）</option>
+        <option value="kpp">关键性能参数（KPP）</option>
+      </select>
+      <select x-model="f_status" @change="search()" style="width:130px">
+        <option value="">全部状态</option>
+        <option value="defined">定义</option>
+        <option value="measuring">度量中</option>
+        <option value="exceeded">超阈值</option>
+        <option value="corrected">已纠正</option>
+        <option value="closed">已关闭</option>
+      </select>
+      <select x-model="f_direction" @change="search()" style="width:120px">
+        <option value="">全部方向</option>
+        <option value="higher">越大越好</option>
+        <option value="lower">越小越好</option>
+      </select>
+      <input x-model="f_req_no" @keydown.enter="search()" placeholder="关联需求编号（精确）"
+        style="width:170px">
+      <button class="b-ghost b-sm" @click="search()">搜索</button>
+      <button class="b-pri b-sm" @click="openForm()">新建度量</button>
+    </div>
+  </div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr>
+        <th>度量编号</th><th>名称</th><th>类别</th><th>优化方向</th><th>计量单位</th>
+        <th>目标值</th><th>阈值</th><th>当前实测值</th><th>度量期次</th><th>状态</th>
+        <th>告警 未/总</th><th>基线版本</th><th>关联需求</th><th>责任人</th>
+        <th>关闭说明</th><th>所属项目</th><th>操作</th>
+      </tr>
+      <template x-if="!list.items.length">
+        <tr><td colspan="17" class="empty">暂无技术度量 —— 点「新建度量」定义第一条 TPM</td></tr>
+      </template>
+      <template x-for="d in list.items" :key="d.tpm_no">
+        <tr class="data">
+          <td><button class="b-link mono" @click="openDetail(d, 'view')" x-text="d.tpm_no"></button></td>
+          <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="d.name"></td>
+          <!-- 业务名唯一来源是术语表：类别列上码下名两行（TPM / 技术绩效指标（TPM）） -->
+          <td>
+            <span class="mono" x-text="categoryCode(d.category)"></span>
+            <div class="muted" style="font-size:11px" x-text="categoryName(d.category)"></div>
+          </td>
+          <td><span class="mono" x-text="directionArrow(d.direction)"></span>
+            <span x-text="directionName(d.direction)"></span></td>
+          <td class="mono" x-text="dash(d.unit)"></td>
+          <td class="mono" x-text="dash(d.target_value)"></td>
+          <td class="mono" x-text="dash(d.threshold_value)"></td>
+          <td class="mono" x-text="dash(d.current_value)"></td>
+          <td class="mono" x-text="dash(d.current_period)"></td>
+          <td><span class="st" :class="statusCls(d.status)" x-text="statusName(d.status)"></span></td>
+          <td class="mono" x-text="(d.alert_open || 0) + '/' + (d.alert_total || 0)"></td>
+          <td class="mono" x-text="dash(d.baseline_ver)"></td>
+          <td class="mono" x-text="dash(d.req_no)"></td>
+          <td x-text="dash(d.owner)"></td>
+          <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="dash(d.close_note)"></td>
+          <td x-text="dash(d.project_no)"></td>
+          <!-- ⚠ 动作按钮用 x-show 隐藏（元素仍在 DOM），e2e 断言存在性必须带 `:visible` -->
+          <td>
+            <button class="b-link" @click="openDetail(d, 'view')">详情</button>
+            <button class="b-link" x-show="!locked(d)" @click="openDetail(d, 'edit')">编辑</button>
+            <button class="b-link" x-show="d.status === 'defined'" @click="baseline(d)">基线化</button>
+            <button class="b-link" x-show="d.status === 'measuring' || d.status === 'corrected'"
+              @click="openRecord(d)">记实测值</button>
+            <button class="b-link" x-show="d.status === 'exceeded'" @click="openCorrect(d)">纠正</button>
+            <button class="b-link"
+              x-show="d.status === 'measuring' || d.status === 'corrected' || d.status === 'exceeded'"
+              :disabled="!canClose(d)" @click="closeMeasure(d)">关闭度量</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:8px 16px" x-show="list && list.total > list.size">
+    <span class="muted" x-text="'共 ' + (list ? list.total : 0) + ' 条'"></span>
+    <div class="right tagline" style="gap:6px">
+      <button class="b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">上一页</button>
+      <span class="muted" x-text="'第 ' + (list ? list.page : 1) + ' 页'"></span>
+      <button class="b-sm" :disabled="list.page * list.size >= list.total" @click="list.load(list.page + 1)">下一页</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- 跨度量告警汇总 —— **查询视图**（list_alerts），不是第二个聚合。
+     材料 §6.7.1.2.1：用红黄绿 alert zones 汇总全部技术度量的状态，就是这张表的用途 -->
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>告警汇总</b>
+    <span class="muted">跨度量 · 随实测值同事务产生（并入度量聚合，无独立标识）</span>
+    <div class="right tagline" style="gap:8px">
+      <div class="chips">
+        <template x-for="s in ['open', 'handled', '']" :key="s || '全部'">
+          <span class="fchip" :class="{on: sum.status === s}"
+            @click="setSumStatus(s)"
+            x-text="s === 'open' ? '未了结' : (s === 'handled' ? '已了结' : '全部')"></span>
+        </template>
+      </div>
+    </div>
+  </div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr><th>度量</th><th>名称</th><th>类别</th><th>期次</th><th>实测值</th><th>阈值</th>
+        <th>超出量</th><th>告警信息</th><th>状态</th><th>纠正措施</th></tr>
+      <template x-if="!sum.items.length">
+        <tr><td colspan="10" class="empty">没有符合条件的告警 —— 口径全部在阈内</td></tr>
+      </template>
+      <template x-for="a in sum.items" :key="a.tpm_no + '#' + a.seq">
+        <!-- 子表行用 class="sub"（**不是 data**）：主列表的 tr.data 选择器才不会误命中这里 -->
+        <tr class="sub" data-role="sum-alert-row">
+          <td><span class="mono" data-role="sa-tpm" x-text="a.tpm_no"></span></td>
+          <td data-role="sa-name" x-text="a.name"></td>
+          <td><span class="mono" data-role="sa-category" x-text="categoryCode(a.category)"></span></td>
+          <td class="mono" data-role="sa-period" x-text="a.period"></td>
+          <td class="mono" data-role="sa-value" x-text="a.measured_value + (a.unit || '')"></td>
+          <td class="mono" data-role="sa-threshold" x-text="a.threshold_value + (a.unit || '')"></td>
+          <td class="mono" data-role="sa-deviation" x-text="a.deviation + (a.unit || '')"></td>
+          <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            data-role="sa-message" x-text="a.message"></td>
+          <td><span class="st" :class="alertStatusCls(a.status)" x-text="alertStatusName(a.status)"></span></td>
+          <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            data-role="sa-note" x-text="dash(a.handle_note)"></td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:8px 16px">
+    <span class="muted" data-role="sum-total" x-text="'共 ' + sum.total + ' 条告警'"></span>
+  </div>
+</div></div>
+
+<!-- 详情 / 编辑 模态 -->
+<div x-show="modal.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:880px;max-height:88vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b x-text="modal.mode === 'edit' ? '编辑度量' : '技术度量详情'"></b>
+      <div class="right"><button class="b-sm" @click="closeModal()">关闭</button></div>
+    </div>
+    <!-- ⚠ 必须用 x-if 而不是 x-show：x-show 只隐藏，Alpine **仍会求值**内部绑定，
+         而 modal.d 初始为 null → 满屏 "Cannot read properties of null" 报错（实测踩过） -->
+    <template x-if="modal.d">
+    <div class="bd">
+      <!-- 只读信息条：`data-role` 供 e2e 精确断言这一段（不像 select 会把全部 option 文本带进 inner_text） -->
+      <div class="muted" data-role="tpm-head" style="font-size:12px;margin-bottom:10px">
+        度量编号 <span class="mono" x-text="modal.d.tpm_no"></span>
+        <span x-text="' · 状态 '"></span><span class="st" :class="stCls(modal.d)" x-text="stName(modal.d)"></span>
+        <span x-text="' · '"></span><span class="mono" x-text="categoryCode(modal.d.category)"></span>
+        <span x-text="' · 口径 '"></span>
+        <span class="mono" data-role="head-band"
+          x-text="modal.d.target_value + (modal.d.unit || '') + ' / 阈值 '
+            + modal.d.threshold_value + (modal.d.unit || '') + '（'
+            + directionName(modal.d.direction) + '）'"></span>
+        <span x-text="' · 当前 '"></span>
+        <span class="mono"
+          x-text="dash(modal.d.current_value) + (modal.d.unit || '') + ' @ ' + dash(modal.d.current_period)"></span>
+        <span data-role="alert-count"
+          x-text="' · 告警 ' + (modal.d.alert_open || 0) + '/' + (modal.d.alert_total || 0)"></span>
+        <span x-show="modal.d && modal.d.baseline_ver" x-text="' · 基线 '"></span>
+        <span class="mono" x-show="modal.d && modal.d.baseline_ver" x-text="modal.d.baseline_ver"></span>
+      </div>
+      <div style="display:grid;grid-template-columns:96px 1fr;gap:8px 12px;align-items:center">
+        <!-- 描述性字段：只要不是硬终态就可改（与判定口径的解锁条件**不同**） -->
+        <label>名称</label>
+        <input x-model="modal.d.name" :disabled="modal.mode === 'view' || locked(modal.d)">
+        <label>度量类别</label>
+        <!-- ⚠ 静态 option：这个 select 的值要由**数据回填**（openDetail 后 modal.d.category），
+             用 x-for 生成选项会静默停在第一项 -->
+        <select x-model="modal.d.category" :disabled="modal.mode === 'view' || locked(modal.d)">
+          <option value="tpm">技术绩效指标（TPM）</option>
+          <option value="mop">性能度量（MOP）</option>
+          <option value="kpp">关键性能参数（KPP）</option>
+        </select>
+        <label>计量单位</label>
+        <input x-model="modal.d.unit" placeholder="选填，如 % / kg / W"
+          :disabled="modal.mode === 'view' || locked(modal.d)">
+        <label>关联需求</label>
+        <input x-model="modal.d.req_no" placeholder="选填，如 REQ-001（弱引用需求台账）"
+          :disabled="modal.mode === 'view' || locked(modal.d)">
+        <label>责任人</label>
+        <!-- 文本输入 + datalist 建议（**不用 select + x-for**：回填会静默停第一项）；
+             候选来自跨应用 stakeholder.list，值仍是文本姓名 -->
+        <div>
+          <input x-model="modal.d.owner" list="sh-options-modal" placeholder="选填（可从利益相关者里选）"
+            :disabled="modal.mode === 'view' || locked(modal.d)" style="width:100%">
+          <datalist id="sh-options-modal">
+            <template x-for="x in owners" :key="x.name">
+              <option :value="x.name" x-text="x.name + ' · ' + (x.sh_no || '')"></option>
+            </template>
+          </datalist>
+        </div>
+
+        <!-- 判定口径三件：**只在「定义」态可改**（BR-02）—— 这是本页与同组其它页的语义差 -->
+        <label style="color:var(--amber)">优化方向</label>
+        <select x-model="modal.d.direction"
+          :disabled="modal.mode === 'view' || locked(modal.d) || specFrozen(modal.d)">
+          <option value="higher">越大越好</option>
+          <option value="lower">越小越好</option>
+        </select>
+        <label style="color:var(--amber)">目标值</label>
+        <input type="number" step="any" x-model="modal.d.target_value"
+          :disabled="modal.mode === 'view' || locked(modal.d) || specFrozen(modal.d)">
+        <label style="color:var(--amber)">阈值</label>
+        <input type="number" step="any" x-model="modal.d.threshold_value"
+          :disabled="modal.mode === 'view' || locked(modal.d) || specFrozen(modal.d)">
+        <label>基线版本</label>
+        <div class="muted" x-text="dash(modal.d.baseline_ver)"></div>
+        <label>变更请求号</label>
+        <div class="muted" x-text="dash(modal.d.change_no)"></div>
+        <template x-if="modal.d.close_note">
+          <div style="display:contents">
+            <label>关闭说明</label>
+            <div class="muted" x-text="modal.d.close_note"></div>
+          </div>
+        </template>
+      </div>
+
+      <!-- 实测值序列（聚合内子表：TPM 的本质是趋势，只留最新值看不出趋势） -->
+      <div class="muted" style="font-size:12px;font-weight:700;margin:14px 0 6px"
+        data-role="reading-title" x-text="'实测值序列（' + readingsOf(modal.d).length + ' 期）'"></div>
+      <div class="scroll-x">
+        <table class="tbl tight">
+          <tr><th>序号</th><th>度量期次</th><th>实测值</th><th>判定</th><th>备注</th></tr>
+          <template x-if="!readingsOf(modal.d).length">
+            <tr><td colspan="5" class="empty">还没有实测值 —— 基线化后点「记实测值」报第一期读数</td></tr>
+          </template>
+          <template x-for="r in readingsOf(modal.d)" :key="r.seq">
+            <tr class="sub" data-role="reading-row">
+              <td class="mono" data-role="reading-seq" x-text="r.seq"></td>
+              <td class="mono" data-role="reading-period" x-text="r.period"></td>
+              <td class="mono" data-role="reading-value"
+                x-text="r.measured_value + (modal.d.unit || '')"></td>
+              <td><span class="st" :class="passedCls(r.passed)" x-text="passedName(r.passed)"></span></td>
+              <td class="muted" data-role="reading-note" x-text="dash(r.note)"></td>
+            </tr>
+          </template>
+        </table>
+      </div>
+
+      <!-- 告警台账（聚合内子表，随超阈值的那条实测值同事务产生 —— 卡片 I-1） -->
+      <div class="muted" style="font-size:12px;font-weight:700;margin:14px 0 6px"
+        data-role="alert-title"
+        x-text="'告警台账（' + (modal.d.alert_open || 0) + ' 未了结 / ' + (modal.d.alert_total || 0) + ' 总）'"></div>
+      <div class="scroll-x">
+        <table class="tbl tight">
+          <tr><th>序号</th><th>期次</th><th>实测值</th><th>超出量</th><th>告警信息</th><th>状态</th><th>纠正措施</th></tr>
+          <template x-if="!alertsOf(modal.d).length">
+            <tr><td colspan="7" class="empty">没有告警 —— 每一期实测值都在阈内（超阈值必出告警，BR-01）</td></tr>
+          </template>
+          <template x-for="a in alertsOf(modal.d)" :key="a.seq">
+            <tr class="sub" data-role="alert-row">
+              <td class="mono" data-role="alert-seq" x-text="a.seq"></td>
+              <td class="mono" data-role="alert-period" x-text="a.period"></td>
+              <td class="mono" data-role="alert-value" x-text="a.measured_value"></td>
+              <td class="mono" data-role="alert-deviation" x-text="a.deviation"></td>
+              <td data-role="alert-message" x-text="a.message"></td>
+              <td><span class="st" :class="alertStatusCls(a.status)" x-text="alertStatusName(a.status)"></span></td>
+              <td class="muted" data-role="alert-note" x-text="dash(a.handle_note)"></td>
+            </tr>
+          </template>
+        </table>
+      </div>
+
+      <div class="tagline" style="margin-top:12px">
+        <!-- BR-02：判定口径冻结（**可解锁** —— 用 rebaseline + 变更请求号） -->
+        <span class="muted" style="font-size:11px" data-role="spec-frozen-hint"
+          x-show="!locked(modal.d) && specFrozen(modal.d)"
+          x-text="specFrozenText(modal.d)"></span>
+        <!-- BR-06：硬终态（不可解锁） -->
+        <span class="muted" style="font-size:11px" data-role="locked-hint" x-show="locked(modal.d)"
+          x-text="lockedText()"></span>
+        <!-- BR-06：未了结告警时给出**为什么不能关**，而不是只把按钮藏掉 -->
+        <span class="muted" style="font-size:11px" data-role="close-block-hint"
+          x-show="showCloseBlock(modal.d)" x-text="closeBlockText(modal.d)"></span>
+        <span class="muted" style="font-size:11px"
+          x-show="modal.mode === 'view' && isStatus(modal.d, 'defined')">
+          定义态 —— 判定口径仍可改；先「基线化」冻结口径并开始度量
+        </span>
+        <div class="right" style="gap:8px">
+          <button class="b-pri b-sm" x-show="modal.mode === 'edit' && !locked(modal.d)"
+            :disabled="modal.saving" @click="saveEdit()"
+            x-text="modal.saving ? '保存中…' : '保存'"></button>
+          <button class="b-ghost b-sm" x-show="modal.mode === 'view' && isStatus(modal.d, 'defined')"
+            @click="baseline(modal.d)">基线化</button>
+          <button class="b-pri b-sm"
+            x-show="modal.mode === 'view' && inStatus(modal.d, ['measuring', 'corrected'])"
+            @click="openRecord(modal.d)">记实测值</button>
+          <button class="b-ghost b-sm" x-show="modal.mode === 'view' && isStatus(modal.d, 'exceeded')"
+            @click="openCorrect(modal.d)">纠正</button>
+          <button class="b-ghost b-sm"
+            x-show="modal.mode === 'view' && inStatus(modal.d, ['measuring', 'corrected', 'exceeded'])"
+            :disabled="!canClose(modal.d)" @click="closeMeasure(modal.d)">关闭度量</button>
+        </div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>
+
+<!-- 记实测值 模态（唯一写实测值的入口；超阈值时后端**同事务**产生告警） -->
+<div x-show="rm.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:680px;max-height:88vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b>记实测值</b>
+      <div class="right"><button class="b-sm" @click="closeRecord()">取消</button></div>
+    </div>
+    <!-- ⚠ 同详情模态：必须 x-if -->
+    <template x-if="rm.open">
+    <div class="bd">
+      <div class="muted" style="font-size:12px;margin-bottom:8px">
+        <span class="mono" x-text="rm.tpm_no"></span>
+        <span x-text="' · ' + (rm.name || '')"></span>
+      </div>
+      <div class="muted" style="font-size:11.5px;margin-bottom:8px" data-role="rm-band"
+        x-text="bandText(rm)"></div>
+      <div style="display:grid;grid-template-columns:96px 1fr;gap:8px 12px;align-items:center">
+        <label style="color:var(--amber)">度量期次</label>
+        <input x-model="rm.period" placeholder="必填，如 2026-Q3（本度量内唯一，BR-07）">
+        <label style="color:var(--amber)">实测值</label>
+        <input type="number" step="any" x-model="rm.measured_value"
+          x-bind:placeholder="'必填，数字（单位 ' + (rm.unit || '—') + '）'">
+        <label>备注</label>
+        <input x-model="rm.note" placeholder="选填：数据来源 / 测量工况">
+      </div>
+      <div class="tagline" style="margin-top:12px">
+        <span class="muted" style="font-size:11px" x-show="!canRecord()">
+          期次与实测值都必填，实测值要能转成数字（BR-08）
+        </span>
+        <div class="right"><button class="b-pri b-sm" :disabled="!canRecord() || rm.saving"
+          @click="saveRecord()" x-text="rm.saving ? '提交中…' : '提交读数'"></button></div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>
+
+<!-- 纠正 模态（登记纠正措施 → 状态「已纠正」并了结未了结的告警，同事务） -->
+<div x-show="cm.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:680px;max-height:88vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b>纠正（超阈值 → 已纠正）</b>
+      <div class="right"><button class="b-sm" @click="closeCorrect()">取消</button></div>
+    </div>
+    <!-- ⚠ 同详情模态：必须 x-if -->
+    <template x-if="cm.open">
+    <div class="bd">
+      <div class="muted" style="font-size:12px;margin-bottom:8px">
+        <span class="mono" x-text="cm.tpm_no"></span>
+        <span x-text="' · ' + (cm.name || '')"></span>
+        <template x-if="cm.period">
+          <span x-text="' · 触发期次 '"></span>
+        </template>
+        <span class="mono" x-show="cm.period" x-text="cm.period"></span>
+      </div>
+      <div style="display:grid;grid-template-columns:96px 1fr;gap:8px 12px;align-items:start">
+        <label style="color:var(--amber)">纠正措施</label>
+        <textarea x-model="cm.action" rows="3"
+          placeholder="必填：针对这次超阈值采取了什么（材料 §6.7.1.2.2「corrective action should begin as soon as practical」）"></textarea>
+      </div>
+      <div class="tagline" style="margin-top:12px">
+        <span class="muted" style="font-size:11px" x-show="!canCorrect()">
+          纠正措施不能为空 —— 只把状态改掉而不写措施，等于没有处置
+        </span>
+        <div class="right"><button class="b-pri b-sm" :disabled="!canCorrect() || cm.saving"
+          @click="saveCorrect()" x-text="cm.saving ? '提交中…' : '登记并了结告警'"></button></div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>
+
+<!-- 新建度量 模态 -->
+<div x-show="form.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:740px;max-height:88vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b>新建度量</b>
+      <div class="right"><button class="b-sm" @click="closeForm()">取消</button></div>
+    </div>
+    <!-- ⚠ 同详情模态：必须 x-if（x-show 仍会求值 null 上的绑定） -->
+    <template x-if="form.d">
+    <div class="bd">
+      <div style="display:grid;grid-template-columns:96px 1fr;gap:8px 12px;align-items:center">
+        <label style="color:var(--amber)">名称</label>
+        <input x-model="form.d.name" placeholder="如：推进剂余量（必填）">
+        <!-- 类别与方向都不给默认值：字典校验（BR-04）要在选择上落得实 -->
+        <label style="color:var(--amber)">度量类别</label>
+        <select x-model="form.d.category">
+          <option value="">请选择（必选）</option>
+          <option value="tpm">技术绩效指标（TPM）</option>
+          <option value="mop">性能度量（MOP）</option>
+          <option value="kpp">关键性能参数（KPP）</option>
+        </select>
+        <label style="color:var(--amber)">优化方向</label>
+        <select x-model="form.d.direction">
+          <option value="">请选择（必选）</option>
+          <option value="higher">越大越好</option>
+          <option value="lower">越小越好</option>
+        </select>
+        <label style="color:var(--amber)">目标值</label>
+        <input type="number" step="any" x-model="form.d.target_value"
+          placeholder="必填：目标水平（越大越好时 ≥ 阈值，BR-05）">
+        <label style="color:var(--amber)">阈值</label>
+        <input type="number" step="any" x-model="form.d.threshold_value"
+          placeholder="必填：最低可接受（越过即触发告警）">
+        <label>计量单位</label><input x-model="form.d.unit" placeholder="选填，如 % / kg / W">
+        <label>关联需求</label><input x-model="form.d.req_no" placeholder="选填，如 REQ-001">
+        <label>责任人</label>
+        <div>
+          <input x-model="form.d.owner" list="sh-options-form" placeholder="选填（可从利益相关者里选）" style="width:100%">
+          <datalist id="sh-options-form">
+            <template x-for="x in owners" :key="x.name">
+              <option :value="x.name" x-text="x.name + ' · ' + (x.sh_no || '')"></option>
+            </template>
+          </datalist>
+        </div>
+      </div>
+      <div class="tagline" style="margin-top:12px">
+        <span class="muted" style="font-size:11px">新度量以「定义」状态落库，编号自动生成（TPM-001 起）；
+          五项必填未齐时不可提交</span>
+        <div class="right"><button class="b-pri b-sm" :disabled="!canSubmit() || form.saving" @click="saveForm()"
+          x-text="form.saving ? '提交中…' : '提交'"></button></div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>

@@ -65,6 +65,16 @@ config/kg_storage/
 /lib/
 知识图谱.html
 
+# 原始书籍（app/<组>/book/）：**默认不提交** —— 二进制、体积大、常为版权书。
+# 转换后的分章 md 落在 app/<组>/brd/，那份要提交（是 design-plus 第①步的输入）。
+app/*/book/
+# ⚠ 例外（2026-09-25 用户指定）：nasa_pms 的原始书**入库** ——
+# NASA SP-2016-6105 Rev2 是美国政府作品（公有领域，无版权与分发限制），3.6 MB，
+# 且它是本组 `brd/` 全部分章 md 的**唯一真相源**：留在仓里，clone 下来即可复核
+# 「材料 → BRD」这段转换是否忠实（书不在，那些 md 就成了无法对质的孤本）。
+# 将来若往 book/ 放**受版权保护**的书，别照这个例外走 —— 那类继续靠 .gitignore 挡在仓外。
+!app/nasa_pms/book/
+
 # 制度库：README 说明入库，制度文件本身私有不提交
 config/rules/*
 !config/rules/README.md

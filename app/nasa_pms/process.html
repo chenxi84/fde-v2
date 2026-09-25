@@ -1,0 +1,56 @@
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px">
+    <b>系统工程流程总览</b>
+    <span class="muted" style="font-size:12px">四个职能域 · 读数取自各应用台账实时状态</span>
+    <div class="right tagline" style="gap:8px">
+      <button class="b-ghost b-sm" @click="refresh()">刷新读数</button>
+      <button class="b-pri b-sm" @click="agentAnalyze()">✦ Agent 分析下一步</button>
+    </div>
+  </div>
+
+  <div class="scroll-x" style="padding:8px 16px 14px" data-role="process-svg">
+    <template x-if="loading">
+      <div class="loadbox"><span class="spin">◌</span> 载入流程视图…</div>
+    </template>
+
+    <template x-if="!loading && svgHtml">
+      <div @click="onSvgClick($event)" x-html="svgHtml"></div>
+    </template>
+
+    <div class="muted" style="font-size:11px; padding-top:6px">
+      图例：<span class="st st-green">绿</span> 该应用的关键闭环已发生过 ·
+      <span class="st st-slate">灰</span> 尚未发生 ·
+      点击域名 / 节点进入对应台账（域内左→右即先后依赖：需求挂相关方、验证挂在需求上；变更改配置项、接口可挂配置项；评审依据计划）
+    </div>
+  </div>
+</div></div>
+
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px">
+    <b>已声明的流程</b>
+    <span class="muted" style="font-size:12px">
+      `app/nasa_pms/_flow_*.yaml`（声明式 DAG）—— 平台上没有 HTTP 的「运行」端点，运行由 AI 管家执行
+    </span>
+    <div class="right"><button class="b-sm" @click="openFlowEditor()">去流程编排页</button></div>
+  </div>
+
+  <div class="scroll-x" data-role="flows">
+    <table class="tbl tight">
+      <tr><th>流程</th><th>用途</th><th>节点构成</th><th>操作</th></tr>
+      <template x-if="!flows.length">
+        <tr><td colspan="4" class="empty">本组还没有声明流程（在 `app/nasa_pms/_flow_*.yaml` 里加一份即可）</td></tr>
+      </template>
+      <template x-for="f in flows" :key="f.key">
+        <tr class="data">
+          <td><b x-text="f.name"></b><div class="muted mono" style="font-size:11px" x-text="f.key"></div></td>
+          <td class="muted" style="max-width:420px" x-text="f.description"></td>
+          <td class="mono" style="font-size:12px">
+            <span x-text="f.nodes + ' 节点'"></span>
+            <span class="muted" x-text="' · 智能体 ' + (f.byType.agent || 0) + ' / 直调 ' + (f.byType.call || 0)"></span>
+          </td>
+          <td><button class="b-link" @click="runFlow(f)">让 AI 管家跑</button></td>
+        </tr>
+      </template>
+    </table>
+  </div>
+</div></div>

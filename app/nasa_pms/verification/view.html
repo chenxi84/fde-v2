@@ -1,0 +1,292 @@
+<!-- 验证矩阵 · 跨应用派生（create 必带对应需求）· 规划/执行/判定/关闭 -->
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>验证矩阵</b>
+    <span class="muted">需求 × 验证方法 × 结果（规划 · 执行 · 判定 · 关闭）</span>
+    <div class="right tagline" style="gap:8px">
+      <select x-model="f_req" data-role="f-req" @change="search()" style="width:170px">
+        <option value="">全部需求</option>
+        <template x-for="r in reqs" :key="r.req_no">
+          <option :value="r.req_no" x-text="r.req_no + ' · ' + r.title"></option>
+        </template>
+      </select>
+      <!-- ⚠ 枚举 select 一律**静态 option**（patterns.md §4），不要用 <template x-for> 生成选项：
+           x-model 的「数据 → DOM」回填是**一次性 effect**，在 x-for 把 option 插进 DOM 之前就跑了，
+           回填静默失败、选项停在第一项 —— 看 modal 里的「验证阶段」会显示「研制前声明阶段」
+           而不是实际存的「端到端功能级」（本页实测踩到，见前端详设 §7）。字典值以 view.js 为准。 -->
+      <select x-model="f_method" data-role="f-method" @change="search()" style="width:120px">
+        <option value="">全部方法</option>
+        <option value="inspection">检验</option>
+        <option value="analysis">分析</option>
+        <option value="demonstration">演示</option>
+        <option value="test">测试</option>
+      </select>
+      <select x-model="f_phase" data-role="f-phase" @change="search()" style="width:150px">
+        <option value="">全部阶段</option>
+        <option value="pre_development">研制前声明阶段</option>
+        <option value="box_functional">单机功能级</option>
+        <option value="box_environmental">单机环境级</option>
+        <option value="system_environmental">系统环境级</option>
+        <option value="system_functional">系统功能级</option>
+        <option value="end_to_end">端到端功能级</option>
+        <option value="integrated_vehicle">集成飞行器功能级</option>
+        <option value="on_orbit">在轨功能级</option>
+      </select>
+      <select x-model="f_status" data-role="f-status" @change="search()" style="width:120px">
+        <option value="">全部状态</option>
+        <option value="planned">规划</option>
+        <option value="executing">执行中</option>
+        <option value="passed">通过</option>
+        <option value="failed">不通过</option>
+        <option value="closed">关闭</option>
+      </select>
+      <button class="b-pri b-sm" @click="openForm()">规划验证项</button>
+    </div>
+  </div>
+  <!-- 组合级读数（I-1：每条已基线需求至少有一条验证项）—— 写路径上无法违反该不变量，
+       故以查询视图呈现缺口；data-role 供 e2e 断言这段「纯文本」（不像 select 会带进选项文本） -->
+  <div class="tagline" style="padding:6px 16px">
+    <span class="muted" data-role="coverage" style="font-size:12px"
+      :style="coverageGap() ? 'color:var(--amber);font-size:12px' : 'font-size:12px'"
+      x-text="coverageText()"></span>
+  </div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr><th>验证项编号</th><th>对应需求</th><th>验证方法</th><th>验证阶段</th><th>状态</th><th>判定结果</th><th>责任人</th><th>操作</th></tr>
+      <template x-if="!list.items.length">
+        <tr><td colspan="8" class="empty">暂无验证项 —— 点「规划验证项」把一条需求挂进验证矩阵</td></tr>
+      </template>
+      <template x-for="d in list.items" :key="d.ver_no">
+        <tr class="data">
+          <td><button class="b-link mono" @click="openDetail(d, 'view')" x-text="d.ver_no"></button></td>
+          <td class="mono" x-text="d.req_no"></td>
+          <td x-text="methodName(d.method)"></td>
+          <td x-text="phaseName(d.phase)"></td>
+          <td><span class="st" :class="statusCls(d.status)" x-text="statusName(d.status)"></span></td>
+          <td><span class="st" :class="resultCls(d.result)" x-text="resultName(d.result)"></span></td>
+          <td x-text="dash(d.owner)"></td>
+          <!-- 动作按钮按状态显隐（状态机：planned → executing → passed/failed → closed）。
+               ⚠ 用 x-show 隐藏（元素仍在 DOM，仅 display:none）⇒ 存在性断言**必须带 `:visible`**，
+               否则 count() 会把隐藏按钮也数进去、断言假红（同组实测踩过）。 -->
+          <td>
+            <button class="b-link" @click="openDetail(d, 'view')">详情</button>
+            <button class="b-link" x-show="!terminal(d)" @click="openDetail(d, 'edit')">编辑</button>
+            <button class="b-link" x-show="d.status === 'planned'" @click="start(d)">开始执行</button>
+            <button class="b-link" x-show="d.status === 'executing'" @click="openDetail(d, 'record')">记录判定</button>
+            <button class="b-link" x-show="decided(d)" @click="openDetail(d, 'close')">关闭</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:8px 16px" x-show="list && list.total > list.size">
+    <span class="muted" x-text="'共 ' + (list ? list.total : 0) + ' 条'"></span>
+    <div class="right tagline" style="gap:6px">
+      <button class="b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">上一页</button>
+      <span class="muted" x-text="'第 ' + (list ? list.page : 1) + ' 页'"></span>
+      <button class="b-sm" :disabled="list.page * list.size >= list.total" @click="list.load(list.page + 1)">下一页</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- 详情 / 编辑 / 记录判定 / 关闭 —— 同一模态，mode 切换 -->
+<div x-show="modal.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:720px;max-height:88vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b x-text="modalTitle()"></b>
+      <div class="right"><button class="b-sm" @click="closeModal()">关闭</button></div>
+    </div>
+    <!-- ⚠ 必须用 x-if 而不是 x-show：x-show 只隐藏，Alpine **仍会求值**内部绑定，
+         而 modal.d 初始为 null → 满屏 "Cannot read properties of null" 报错（实测踩过） -->
+    <template x-if="modal.d">
+    <div class="bd">
+      <!-- 只读信息条：编号 / 状态 / 判定结果恒为**派生态**，不是可填字段
+           data-role 供 e2e 断言这段「纯文本」——不像 select 会把选项文本也带进 inner_text -->
+      <div class="muted" data-role="ver-head" style="font-size:12px;margin-bottom:10px">
+        验证项编号 <span class="mono" x-text="modal.d.ver_no"></span>
+        <span x-text="' · 状态 '"></span><span class="st" :class="statusCls(modal.d.status)" x-text="statusName(modal.d.status)"></span>
+        <span x-text="' · 判定结果 '"></span><span class="st" :class="resultCls(modal.d.result)" x-text="resultName(modal.d.result)"></span>
+      </div>
+      <!-- 关闭说明：`close(note=…)` 落库到 `close_note`（2026-09-25 起留痕；只有关闭后才有） -->
+      <template x-if="modal.d.close_note">
+        <div class="muted" style="font-size:12px;margin-bottom:8px"
+          data-role="ver-close-note" x-text="'关闭说明：' + modal.d.close_note"></div>
+      </template>
+      <div style="display:grid;grid-template-columns:96px 1fr;gap:8px 12px;align-items:center">
+        <!-- BR-01 强关联：对应需求建成后**只读** —— 换需求等于换矩阵的一行，应另建验证项 -->
+        <label>对应需求</label>
+        <div class="mono" data-role="ver-req" x-text="reqLabel(modal.d.req_no)"></div>
+        <label>验证方法</label>
+        <select x-model="modal.d.method" data-role="ver-method"
+          :disabled="modal.mode !== 'edit' || locked(modal.d)">
+          <option value="inspection">检验</option>
+          <option value="analysis">分析</option>
+          <option value="demonstration">演示</option>
+          <option value="test">测试</option>
+        </select>
+        <label>验证阶段</label>
+        <select x-model="modal.d.phase" data-role="ver-phase"
+          :disabled="modal.mode !== 'edit' || locked(modal.d)">
+          <option value="pre_development">研制前声明阶段</option>
+          <option value="box_functional">单机功能级</option>
+          <option value="box_environmental">单机环境级</option>
+          <option value="system_environmental">系统环境级</option>
+          <option value="system_functional">系统功能级</option>
+          <option value="end_to_end">端到端功能级</option>
+          <option value="integrated_vehicle">集成飞行器功能级</option>
+          <option value="on_orbit">在轨功能级</option>
+        </select>
+        <label>成功判据</label>
+        <textarea x-model="modal.d.criteria" data-role="ver-criteria" rows="2" style="width:100%"
+          placeholder="材料附录 D TABLE D-1「Verification Success Criteria」"
+          :disabled="modal.mode !== 'edit'"></textarea>
+        <label>责任人</label>
+        <!-- 文本输入 + datalist 建议（**不用 select + x-for**：x-model 的选项回填会静默停在
+             第一项，见本组前端详设附）；候选来自跨应用只读调用，值仍是文本 -->
+        <div>
+          <input x-model="modal.d.owner" data-role="ver-owner" list="sh-options-modal" placeholder="选填（可从利益相关者里选）"
+            :disabled="modal.mode !== 'edit'" style="width:100%">
+          <datalist id="sh-options-modal">
+            <template x-for="x in owners" :key="x.name">
+              <option :value="x.name" x-text="x.name + ' · ' + (x.sh_no || '')"></option>
+            </template>
+          </datalist>
+        </div>
+        <!-- 判定结果 / 证据 / 后续处置：只在「记录判定」动作里可填（判定不可直接编辑，BR-06） -->
+        <label :style="modal.mode === 'record' ? 'color:var(--amber)' : ''">判定结果</label>
+        <div>
+          <template x-if="modal.mode === 'record'">
+            <select x-model="modal.record.result" data-role="record-result">
+              <option value="">请选择判定结果（必选）</option>
+              <option value="pass">通过</option>
+              <option value="fail">不通过</option>
+            </select>
+          </template>
+          <template x-if="modal.mode !== 'record'">
+            <span class="st" :class="resultCls(modal.d.result)" x-text="resultName(modal.d.result)"></span>
+          </template>
+        </div>
+        <label :style="modal.mode === 'record' ? 'color:var(--amber)' : ''">验证证据</label>
+        <div>
+          <template x-if="modal.mode === 'record'">
+            <textarea x-model="modal.record.evidence" data-role="record-evidence" rows="2" style="width:100%"
+              placeholder="必填：验证数据 / 报告出处（如 TR-001 §4.2）（BR-02）"></textarea>
+          </template>
+          <template x-if="modal.mode !== 'record'">
+            <div class="muted" data-role="ver-evidence" x-text="dash(modal.d.evidence)"></div>
+          </template>
+        </div>
+        <label :style="modal.mode === 'record' ? 'color:var(--amber)' : ''">后续处置</label>
+        <div>
+          <template x-if="modal.mode === 'record'">
+            <textarea x-model="modal.record.followUp" data-role="record-followup" rows="2" style="width:100%"
+              placeholder="判定「不通过」时必填：整改 / 复验 / 豁免（BR-02）"></textarea>
+          </template>
+          <template x-if="modal.mode !== 'record'">
+            <div class="muted" data-role="ver-followup" x-text="dash(modal.d.follow_up)"></div>
+          </template>
+        </div>
+        <!-- 关闭说明只在「关闭」动作里出现 -->
+        <template x-if="modal.mode === 'close'">
+          <div style="display:contents">
+            <label>关闭说明</label>
+            <input x-model="modal.close.note" placeholder="选填，如「结论已纳入验证矩阵报告」" style="width:100%">
+          </div>
+        </template>
+      </div>
+      <div class="muted" style="font-size:11px;margin-top:8px">
+        对应需求是<b>强关联</b>（BR-01），建成后只读；判定结果与证据只能经「记录判定」产生，
+        已判定的验证项<b>不能再改验证方法与验证阶段</b>（BR-03）
+      </div>
+      <div class="tagline" style="margin-top:12px">
+        <span class="muted" style="font-size:11px" x-show="modal.mode === 'view'">
+          只读视图 —— 改规划信息走「编辑」，开始执行 / 记录判定走列表的动作按钮
+        </span>
+        <span class="muted" style="font-size:11px" x-show="modal.mode === 'edit' && locked(modal.d)">
+          已判定 / 已关闭 —— 验证方法与验证阶段锁定，仅成功判据与责任人可补
+        </span>
+        <span class="muted" style="font-size:11px" x-show="modal.mode === 'close'">
+          关闭是终态：关闭后不能再修改、再判定（记录保留）
+        </span>
+        <div class="right" style="gap:8px">
+          <button class="b-pri b-sm" data-role="edit-save" x-show="modal.mode === 'edit'" :disabled="modal.saving" @click="saveEdit()"
+            x-text="modal.saving ? '保存中…' : '保存'"></button>
+          <button class="b-pri b-sm" data-role="record-submit" x-show="modal.mode === 'record'" :disabled="!canRecord() || modal.saving" @click="saveRecord()"
+            x-text="modal.saving ? '提交中…' : '提交判定'"></button>
+          <button class="b-pri b-sm" data-role="close-submit" x-show="modal.mode === 'close'" :disabled="modal.saving" @click="saveClose()"
+            x-text="modal.saving ? '关闭中…' : '确认关闭'"></button>
+        </div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>
+
+<!-- 规划验证项 模态（跨应用派生：对应需求从需求台账选，必选） -->
+<div x-show="form.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:720px;max-height:88vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b>规划验证项</b>
+      <div class="right"><button class="b-sm" @click="closeForm()">取消</button></div>
+    </div>
+    <!-- ⚠ 同详情模态：必须 x-if（x-show 仍会求值 null 上的绑定） -->
+    <template x-if="form.d">
+    <div class="bd">
+      <div style="display:grid;grid-template-columns:96px 1fr;gap:8px 12px;align-items:center">
+        <!-- F-1：对应需求不给默认值，须显式选择（强关联 BR-01 才落得实） -->
+        <label>对应需求</label>
+        <select x-model="form.d.req_no" data-role="form-req">
+          <option value="">请选择需求（必选）</option>
+          <template x-for="r in reqs" :key="r.req_no">
+            <option :value="r.req_no" x-text="r.req_no + ' · ' + r.title"></option>
+          </template>
+        </select>
+        <label>验证方法</label>
+        <select x-model="form.d.method" data-role="form-method">
+          <option value="">请选择（必选）</option>
+          <option value="inspection">检验</option>
+          <option value="analysis">分析</option>
+          <option value="demonstration">演示</option>
+          <option value="test">测试</option>
+        </select>
+        <label>验证阶段</label>
+        <select x-model="form.d.phase" data-role="form-phase">
+          <option value="">请选择（必选）</option>
+          <option value="pre_development">研制前声明阶段</option>
+          <option value="box_functional">单机功能级</option>
+          <option value="box_environmental">单机环境级</option>
+          <option value="system_environmental">系统环境级</option>
+          <option value="system_functional">系统功能级</option>
+          <option value="end_to_end">端到端功能级</option>
+          <option value="integrated_vehicle">集成飞行器功能级</option>
+          <option value="on_orbit">在轨功能级</option>
+        </select>
+        <label>成功判据</label>
+        <textarea x-model="form.d.criteria" data-role="form-criteria" rows="2" style="width:100%"
+          placeholder="选填：判定该需求是否被满足的量化基准"></textarea>
+        <label>责任人</label>
+        <div>
+          <input x-model="form.d.owner" data-role="form-owner" list="sh-options-form" placeholder="选填：承担本次验证的执行方 / 责任人（可从利益相关者里选）"
+            style="width:100%">
+          <datalist id="sh-options-form">
+            <template x-for="x in owners" :key="x.name">
+              <option :value="x.name" x-text="x.name + ' · ' + (x.sh_no || '')"></option>
+            </template>
+          </datalist>
+        </div>
+      </div>
+      <div class="muted" style="font-size:11px;margin-top:6px" x-show="reqReady && !reqs.length">
+        需求台账里还没有需求 —— 请先到「需求」页录入，验证项必须挂在一条需求上（BR-01）
+      </div>
+      <div class="muted" style="font-size:11px;margin-top:6px" x-show="!reqReady">
+        需求台账不可用，暂时无法规划验证项
+      </div>
+      <div class="tagline" style="margin-top:12px">
+        <span class="muted" style="font-size:11px">对应需求 / 验证方法 / 验证阶段 为必填；新验证项以「规划」状态落库，编号自动生成</span>
+        <div class="right"><button class="b-pri b-sm" data-role="form-submit" :disabled="!canSubmit() || form.saving" @click="saveForm()"
+          x-text="form.saving ? '提交中…' : '提交'"></button></div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>

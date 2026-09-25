@@ -1,0 +1,242 @@
+<!-- 配置项台账 · 独立创建（保留登记入口）· 受控/发版/版本变更/纳基线/归档 -->
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>配置项台账</b>
+    <span class="muted">受控 · 发版 · 基线 · 版本只能递增</span>
+    <div class="right tagline" style="gap:8px">
+      <select x-model="f_type" @change="search()" style="width:120px">
+        <option value="">全部类型</option>
+        <template x-for="t in types" :key="t[0]">
+          <option :value="t[0]" x-text="t[1]"></option>
+        </template>
+      </select>
+      <select x-model="f_status" @change="search()" style="width:120px">
+        <option value="">全部状态</option>
+        <option value="draft">草稿</option>
+        <option value="controlled">受控</option>
+        <option value="released">已发布</option>
+        <option value="archived">已归档</option>
+      </select>
+      <select x-model="f_baseline" @change="search()" style="width:120px">
+        <option value="">全部基线</option>
+        <template x-for="b in baselines" :key="b[0]">
+          <option :value="b[0]" x-text="b[1]"></option>
+        </template>
+      </select>
+      <button class="b-pri b-sm" @click="openForm()">登记配置项</button>
+    </div>
+  </div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr><th>配置项编号</th><th>名称</th><th>类型</th><th>当前版本</th><th>所属基线</th><th>状态</th><th>责任人</th><th>操作</th></tr>
+      <template x-if="!list.items.length">
+        <tr><td colspan="8" class="empty">暂无配置项 —— 点「登记配置项」录入第一个</td></tr>
+      </template>
+      <template x-for="d in list.items" :key="d.ci_no">
+        <tr class="data">
+          <td><button class="b-link mono" @click="openDetail(d, 'view')" x-text="d.ci_no"></button></td>
+          <td x-text="d.name"></td>
+          <td x-text="typeName(d.ci_type)"></td>
+          <td class="mono" x-text="vtag(d.version)"></td>
+          <td>
+            <span x-show="d.baseline" x-text="baselineName(d.baseline)"></span>
+            <span class="muted" x-show="d.baseline_ver" x-text="' ' + d.baseline_ver"></span>
+            <span class="muted" x-show="!d.baseline">—</span>
+          </td>
+          <td><span :style="'color:' + statusColor(d.status) + ';font-weight:600'" x-text="statusName(d.status)"></span></td>
+          <td x-text="dash(d.owner)"></td>
+          <td>
+            <button class="b-link" @click="openDetail(d, 'edit')">编辑</button>
+            <button class="b-link" x-show="d.status === 'draft'" @click="control(d)">提交受控</button>
+            <button class="b-link" x-show="d.status === 'controlled'" @click="release(d)">发版</button>
+            <button class="b-link" x-show="d.status === 'released' || d.status === 'controlled'" @click="openBump(d)">版本变更</button>
+            <button class="b-link" x-show="d.status === 'released' || d.status === 'controlled'" @click="openBaseline(d)">纳入基线</button>
+            <button class="b-link" x-show="d.status === 'released'" @click="archive(d)">归档</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:8px 16px" x-show="list && list.total > list.size">
+    <span class="muted" x-text="'共 ' + (list ? list.total : 0) + ' 条'"></span>
+    <div class="right tagline" style="gap:6px">
+      <button class="b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">上一页</button>
+      <span class="muted" x-text="'第 ' + (list ? list.page : 1) + ' 页'"></span>
+      <button class="b-sm" :disabled="list.page * list.size >= list.total" @click="list.load(list.page + 1)">下一页</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- 详情 / 编辑 模态 -->
+<div x-show="modal.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:640px;max-height:86vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b x-text="modal.mode === 'edit' ? '编辑配置项' : '配置项详情'"></b>
+      <div class="right"><button class="b-sm" @click="closeModal()">关闭</button></div>
+    </div>
+    <!-- ⚠ 必须用 x-if 而不是 x-show：x-show 只隐藏，Alpine **仍会求值**内部绑定，
+         而 modal.d 初始为 null → 满屏 "Cannot read properties of null" 报错（实测踩过） -->
+    <template x-if="modal.d">
+    <div class="bd">
+      <div class="muted" style="font-size:12px;margin-bottom:8px">
+        配置项编号 <span class="mono" x-text="modal.d.ci_no"></span>
+        <span x-text="' · 当前 ' + vtag(modal.d.version)"></span>
+        <span x-show="modal.d && modal.d.released_ver" x-text="' · 已发布 ' + vtag(modal.d.released_ver)"></span>
+        <span x-show="modal.d && modal.d.change_no" x-text="' · 变更 ' + modal.d.change_no"></span>
+      </div>
+      <div style="display:grid;grid-template-columns:88px 1fr;gap:8px 12px;align-items:center">
+        <label>名称</label>
+        <input x-model="modal.d.name" :disabled="modal.mode === 'view' || (locked(modal.d) && !modal.changeNo)">
+        <label>类型</label>
+        <select x-model="modal.d.ci_type" :disabled="modal.mode === 'view' || (locked(modal.d) && !modal.changeNo)">
+          <option value="hardware">硬件</option><option value="software">软件</option><option value="document">文档</option><option value="model">模型</option><option value="data">数据</option>
+        </select>
+        <label>责任人</label>
+        <!-- 文本输入 + datalist 建议（**不用 select + x-for**：x-model 的选项回填会静默停在
+             第一项，见本组前端详设附）；候选来自跨应用只读调用，值仍是文本 -->
+        <div>
+          <input x-model="modal.d.owner" list="sh-options-modal" placeholder="选填（可从利益相关者里选）"
+            :disabled="modal.mode === 'view' || (locked(modal.d) && !modal.changeNo)" style="width:100%">
+          <datalist id="sh-options-modal">
+            <template x-for="x in owners" :key="x.name">
+              <option :value="x.name" x-text="x.name + ' · ' + (x.sh_no || '')"></option>
+            </template>
+          </datalist>
+        </div>
+        <!-- F-2 当前版本只读：只能经「版本变更」递增（BR-01）；BR-04 编号同理只读 -->
+        <label>当前版本</label>
+        <div class="mono" x-text="vtag(modal.d.version) + '（版本只能递增，须走「版本变更」）'"></div>
+        <label>已发布版本</label>
+        <div class="mono" x-text="vtag(modal.d.released_ver)"></div>
+        <label>所属基线</label>
+        <div x-text="modal.d.baseline ? (baselineName(modal.d.baseline) + ' ' + (modal.d.baseline_ver || '')) : '—'"></div>
+        <label>变更请求号</label>
+        <div class="mono" x-text="dash(modal.d.change_no)"></div>
+        <!-- BR-02：已发布须填变更号才解锁；已归档为终态，永不解锁 -->
+        <template x-if="modal.mode === 'edit' && locked(modal.d) && modal.d.status === 'released'">
+          <div style="display:contents">
+            <label style="color:var(--amber)">变更号</label>
+            <div>
+              <input x-model="modal.changeNo" list="cr-options-modal" placeholder="如 CR-001（BR-02：已发布配置项须带变更号）" style="width:100%">
+          <datalist id="cr-options-modal">
+            <template x-for="x in changes" :key="x.cr_no">
+              <option :value="x.cr_no" x-text="x.cr_no + ' · ' + (x.title || '')"></option>
+            </template>
+          </datalist>
+
+              <div class="muted" style="font-size:11px;margin-top:2px">填了才解锁名称、类型与责任人；本次修改将记为该变更</div>
+            </div>
+          </div>
+        </template>
+      </div>
+      <div class="tagline" style="margin-top:12px" x-show="modal.mode === 'edit'">
+        <span class="muted" style="font-size:11px" x-show="modal.d && modal.d.status === 'archived'">已归档（终态）—— 不可再修改</span>
+        <div class="right" x-show="modal.d && modal.d.status !== 'archived'">
+          <button class="b-pri b-sm" :disabled="modal.saving" @click="saveEdit()"
+            x-text="modal.saving ? '保存中…' : '保存'"></button>
+        </div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>
+
+<!-- 登记配置项 模态 -->
+<div x-show="form.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:640px;max-height:86vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b>登记配置项</b>
+      <div class="right"><button class="b-sm" @click="closeForm()">取消</button></div>
+    </div>
+    <!-- ⚠ 同详情模态：必须 x-if（x-show 仍会求值 null 上的绑定） -->
+    <template x-if="form.d">
+    <div class="bd">
+      <div style="display:grid;grid-template-columns:88px 1fr;gap:8px 12px;align-items:center">
+        <label>名称</label><input x-model="form.d.name" placeholder="工作产品名称（必填）">
+        <!-- F-1：类型不给默认值，须显式选择（BR-05 的类型字典校验才落得实） -->
+        <label>类型</label>
+        <select x-model="form.d.ci_type">
+          <option value="">请选择（必选）</option>
+          <option value="hardware">硬件</option><option value="software">软件</option><option value="document">文档</option><option value="model">模型</option><option value="data">数据</option>
+        </select>
+        <label>责任人</label>
+        <div>
+          <input x-model="form.d.owner" list="sh-options-form" placeholder="选填（可从利益相关者里选）" style="width:100%">
+          <datalist id="sh-options-form">
+            <template x-for="x in owners" :key="x.name">
+              <option :value="x.name" x-text="x.name + ' · ' + (x.sh_no || '')"></option>
+            </template>
+          </datalist>
+        </div>
+      </div>
+      <div class="tagline" style="margin-top:12px">
+        <span class="muted" style="font-size:11px">新配置项以「草稿 · v1」落库，编号自动生成；名称或类型未选时不可提交</span>
+        <div class="right"><button class="b-pri b-sm" :disabled="!canSubmit() || form.saving" @click="saveForm()"
+          x-text="form.saving ? '提交中…' : '提交'"></button></div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>
+
+<!-- 版本变更 / 纳入基线 模态（F-8；两个动作字段少，共用一个模态，kind 切换） -->
+<div x-show="act.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:560px;max-height:86vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b x-text="act.kind === 'bump' ? '版本变更' : '纳入基线'"></b>
+      <div class="right"><button class="b-sm" @click="closeAct()">取消</button></div>
+    </div>
+    <!-- ⚠ 同详情模态：必须 x-if -->
+    <template x-if="act.open">
+    <div class="bd">
+      <div class="muted" style="font-size:12px;margin-bottom:8px">
+        <span class="mono" x-text="act.ci_no"></span>
+        <span x-text="' · ' + (act.name || '')"></span>
+      </div>
+      <div style="display:grid;grid-template-columns:88px 1fr;gap:8px 12px;align-items:center">
+        <template x-if="act.kind === 'bump'">
+          <div style="display:contents">
+            <label style="color:var(--amber)">新版本号</label>
+            <div>
+              <input x-model="act.nv" type="number" min="1" style="width:100%">
+              <div class="muted" style="font-size:11px;margin-top:2px" x-text="'必须大于当前版本 v' + act.cur + '（BR-01：版本只能递增）'"></div>
+            </div>
+          </div>
+        </template>
+        <template x-if="act.kind === 'baseline'">
+          <div style="display:contents">
+            <label>基线</label>
+            <select x-model="act.baseline">
+              <option value="functional">功能基线</option><option value="allocated">分配基线</option><option value="product">产品基线</option><option value="as_deployed">部署基线</option>
+            </select>
+            <label>基线版本</label>
+            <input x-model="act.baselineVer" placeholder="选填，如 B1">
+          </div>
+        </template>
+        <!-- BR-03：版本变更必须经由已批准的变更请求 -->
+        <template x-if="act.kind === 'bump'">
+          <div style="display:contents">
+            <label style="color:var(--amber)">变更请求号</label>
+            <div>
+              <input x-model="act.changeNo" list="cr-options-form" placeholder="必填，如 CR-001（BR-03：须经由已批准的变更请求）" style="width:100%">
+          <datalist id="cr-options-form">
+            <template x-for="x in changes" :key="x.cr_no">
+              <option :value="x.cr_no" x-text="x.cr_no + ' · ' + (x.title || '')"></option>
+            </template>
+          </datalist>
+
+              <div class="muted" style="font-size:11px;margin-top:2px">变更后状态回落「受控」，新版本需重新发版才算发布（BR-02）</div>
+            </div>
+          </div>
+        </template>
+      </div>
+      <div class="tagline" style="margin-top:12px">
+        <span class="muted" style="font-size:11px" x-show="!canAct()"
+          x-text="act.kind === 'bump' ? '版本变更须：新版本号大于当前版本（BR-01）+ 变更请求号（BR-03）' : '请选择基线'"></span>
+        <div class="right"><button class="b-pri b-sm" :disabled="!canAct() || act.saving" @click="saveAct()"
+          x-text="act.saving ? '提交中…' : '提交'"></button></div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>

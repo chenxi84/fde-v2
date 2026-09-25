@@ -1,0 +1,146 @@
+<div>
+  <!-- 加载态 -->
+  <div class="loadbox" x-show="loading"><span class="spin">◌</span><br>载入看板…</div>
+
+  <div x-show="!loading">
+    <!-- KPI 指标带：**数字本身是链接**（与 PSC 同款；点它进对应台账） -->
+    <div class="kpis">
+      <div class="kpi rv" style="--kc:#175e54">
+        <button class="v b-link" style="padding:0" @click="gotoPage('requirement')" x-text="kpi.req"></button>
+        <div class="k">需求总数</div>
+      </div>
+      <div class="kpi rv" style="--kc:#16a34a; animation-delay:.05s">
+        <button class="v b-link" style="padding:0" @click="gotoPage('requirement')" x-text="kpi.baselined"></button>
+        <div class="k">已基线需求</div>
+      </div>
+      <div class="kpi rv" style="--kc:#d97706; animation-delay:.1s">
+        <button class="v b-link" style="padding:0" @click="gotoPage('requirement')" x-text="kpi.pending"></button>
+        <div class="k">待评审需求</div>
+      </div>
+      <div class="kpi rv" style="--kc:#b91c1c; animation-delay:.15s">
+        <button class="v b-link" style="padding:0" @click="gotoPage('technical_measure')" x-text="kpi.alerts"></button>
+        <div class="k">未了结告警</div>
+      </div>
+      <div class="kpi rv" style="--kc:#0e7490; animation-delay:.2s">
+        <button class="v b-link" style="padding:0" @click="gotoPage('change_request')" x-text="kpi.reviewing"></button>
+        <div class="k">审批中变更</div>
+      </div>
+      <div class="kpi rv" style="--kc:#7c3aed; animation-delay:.25s">
+        <button class="v b-link" style="padding:0" @click="gotoPage('risk')" x-text="kpi.mitigating"></button>
+        <div class="k">缓解中风险</div>
+      </div>
+    </div>
+
+    <!-- 四个职能域管道（与「流程总览」页同构：需求与验证 / 风险与度量 / 配置与变更 / 计划与评审） -->
+    <div class="overline">四个职能域（最近 3 条）</div>
+    <div class="pipe">
+      <!-- ① 需求与验证域 -->
+      <div class="pipe-col rv">
+        <h4><span class="idx">①</span><span>需求与验证</span>
+          <span class="right mono" x-text="kpi.req"></span></h4>
+        <div class="sline" x-show="!pipe.req.items.length"><span class="muted">暂无数据</span></div>
+        <template x-for="d in pipe.req.items" :key="d.req_no">
+          <div>
+            <div class="sline">
+              <button class="b-link mono" @click="gotoPage('requirement')" x-text="d.req_no"></button>
+              <span class="st" :class="statusCls('requirement', d.status)"
+                x-text="statusCn('requirement', d.status)"></span>
+            </div>
+            <div class="sline"><span class="muted" x-text="dash(d.title)"></span></div>
+          </div>
+        </template>
+      </div>
+
+      <!-- ② 风险与度量域 -->
+      <div class="pipe-col rv" style="animation-delay:.05s">
+        <h4><span class="idx">②</span><span>风险与度量</span>
+          <span class="right mono" x-text="kpi.alerts"></span></h4>
+        <div class="sline" x-show="!pipe.risk.items.length"><span class="muted">暂无数据</span></div>
+        <template x-for="d in pipe.risk.items" :key="d.risk_no">
+          <div>
+            <div class="sline">
+              <button class="b-link mono" @click="gotoPage('risk')" x-text="d.risk_no"></button>
+              <span class="st" :class="levelCls(d.risk_level)" x-text="levelCn(d.risk_level)"></span>
+              <span class="st" :class="statusCls('risk', d.status)"
+                x-text="statusCn('risk', d.status)"></span>
+            </div>
+            <div class="sline"><span class="muted" x-text="dash(d.title)"></span></div>
+          </div>
+        </template>
+      </div>
+
+      <!-- ③ 配置与变更域 -->
+      <div class="pipe-col rv" style="animation-delay:.1s">
+        <h4><span class="idx">③</span><span>配置与变更</span>
+          <span class="right mono" x-text="kpi.reviewing"></span></h4>
+        <div class="sline" x-show="!pipe.cm.items.length"><span class="muted">暂无数据</span></div>
+        <template x-for="d in pipe.cm.items" :key="d.cr_no">
+          <div>
+            <div class="sline">
+              <button class="b-link mono" @click="gotoPage('change_request')" x-text="d.cr_no"></button>
+              <span class="st" :class="statusCls('change_request', d.status)"
+                x-text="statusCn('change_request', d.status)"></span>
+            </div>
+            <div class="sline"><span class="muted" x-text="dash(d.title)"></span></div>
+          </div>
+        </template>
+      </div>
+
+      <!-- ④ 计划与评审域 -->
+      <div class="pipe-col rv" style="animation-delay:.15s">
+        <h4><span class="idx">④</span><span>计划与评审</span></h4>
+        <div class="sline" x-show="!pipe.plan.items.length"><span class="muted">暂无数据</span></div>
+        <template x-for="d in pipe.plan.items" :key="d.review_no">
+          <div>
+            <div class="sline">
+              <button class="b-link mono" @click="gotoPage('review')" x-text="d.review_no"></button>
+              <span class="st" :class="statusCls('review', d.status)"
+                x-text="statusCn('review', d.status)"></span>
+            </div>
+            <div class="sline"><span class="muted" x-text="dash(d.title)"></span></div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- 待办队列（三列：各带 total 与最近条目） -->
+    <div class="overline">待办队列</div>
+    <div class="pipe">
+      <div class="pipe-col rv">
+        <h4><span class="idx">①</span><span>需求 · 待提交评审</span>
+          <span class="right mono" x-text="todo.draftReq.total"></span></h4>
+        <div class="sline" x-show="!todo.draftReq.items.length"><span class="muted">暂无待办</span></div>
+        <template x-for="d in todo.draftReq.items" :key="d.req_no">
+          <div class="sline">
+            <button class="b-link mono" @click="gotoPage('requirement')" x-text="d.req_no"></button>
+            <span class="muted" x-text="dash(d.title)"></span>
+          </div>
+        </template>
+      </div>
+
+      <div class="pipe-col rv" style="animation-delay:.05s">
+        <h4><span class="idx">②</span><span>技术度量 · 未了结告警</span>
+          <span class="right mono" x-text="todo.alerts.total"></span></h4>
+        <div class="sline" x-show="!todo.alerts.items.length"><span class="muted">暂无待办</span></div>
+        <template x-for="d in todo.alerts.items" :key="d.tpm_no + d.period">
+          <div class="sline">
+            <button class="b-link mono" @click="gotoPage('technical_measure')" x-text="d.tpm_no"></button>
+            <span class="muted" x-text="dash(d.name) + ' @ ' + dash(d.period)"></span>
+          </div>
+        </template>
+      </div>
+
+      <div class="pipe-col rv" style="animation-delay:.1s">
+        <h4><span class="idx">③</span><span>评审 · 行动项跟踪中</span>
+          <span class="right mono" x-text="todo.tracking.total"></span></h4>
+        <div class="sline" x-show="!todo.tracking.items.length"><span class="muted">暂无待办</span></div>
+        <template x-for="d in todo.tracking.items" :key="d.review_no">
+          <div class="sline">
+            <button class="b-link mono" @click="gotoPage('review')" x-text="d.review_no"></button>
+            <span class="muted" x-text="dash(d.title)"></span>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+</div>

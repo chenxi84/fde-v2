@@ -1,0 +1,431 @@
+<!-- 技术计划台账 · 独立创建（保留新建入口）· 草稿/审批中/已批准/已修订
+     版本台账是**聚合内子表**（approve 同事务落账，revise 版本递增）；「阶段覆盖」是**查询视图**（coverage） -->
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>技术计划台账</b>
+    <span class="muted">草稿 · 审批中 · 已批准 · 已修订（没有终态 —— 锁定态各有解锁入口）</span>
+    <div class="right tagline" style="gap:8px">
+      <!-- ⚠ 枚举下拉的 option **必须是静态元素**：x-model + x-for 生成选项时，
+           数据→DOM 的回填会静默停在第一项（effect 跑在选项插入之前、此后不再重跑） -->
+      <select x-model="f_type" data-role="f-type" @change="search()" style="width:230px">
+        <option value="">全部计划类型</option>
+        <option value="semp">系统工程管理计划（SEMP）</option>
+        <option value="verification">验证与确认计划（V&amp;V Plan）</option>
+        <option value="integration">集成计划（Integration Plan）</option>
+        <option value="technology_dev">技术开发计划</option>
+        <option value="hsi">人因集成计划（HSI Plan）</option>
+        <option value="risk_mgmt">风险管理计划（Risk Management Plan）</option>
+        <option value="review">评审计划（Review Plan）</option>
+        <option value="cm">配置管理计划（Configuration Management Plan）</option>
+      </select>
+      <select x-model="f_phase" data-role="f-phase" @change="search()" style="width:180px">
+        <option value="">全部阶段</option>
+        <option value="pre_a">预 A 阶段（Pre-Phase A）</option>
+        <option value="a">A 阶段（Phase A）</option>
+        <option value="b">B 阶段（Phase B）</option>
+        <option value="c">C 阶段（Phase C）</option>
+        <option value="d">D 阶段（Phase D）</option>
+        <option value="e">E 阶段（Phase E）</option>
+      </select>
+      <select x-model="f_status" data-role="f-status" @change="search()" style="width:120px">
+        <option value="">全部状态</option>
+        <option value="draft">草稿</option>
+        <option value="in_review">审批中</option>
+        <option value="approved">已批准</option>
+        <option value="revised">已修订</option>
+      </select>
+      <input x-model="f_owner" data-role="f-owner" @keydown.enter="search()"
+        placeholder="责任人（精确）" style="width:140px">
+      <button class="b-ghost b-sm" @click="search()">搜索</button>
+      <button class="b-pri b-sm" @click="openForm()">新建计划</button>
+    </div>
+  </div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr>
+        <th>计划编号</th><th>名称</th><th>计划类型</th><th>覆盖阶段</th><th>成熟度</th>
+        <th>版本</th><th>已批准版本</th><th>批准人</th><th>状态</th><th>修订说明</th>
+        <th>责任人</th><th>所属项目</th><th>操作</th>
+      </tr>
+      <template x-if="!list.items.length">
+        <tr><td colspan="13" class="empty">暂无技术计划 —— 点「新建计划」建第一份 SEMP</td></tr>
+      </template>
+      <template x-for="d in list.items" :key="d.plan_no">
+        <tr class="data">
+          <td><button class="b-link mono" @click="openDetail(d, 'view')" x-text="d.plan_no"></button></td>
+          <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            data-role="plan-name" x-text="d.name"></td>
+          <td data-role="plan-type" x-text="typeName(d.plan_type)"></td>
+          <td data-role="plan-phase" x-text="phaseShort(d.phase)"></td>
+          <td data-role="plan-maturity" x-text="maturityName(d.maturity)"></td>
+          <td class="mono" data-role="plan-ver" x-text="verText(d.version)"></td>
+          <td class="mono" data-role="plan-approved-ver"
+            x-text="verText(d.latest_approved_ver)"></td>
+          <td data-role="plan-approver" x-text="dash(d.latest_approver)"></td>
+          <td><span class="st" data-role="plan-status" :class="statusCls(d.status)"
+            x-text="statusName(d.status)"></span></td>
+          <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            x-text="dash(d.revise_note)"></td>
+          <td x-text="dash(d.owner)"></td>
+          <td x-text="dash(d.project_no)"></td>
+          <!-- ⚠ 动作按钮用 x-show 隐藏（元素仍在 DOM），e2e 断言存在性必须带 `:visible` -->
+          <td>
+            <button class="b-link" @click="openDetail(d, 'view')">详情</button>
+            <button class="b-link" x-show="editable(d)" @click="openDetail(d, 'edit')">编辑</button>
+            <button class="b-link" x-show="canSubmit(d)" @click="submitPlan(d)">提交审批</button>
+            <button class="b-link" x-show="canApprove(d)" @click="openApprove(d)">批准</button>
+            <button class="b-link" x-show="canRevise(d)" @click="openRevise(d)">修订</button>
+          </td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:8px 16px" x-show="list && list.total > list.size">
+    <span class="muted" x-text="'共 ' + (list ? list.total : 0) + ' 条'"></span>
+    <div class="right tagline" style="gap:6px">
+      <button class="b-sm" :disabled="list.page <= 1" @click="list.load(list.page - 1)">上一页</button>
+      <span class="muted" x-text="'第 ' + (list ? list.page : 1) + ' 页'"></span>
+      <button class="b-sm" :disabled="list.page * list.size >= list.total"
+        @click="list.load(list.page + 1)">下一页</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- 阶段覆盖矩阵 —— **查询视图**（coverage），不是第二个聚合。
+     卡片 I-1：「每个阶段至少有一份已批准的该类计划」——「生效唯一」由 approve 拦，
+     「至少一份」没有任何写入动作可以被拦截，只能靠这张矩阵把**缺口显出来**
+     （材料附录 K TABLE K-1 就是一张"计划 × 阶段 × 成熟度"的矩阵） -->
+<div class="card mt12"><div class="bd" style="padding:0">
+  <div class="tagline" style="padding:12px 16px; flex-wrap:wrap">
+    <b>阶段覆盖</b>
+    <span class="muted">每个阶段至少有一份已批准的该类计划（I-1）· 覆盖来源分「此刻生效」与「历史版本」</span>
+    <div class="right tagline" style="gap:8px">
+      <div class="chips" data-role="cov-phases">
+        <span class="fchip" :class="{on: cov.phase === ''}" @click="setCovPhase('')">全部阶段</span>
+        <template x-for="p in phases" :key="p[0]">
+          <span class="fchip" :class="{on: cov.phase === p[0]}" @click="setCovPhase(p[0])"
+            x-text="p[1]"></span>
+        </template>
+      </div>
+    </div>
+  </div>
+  <div class="scroll-x">
+    <table class="tbl tight">
+      <tr><th>阶段</th><th>计划类型</th><th>覆盖</th><th>计划数</th><th>覆盖来源</th></tr>
+      <template x-if="!cov.items.length">
+        <tr><td colspan="5" class="empty">没有符合条件的格子</td></tr>
+      </template>
+      <template x-for="r in cov.items" :key="r.phase + '/' + r.plan_type">
+        <!-- 子表行用 class="sub"（**不是 data**）：主列表的 tr.data 选择器才不会误命中这里 -->
+        <tr class="sub" data-role="cov-row">
+          <td data-role="cov-phase" x-text="phaseShort(r.phase)"></td>
+          <td data-role="cov-type" x-text="typeName(r.plan_type)"></td>
+          <td><span class="st" data-role="cov-covered"
+            :class="r.covered ? 'st-green' : 'st-red'"
+            x-text="r.covered ? '已覆盖' : '缺口'"></span></td>
+          <td class="mono" data-role="cov-count" x-text="r.plan_count"></td>
+          <td><span x-show="r.covered_by" class="st" data-role="cov-by"
+            :class="coveredCls(r.covered_by)" x-text="coveredName(r.covered_by)"></span>
+            <span class="mono" data-role="cov-cell" x-text="covCellText(r)"></span></td>
+        </tr>
+      </template>
+    </table>
+  </div>
+  <div class="tagline" style="padding:8px 16px">
+    <span class="muted" data-role="cov-total"
+      x-text="'已覆盖 ' + coveredCount() + ' / ' + cov.total + ' 格（该筛选下的阶段 × 计划类型）'"></span>
+  </div>
+</div></div>
+
+<!-- 详情 / 编辑 模态 -->
+<div x-show="modal.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:920px;max-height:88vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b x-text="modal.mode === 'edit' ? '编辑计划' : '技术计划详情'"></b>
+      <div class="right"><button class="b-sm" @click="closeModal()">关闭</button></div>
+    </div>
+    <!-- ⚠ 必须用 x-if 而不是 x-show：x-show 只隐藏，Alpine **仍会求值**内部绑定，
+         而 modal.d 初始为 null → 满屏 "Cannot read properties of null" 报错（实测踩过） -->
+    <template x-if="modal.d">
+    <div class="bd">
+      <!-- 只读信息条：`data-role` 供 e2e 精确断言这一段（不像 select 会把全部 option 文本带进 inner_text） -->
+      <div class="muted" data-role="plan-head" style="font-size:12px;margin-bottom:10px">
+        计划编号 <span class="mono" x-text="modal.d.plan_no"></span>
+        <span x-text="' · 状态 '"></span><span class="st" :class="stCls(modal.d)"
+          x-text="stName(modal.d)"></span>
+        <span x-text="' · '"></span><span data-role="head-type" x-text="typeName(modal.d.plan_type)"></span>
+        <span x-text="' · '"></span><span data-role="head-phase" x-text="phaseShort(modal.d.phase)"></span>
+        <span x-text="' · '"></span><span data-role="head-maturity"
+          x-text="maturityName(modal.d.maturity)"></span>
+        <span x-text="' · 当前 '"></span><span class="mono" data-role="head-ver"
+          x-text="verText(modal.d.version)"></span>
+        <span x-text="' · '"></span><span data-role="head-approved" x-text="headText(modal.d)"></span>
+      </div>
+      <div style="display:grid;grid-template-columns:96px 1fr;gap:8px 12px;align-items:center">
+        <!-- 内容字段：只在「草稿 / 已修订」可写 —— 本页的语义差（见 view.js 头注） -->
+        <label>名称</label>
+        <input x-model="modal.d.name" data-role="m-name"
+          :disabled="modal.mode === 'view' || !editable(modal.d)">
+        <label style="color:var(--amber)">计划类型</label>
+        <!-- ⚠ 静态 option：这两个 select 的值要由**数据回填**（openDetail 后 modal.d.plan_type）；
+             用 x-for 生成选项会静默停在第一项 -->
+        <select x-model="modal.d.plan_type" data-role="m-type"
+          :disabled="modal.mode === 'view' || !editable(modal.d)">
+          <option value="semp">系统工程管理计划（SEMP）</option>
+          <option value="verification">验证与确认计划（V&amp;V Plan）</option>
+          <option value="integration">集成计划（Integration Plan）</option>
+          <option value="technology_dev">技术开发计划</option>
+          <option value="hsi">人因集成计划（HSI Plan）</option>
+          <option value="risk_mgmt">风险管理计划（Risk Management Plan）</option>
+          <option value="review">评审计划（Review Plan）</option>
+          <option value="cm">配置管理计划（Configuration Management Plan）</option>
+        </select>
+        <label style="color:var(--amber)">覆盖阶段</label>
+        <select x-model="modal.d.phase" data-role="m-phase"
+          :disabled="modal.mode === 'view' || !editable(modal.d)">
+          <option value="pre_a">预 A 阶段（Pre-Phase A）</option>
+          <option value="a">A 阶段（Phase A）</option>
+          <option value="b">B 阶段（Phase B）</option>
+          <option value="c">C 阶段（Phase C）</option>
+          <option value="d">D 阶段（Phase D）</option>
+          <option value="e">E 阶段（Phase E）</option>
+        </select>
+        <label style="color:var(--amber)">成熟度</label>
+        <select x-model="modal.d.maturity" data-role="m-maturity"
+          :disabled="modal.mode === 'view' || !editable(modal.d)">
+          <option value="approach">方法（Approach）</option>
+          <option value="preliminary">初步（Preliminary）</option>
+          <option value="baseline">基线（Baseline）</option>
+          <option value="update">更新（Update —— 须已有基线版本）</option>
+        </select>
+        <label>范围说明</label>
+        <input x-model="modal.d.scope" data-role="m-scope" placeholder="选填：这份计划管什么"
+          :disabled="modal.mode === 'view' || !editable(modal.d)">
+        <label>责任人</label>
+        <!-- 文本输入 + datalist 建议（**不用 select + x-for**：回填会静默停第一项）；
+             候选来自跨应用 stakeholder.list，值仍是文本姓名 -->
+        <div>
+          <input x-model="modal.d.owner" data-role="m-owner" list="sh-options-modal" placeholder="选填（可从利益相关者里选）"
+            :disabled="modal.mode === 'view' || !editable(modal.d)" style="width:100%">
+          <datalist id="sh-options-modal">
+            <template x-for="x in owners" :key="x.name">
+              <option :value="x.name" x-text="x.name + ' · ' + (x.sh_no || '')"></option>
+            </template>
+          </datalist>
+        </div>
+        <!-- 流转产物（只读）：版本号 / 修订说明由 revise 与 approve 写入，不在 update 白名单里 -->
+        <label>版本号</label>
+        <div class="muted" data-role="m-ver" x-text="verText(modal.d.version) + '（流转产物，只能经修订递增）'"></div>
+        <label>修订说明</label>
+        <div class="muted" data-role="m-revise-note"
+          x-text="dash(modal.d.revise_note)"></div>
+      </div>
+
+      <!-- 版本台账（聚合内子表：I-2「历史版本保留」的落点 —— 每批准一版落一行） -->
+      <div class="muted" style="font-size:12px;font-weight:700;margin:14px 0 6px"
+        data-role="version-title"
+        x-text="'版本台账（' + versionsOf(modal.d).length + ' 版已批准）'"></div>
+      <div class="scroll-x">
+        <table class="tbl tight">
+          <tr><th>序号</th><th>版本</th><th>覆盖阶段</th><th>成熟度</th><th>批准人</th><th>审批意见</th></tr>
+          <template x-if="!versionsOf(modal.d).length">
+            <tr><td colspan="6" class="empty">还没有获批过任何版本 —— 提交并「批准」后落第一行</td></tr>
+          </template>
+          <template x-for="v in versionsOf(modal.d)" :key="v.seq">
+            <tr class="sub" data-role="version-row">
+              <td class="mono" data-role="ver-seq" x-text="v.seq"></td>
+              <td class="mono" data-role="ver-no" x-text="verText(v.version)"></td>
+              <td data-role="ver-phase" x-text="phaseShort(v.phase)"></td>
+              <td data-role="ver-maturity" x-text="maturityName(v.maturity)"></td>
+              <td data-role="ver-approver" x-text="v.approver"></td>
+              <td class="muted" data-role="ver-note" x-text="dash(v.note)"></td>
+            </tr>
+          </template>
+        </table>
+      </div>
+
+      <div class="tagline" style="margin-top:12px">
+        <!-- 两条锁定路径各自的解锁入口 —— 报错文案与后端逐字对齐（BR-05） -->
+        <span class="muted" style="font-size:11px" data-role="frozen-hint"
+          x-show="modal.d && !editable(modal.d)" x-text="frozenText(modal.d)"></span>
+        <span class="muted" style="font-size:11px"
+          x-show="modal.d && isStatus(modal.d, 'draft')">
+          草稿态 —— 内容可改；提交审批后即锁定
+        </span>
+        <span class="muted" style="font-size:11px"
+          x-show="modal.d && isStatus(modal.d, 'revised')">
+          已修订 —— 版本已递增（新版本尚未生效）；提交审批后才成为「已批准」
+        </span>
+        <div class="right" style="gap:8px">
+          <button class="b-pri b-sm" x-show="modal.mode === 'edit' && editable(modal.d)"
+            :disabled="modal.saving" @click="saveEdit()"
+            x-text="modal.saving ? '保存中…' : '保存'"></button>
+          <button class="b-pri b-sm" x-show="modal.mode === 'view' && canSubmit(modal.d)"
+            @click="submitPlan(modal.d)">提交审批</button>
+          <button class="b-ghost b-sm" x-show="modal.mode === 'view' && canApprove(modal.d)"
+            @click="openApprove(modal.d)">批准</button>
+          <button class="b-ghost b-sm" x-show="modal.mode === 'view' && canWithdraw(modal.d)"
+            @click="withdrawPlan(modal.d)">撤回</button>
+          <button class="b-ghost b-sm" x-show="modal.mode === 'view' && canRevise(modal.d)"
+            @click="openRevise(modal.d)">修订</button>
+        </div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>
+
+<!-- 批准 模态（BR-08：批准要记名；BR-03 同阶段同类型唯一由后端拦） -->
+<div x-show="am.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:680px;max-height:88vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b>批准计划</b>
+      <div class="right"><button class="b-sm" @click="closeApprove()">取消</button></div>
+    </div>
+    <!-- ⚠ 同详情模态：必须 x-if -->
+    <template x-if="am.open">
+    <div class="bd">
+      <div class="muted" style="font-size:12px;margin-bottom:8px">
+        <span class="mono" x-text="am.plan_no"></span>
+        <span x-text="' · ' + (am.name || '')"></span>
+        <span class="mono" x-text="' · 待批准 ' + verText(am.version)"></span>
+      </div>
+      <div class="muted" style="font-size:11.5px;margin-bottom:8px" data-role="am-hint">
+        批准后这一版进<b>版本台账</b>（历史版本保留，I-2）；同一阶段同一类型只允许一份已批准的计划，
+        已有生效版本时本操作会被拒绝（I-1 / BR-03）
+      </div>
+      <div style="display:grid;grid-template-columns:96px 1fr;gap:8px 12px;align-items:center">
+        <label style="color:var(--amber)">批准人</label>
+        <input x-model="am.approver" data-role="am-approver" placeholder="必填：谁批的（BR-08）">
+        <label>审批意见</label>
+        <input x-model="am.note" placeholder="选填，如「SRR 前批准」">
+      </div>
+      <div class="tagline" style="margin-top:12px">
+        <span class="muted" style="font-size:11px" x-show="!canApproveSubmit()">
+          批准人不能为空 —— 批准要记名留痕（BR-08）
+        </span>
+        <div class="right"><button class="b-pri b-sm" :disabled="!canApproveSubmit() || am.saving"
+          @click="saveApprove()" x-text="am.saving ? '提交中…' : '批准并落版本台账'"></button></div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>
+
+<!-- 修订 模态（阈值 I-2：版本递增 + 可选阶段推进 —— 唯一的版本递增入口） -->
+<div x-show="rm.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:680px;max-height:88vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b>修订计划（出下一版）</b>
+      <div class="right"><button class="b-sm" @click="closeRevise()">取消</button></div>
+    </div>
+    <!-- ⚠ 同详情模态：必须 x-if -->
+    <template x-if="rm.open">
+    <div class="bd">
+      <div class="muted" style="font-size:12px;margin-bottom:8px">
+        <span class="mono" x-text="rm.plan_no"></span>
+        <span x-text="' · ' + (rm.name || '')"></span>
+      </div>
+      <div class="muted" style="font-size:11.5px;margin-bottom:8px" data-role="rm-hint"
+        x-text="reviseHint(rm)"></div>
+      <div style="display:grid;grid-template-columns:96px 1fr;gap:8px 12px;align-items:start">
+        <label style="color:var(--amber)">修订说明</label>
+        <textarea x-model="rm.summary" rows="3"
+          placeholder="必填：版本因何而升（如「阶段推进到 B 阶段，过程裁剪口径更新」）"></textarea>
+        <label>推进到阶段</label>
+        <select x-model="rm.phase" data-role="rm-phase">
+          <option value="">沿用当前阶段</option>
+          <option value="pre_a">预 A 阶段（Pre-Phase A）</option>
+          <option value="a">A 阶段（Phase A）</option>
+          <option value="b">B 阶段（Phase B）</option>
+          <option value="c">C 阶段（Phase C）</option>
+          <option value="d">D 阶段（Phase D）</option>
+          <option value="e">E 阶段（Phase E）</option>
+        </select>
+        <label>成熟度</label>
+        <select x-model="rm.maturity" data-role="rm-maturity">
+          <option value="">沿用当前成熟度</option>
+          <option value="approach">方法（Approach）</option>
+          <option value="preliminary">初步（Preliminary）</option>
+          <option value="baseline">基线（Baseline）</option>
+          <option value="update">更新（Update）</option>
+        </select>
+      </div>
+      <div class="tagline" style="margin-top:12px">
+        <span class="muted" style="font-size:11px" x-show="!canReviseSubmit()">
+          修订说明不能为空 —— 版本因何而升要留痕（BR-06）
+        </span>
+        <div class="right"><button class="b-pri b-sm" :disabled="!canReviseSubmit() || rm.saving"
+          @click="saveRevise()" x-text="rm.saving ? '提交中…' : '修订出新版本'"></button></div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>
+
+<!-- 新建计划 模态 -->
+<div x-show="form.open" x-cloak class="modal-mask" style="position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(14,27,42,.35)">
+  <div class="card" style="width:740px;max-height:88vh;overflow:auto;margin:0">
+    <div class="tagline" style="padding:12px 16px;border-bottom:1px solid var(--line)">
+      <b>新建计划</b>
+      <div class="right"><button class="b-sm" @click="closeForm()">取消</button></div>
+    </div>
+    <!-- ⚠ 同详情模态：必须 x-if（x-show 仍会求值 null 上的绑定） -->
+    <template x-if="form.d">
+    <div class="bd">
+      <div style="display:grid;grid-template-columns:96px 1fr;gap:8px 12px;align-items:center">
+        <label style="color:var(--amber)">名称</label>
+        <input x-model="form.d.name" data-role="n-name" placeholder="如：系统工程管理计划（必填）">
+        <!-- 类型与阶段都不给默认值：它们就是 I-1「计划与阶段绑定」的那两个键，字典校验要落得实 -->
+        <label style="color:var(--amber)">计划类型</label>
+        <select x-model="form.d.plan_type" data-role="n-type">
+          <option value="">请选择（必选）</option>
+          <option value="semp">系统工程管理计划（SEMP）</option>
+          <option value="verification">验证与确认计划（V&amp;V Plan）</option>
+          <option value="integration">集成计划（Integration Plan）</option>
+          <option value="technology_dev">技术开发计划</option>
+          <option value="hsi">人因集成计划（HSI Plan）</option>
+          <option value="risk_mgmt">风险管理计划（Risk Management Plan）</option>
+          <option value="review">评审计划（Review Plan）</option>
+          <option value="cm">配置管理计划（Configuration Management Plan）</option>
+        </select>
+        <label style="color:var(--amber)">覆盖阶段</label>
+        <select x-model="form.d.phase" data-role="n-phase">
+          <option value="">请选择（必选）</option>
+          <option value="pre_a">预 A 阶段（Pre-Phase A）</option>
+          <option value="a">A 阶段（Phase A）</option>
+          <option value="b">B 阶段（Phase B）</option>
+          <option value="c">C 阶段（Phase C）</option>
+          <option value="d">D 阶段（Phase D）</option>
+          <option value="e">E 阶段（Phase E）</option>
+        </select>
+        <label>成熟度</label>
+        <select x-model="form.d.maturity" data-role="n-maturity">
+          <option value="approach">方法（Approach）—— 新计划缺省</option>
+          <option value="preliminary">初步（Preliminary）</option>
+          <option value="baseline">基线（Baseline）</option>
+          <option value="update">更新（Update —— 须已有基线版本）</option>
+        </select>
+        <label>范围说明</label>
+        <input x-model="form.d.scope" placeholder="选填：这份计划管什么">
+        <label>责任人</label>
+        <div>
+          <input x-model="form.d.owner" list="sh-options-form" placeholder="选填（可从利益相关者里选）" style="width:100%">
+          <datalist id="sh-options-form">
+            <template x-for="x in owners" :key="x.name">
+              <option :value="x.name" x-text="x.name + ' · ' + (x.sh_no || '')"></option>
+            </template>
+          </datalist>
+        </div>
+      </div>
+      <div class="tagline" style="margin-top:12px">
+        <span class="muted" style="font-size:11px">新计划以「草稿」状态落库、版本 V1，编号自动生成（PLAN-001 起）；
+          名称 / 计划类型 / 覆盖阶段三项未齐时不可提交</span>
+        <div class="right"><button class="b-pri b-sm"
+          :disabled="!canSubmitForm() || form.saving" @click="saveForm()"
+          x-text="form.saving ? '提交中…' : '提交'"></button></div>
+      </div>
+    </div>
+    </template>
+  </div>
+</div>
