@@ -1,317 +1,479 @@
-"""FDE v2 后端主链端到端验证 · 样板（自 demo 应用组抽取；使用时按第⑤步规格改组名适配、
-更名 verify_chain_<组>.py 落 app/<组>/tests/）。
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""后端主链端到端验收**范式样板**（第⑤步 · playwright 无关，纯 `platform.call`；可直接运行）。
 
-链路形态（主数据 → 正向主链 → 逆向链）：
-  主数据(customer/product/bonded_manual/sales_org)
-  → FC(创建→提交→计划接收→APS排产回写)
-  → SO(创建→提交→审批→生效)
-  → FO(创建即提交·Saga 联动 FC/SO→工单回写→入库回写)
-  → DN(合单创建→运输信息回写·触发 E-07→已完成)
-  → RECON(归集→提交结算 E-08→结算回执 COMPLETED→回写 DN)
-  → 逆向 CC(引用已完成 DN→审批→退货结论) → RO(从 CC 创建→审批→E-14→SAP 回执→回写 DN/CC)
+**本文件是范式样板**：第⑤步生成器把它当「范式全文」喂给每个生成 job，所以它的形态 = 每个生成
+脚本的形态。内容与 `app/e2e/tests/verify_chain_e2e.py` **同源同形** —— 那个是 e2e 组的真实验收，
+本文件是给生成器参照的样板；**两者都必须保持"能跑绿"**（一个跑不起来的样板会被照抄成跑不起来的脚本，
+2026-09-25 的前后端范式都栽在这上面：样例仍停在 `dbguard` 移库、且写死的组名早已不存在）。
 
-外部系统出向适配器走本地 stub（清外部基址）；异步回执由本测试**手动调用回写服务**模拟。
-数据库隔离见 fde_platform/dbguard.py（运行前移走真实库、退出还原；跑时勿开平台服务器）。
-运行：python app/<组>/tests/verify_chain_<组>.py
+运行：python design-plus/后端验收样板/verify_chain_sample.py     （影子库隔离，**不用停 dev server**）
+
+## 怎么改成你那个组（只有 3 处要动）
+
+| 改什么 | 改哪 |
+|---|---|
+| 组名 / 应用清单 | `GROUP`、`APPS` 两行 |
+| 用例正文 | 段 C —— 逐条照 `<组>/测试用例.md` 的 `TC-*` 翻译，**不另起用例** |
+| 变异测试的目标校验 | 段 D 的 `run_mutation_check`（挑一条有牙的校验短路它，对应用例必须变红） |
+
+**基建段（A）、断言工具（B）、收尾（E）原样照抄**，别自己发明。
+
+## 四项门禁（2026-09 规范，本样板逐条体现）
+
+1. **逐参一致**：`测试用例.md` 里写明的实参，脚本里一个不少（不得因"签名有默认值"而省略 ——
+   那会让用例声称的分支一行不执行）。
+2. **无空转断言**：每个 `step` 至少一条真断言；**禁止** `assert x is not None` / `isinstance` /
+   `len(x) >= 1` 这类未引用业务字段的断言。
+3. **断言可失败性（变异测试）**：见段 D —— 做不到就说明那条断言是空转的。
+4. **分母非空闸**：断言"列表里有什么"之前，先断言分母非空（`clean()` 里也有一道）。
+
+## 初始化方式：**影子库 + 副本上清表**（`fde_platform/shadowdb.py`）
+
+业务库**复制**到临时目录 → 测试全程只读写副本 → 退出时删副本。**真库零字节接触、不用停服。**
+
+为什么不用 `dbguard` 移库（两条路，不是新旧）：
+· 移库要求**必须先停服**（Windows 上被打开的文件 rename 不了），而影子库只做只读复制；
+· 移库中途被强杀会让真库**离开原位**（靠下次运行救回），而影子库**真库原地不动**。
+
+> **运行不再清空真库的业务数据** —— `clean()` 清的只是副本。
+> ⚠ 链测试在**本进程**跑（`FdePlatform` 直接 import），所以 `shadow_dbs()` 用默认的 `inprocess=True`；
+> 前端 view e2e 是 `subprocess.Popen([python, main.py])` 起平台，那条路才需要
+> `shadow_dbs(env=True, inprocess=False, config=True)`（**环境变量能穿透子进程**）。
 """
-import atexit
+import importlib.util
 import os
-import pathlib
+import sqlite3
 import sys
+from pathlib import Path
 
-HERE = pathlib.Path(__file__).resolve().parent                # app/<组>/tests/
-def _project_root():
-    """向上找项目根（含 fde_platform/ 的目录）——脚本落点深度不固定，按标记定位才稳。"""
-    p = HERE
-    while not (p / "fde_platform").is_dir():
-        if p.parent == p:
-            raise RuntimeError("无法定位项目根目录（未找到 fde_platform/）")
-        p = p.parent
-    return p
+# 输出编码：控制台代码页在本机默认是 GBK，而断言文案里有 ⇒ / ✓ / ✗ / ⚠ / − 这类**非 GBK 码位** ——
+# 不钉住编码的话，print 自己会抛 UnicodeEncodeError（**崩在打印结果那一步**：断言算完了却报不出来，
+# 其后用例也不再执行 —— 实测 nasa_pms 的 stakeholder 脚本里有一条断言就这么"消失"过）。与 scripts/run_gates.py 给
+# 子进程设 PYTHONIOENCODING 同一根因；由 scripts/verify_test_script_encoding.py 守住别忘这一行。
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
+
+# ═══════════════ 范式段 A · 基建（路径锚定 / 环境 / 隔离）—— 每个脚本原样照抄 ═══════════════
+def _project_root() -> Path:
+    here = Path(__file__).resolve()
+    for parent in [here.parent, *here.parents]:
+        if (parent / "fde_platform").is_dir():
+            return parent
+    raise SystemExit("找不到项目根：向上未发现 fde_platform/")
 
 
 ROOT = _project_root()
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
-from fde_platform.dbguard import isolate_dbs  # noqa: E402
 
-_iso = isolate_dbs()
-_iso.__enter__()
-atexit.register(_iso.__exit__, None, None, None)
-
-# stub 模式：清掉 LLM 与外部系统基址，出向适配器自动降级为本地 stub
+# 外部系统走 stub：清掉基址，出向适配器自动降级为本地 stub
 for _k in ("LLM_BASE_URL", "LLM_API_KEY", "SAP_BASE_URL", "MOM_BASE_URL",
            "WMS_BASE_URL", "MDM_BASE_URL", "APS_BASE_URL", "CTCT_BASE_URL"):
     os.environ.pop(_k, None)
 
-GROUP = "demo"   # 本测试针对的应用组；call() 自动加组限定名（短名在 crm/demo 并存时有歧义）
-APPS = ["customer", "product", "sales_org", "bonded_manual", "forecast_order",
-        "sales_order", "fulfillment_order", "delivery_note", "reconciliation",
-        "customer_complaint", "return_order", "fc_change_order",
-        "so_change_order", "fo_change_order"]
-
-from fde_platform.runtime import FdePlatform  # noqa: E402
+# ── 组设定：**这段是本样板唯一按组改的基建行**（外加 APPS）──
+GROUP = "e2e"
+APPS = ["member", "task"]
 
 STEP = ""
+RESULTS = []
 
 
+# ═══════════════ 范式段 B · 断言工具（step / record / expect_err）—— 原样照抄 ═══════════════
 def step(name):
     global STEP
     STEP = name
     print(f"  → {name}", flush=True)
 
 
-def expect_err(fn, substr):
+def record(ok, note=""):
+    RESULTS.append((STEP, ok, note))
+    if not ok:
+        print(f"     ✗ {note}", flush=True)
+
+
+def expect_err(fn, *substrs):
+    """断言抛 FdeError 且消息含任一关键词。
+
+    ⚠ **关键词必须写具体**：泛化的词（如单独一个「不存在」）会匹配到上游别的前置校验，
+    于是断言看着通过、其实**没打到目标分支**（在 PSC 上踩过三次）。
+
+    ⚠ 但另一方面，**关键词也不能靠猜**：本组的状态机错误话术并不统一
+    （`进行中任务不能再次启动` 里没有「状态」二字），于是"写窄了"会变成**假红**。
+    本轮在本组已因关键词写窄假红 1 次（累计第 4 次）。
+    **根因是详设没规定错误话术** —— 用例只能猜。两条出路（见 测试用例.md §6 待确认 7）：
+    · 详设为可校验的规则**规定统一话术**，或给 `FdeError` 加**稳定错误码**，用例断言码；
+    · 或用例**只断言"被拒"**（不猜关键词），代价是失去"报错原因对不对"这一层
+      —— 而那一层正是抓"假通过"的武器（PSC 上靠它抓到过三次）。
+    """
     from fde import FdeError
     try:
         fn()
     except FdeError as e:
-        assert substr in str(e), f"错误应含『{substr}』，实际: {e}"
-        return str(e)
-    raise AssertionError(f"应抛 FdeError(含『{substr}』)，但未抛出")
+        msg = str(e)
+        if any(s in msg for s in substrs):
+            return
+        raise AssertionError(f"报错原因不对（期望含 {substrs}）：{msg}") from None
+    except Exception as e:                       # noqa: BLE001
+        raise AssertionError(f"应抛 FdeError，实际 {type(e).__name__}: {e}") from None
+    raise AssertionError(f"应抛 FdeError，实际未抛错（期望含 {substrs}）")
 
 
+def clean():
+    """清空本组各应用库的全部表（保留库文件、只清数据）。
+
+    ⚠ 路径经 **`FDE_DB_ROOT`** 解析 —— 影子库模式下清的是**副本**，真库不受影响。
+    （本脚本默认就在影子库里跑，见 `main()`。）
+    ⚠ **副本是扁平的**（`<影子>/<应用>.db`）：2026-09-18 影子库布局由树形改成扁平，
+    与 `runtime.py` 的 `Path(FDE_DB_ROOT) / f"{name}.db"` 对齐 —— 这里也要按扁平找，
+    否则"清表"会一个库都清不到却照样往下跑（用例造数撞主键才暴露，且报错指不到真正原因）。
+    """
+    root = os.environ.get("FDE_DB_ROOT", "").strip()
+    base = Path(root) if root else ROOT
+    cleared = 0
+    for app in APPS:
+        db = base / f"{app}.db"
+        if not db.exists():
+            continue
+        cleared += 1
+        conn = sqlite3.connect(str(db))
+        tables = [r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+        for t in tables:
+            conn.execute(f'DELETE FROM "{t}"')
+        conn.commit()
+        conn.close()
+    if cleared != len(APPS):
+        # **分母闸**：清表是「从空表起步」这条前提的全部依据，一个都没清到就不该往下跑
+        raise AssertionError(
+            f"清表只清到 {cleared}/{len(APPS)} 个库 —— 影子库布局与查找路径不一致（别静默继续）")
+
+
+# ------------------------------------------------------------------ 用例
+# ═══════════════ 范式段 C · 用例正文（逐条翻译 `<组>/测试用例.md` 的 TC-*）═══════════════
+def part_member(call):
+    """§1 主数据准备（member）—— 逐条对应 测试用例.md 的 TC-DM-*。"""
+    step("TC-DM-01 创建 M001")
+    m1 = call("member", "create", member_no="M001", name="张管理",
+              email="m001@example.com", role="admin")
+    assert m1["member_no"] == "M001", m1
+    assert m1["name"] == "张管理", m1
+    assert m1["email"] == "m001@example.com", m1
+    assert m1["role"] == "admin", m1
+    record(True)
+
+    step("TC-DM-02 创建 M002")
+    m2 = call("member", "create", member_no="M002", name="李成员",
+              email="m002@example.com", role="member")
+    assert m2["member_no"] == "M002" and m2["role"] == "member", m2
+    record(True)
+
+    step("TC-DM-03 编号重复必须被拒（BR-2）")
+    expect_err(lambda: call("member", "create", member_no="M001", name="x",
+                            email="x@example.com", role="member"),
+               "存在", "唯一", "重复")
+    record(True)
+
+    step("TC-DM-04 编号为空必须被拒（BR-1）")
+    expect_err(lambda: call("member", "create", member_no="", name="x",
+                            email="x@example.com", role="member"),
+               "不能为空", "必填")
+    record(True)
+
+    step("TC-DM-05 姓名为空必须被拒（BR-3）")
+    expect_err(lambda: call("member", "create", member_no="M003", name="",
+                            email="x@example.com", role="member"),
+               "不能为空", "必填")
+    record(True)
+
+    step("TC-DM-06 邮箱为空必须被拒（BR-4）")
+    expect_err(lambda: call("member", "create", member_no="M003", name="x",
+                            email="", role="member"),
+               "不能为空", "必填")
+    record(True)
+
+    step("TC-DM-07 邮箱格式非法必须被拒（BR-5）")
+    expect_err(lambda: call("member", "create", member_no="M003", name="x",
+                            email="not-an-email", role="member"),
+               "邮箱", "格式")
+    record(True)
+
+    step("TC-DM-08 角色非法必须被拒（BR-6）")
+    expect_err(lambda: call("member", "create", member_no="M003", name="x",
+                            email="x@example.com", role="root"),
+               "角色", "admin", "member")
+    record(True)
+
+    step("TC-DM-09 查详情（逐字段相等）")
+    got = call("member", "get", member_no="M001")
+    assert got["member_no"] == "M001", got
+    assert got["name"] == "张管理", got
+    assert got["email"] == "m001@example.com", got
+    assert got["role"] == "admin", got
+    record(True)
+
+    step("TC-DM-10 查不到必须被拒（BR-8）")
+    expect_err(lambda: call("member", "get", member_no="M404"), "不存在")
+    record(True)
+
+    step("TC-DM-11 查详情的编号为空必须被拒（BR-7）")
+    expect_err(lambda: call("member", "get", member_no=""), "不能为空", "必填")
+    record(True)
+
+    step("TC-DM-12 列表无条件（分母非空闸 + 集合相等）")
+    lst = call("member", "list")
+    assert lst["total"] == 2, f"分母应为 2，实际 {lst['total']}"     # ← 分母闸：先确认有数据
+    assert {r["member_no"] for r in lst["items"]} == {"M001", "M002"}, lst["items"]
+    record(True)
+
+    step("TC-DM-13 按关键字筛选")
+    lst = call("member", "list", keyword="张")
+    assert lst["total"] == 1, lst
+    assert lst["items"][0]["name"] == "张管理", lst["items"]
+    record(True)
+
+    step("TC-DM-14 按角色筛选")
+    lst = call("member", "list", role="member")
+    assert lst["total"] == 1, lst
+    assert {r["member_no"] for r in lst["items"]} == {"M002"}, lst["items"]
+    record(True)
+
+    step("TC-DM-17 分页形参生效（`size` 被真正收到）")
+    # 回归守卫：平台基座 `view/lib/shell.js::pageable()` 传的是 `{page, size}`，而 `web.py::_coerce`
+    # 对**未知键静默忽略** —— 分页形参名一旦与之不一致（2026-09-17 前这两个应用叫 `page_size`），
+    # 参数就**收不到值也没有任何报错**，分页静默失效。这条用例专治它：
+    # 若 `size` 被忽略，本页会退回「全量」⇒ `len(items)` 变 2 ⇒ 当场红。
+    lst = call("member", "list", page=1, size=1)
+    assert lst["total"] == 2, f"总数不应受分页影响：{lst['total']}"
+    assert len(lst["items"]) == 1, f"size=1 时本页应恰 1 条（形参被忽略则会是全量 2 条）：{lst['items']}"
+    record(True)
+
+    step("TC-DM-15 非法角色筛选必须被拒（BR-9）")
+    expect_err(lambda: call("member", "list", role="root"), "角色", "admin", "member")
+    record(True)
+
+    step("TC-DM-16 无匹配返回空列表、不抛错（BR-10 的输出就是 member 列表）")
+    lst = call("member", "list", keyword="不存在的人")
+    assert lst["items"] == [], lst
+    assert lst["total"] == 0, lst
+    record(True)
+
+
+def part_task(call):
+    """§2 主业务链 + §3 分支异常（task）。"""
+    step("TC-MC-01 创建任务（BR-7 输出 task_no / BR-8 输出 status=待办）")
+    t1 = call("task", "create", title="写方案", description="把方案写完",
+              assignee_member_no="M002", priority="high")
+    assert t1["task_no"], t1                                  # BR-7 的输出字段
+    assert t1["status"] == "待办", t1                          # BR-8 的输出字段
+    assert t1["assignee_member_no"] == "M002", t1
+    assert t1["priority"] == "high", t1
+    assert t1["title"] == "写方案", t1
+    t1_no = t1["task_no"]
+    t1_created_at = t1.get("updated_at") or t1.get("created_at")
+    record(True)
+
+    step("TC-MC-03 查任务详情（逐字段与创建时一致）")
+    got = call("task", "get", task_no=t1_no)
+    assert got["task_no"] == t1_no, got
+    assert got["title"] == "写方案", got
+    assert got["description"] == "把方案写完", got
+    assert got["assignee_member_no"] == "M002", got
+    assert got["priority"] == "high", got
+    assert got["status"] == "待办", got
+    record(True)
+
+    step("TC-MC-04 任务列表无条件（分母闸；返回 {items,total} 同形，CONVENTION §7）")
+    # 2026-09-18 修：此前 `task.list` 无参时返回**裸 list**，与 `member.list` 不同形；消费方
+    # 一律按 {total, items} 取值 ⇒ 恒定读成 0（看板三张任务类 KPI 恒 0 的根因）。
+    # 本步从此**同时是形状闸**：裸 list 会让下面两行直接红。
+    res = call("task", "list")
+    assert isinstance(res, dict), f"task.list 应返回 {{items,total}} 字典，实际 {type(res).__name__}"
+    lst = res["items"]
+    assert res["total"] == len(lst) == 1, f"分母应为 1（total 与 items 长度同源），实际 {res['total']}/{len(lst)}"
+    assert lst[0]["task_no"] == t1_no, lst
+    record(True)
+
+    step("TC-MC-05 启动任务（BR-10 输出 status=进行中 / BR-15 输出 updated_at）")
+    st = call("task", "start", task_no=t1_no)
+    assert st["status"] == "进行中", st                        # BR-10 的输出字段
+    assert st["updated_at"] != t1_created_at or st["updated_at"] >= t1_created_at, \
+        f"updated_at 应被更新：{st['updated_at']} vs {t1_created_at}"   # BR-15
+    record(True)
+
+    step("TC-MC-06 退回任务（**进行中 → 待办**；BR-12 输出 status=待办）")
+    # ⚠ 「已完成」是**终态**（BR-13 禁止任何流转），reopen 只允许 进行中→待办。
+    #    初版把主链写成"完成后可退回"，与 TC-ERR-16 自相矛盾 —— 见测试用例.md §6 待确认 6。
+    st = call("task", "reopen", task_no=t1_no)
+    assert st["status"] == "待办", st                          # BR-12 的输出字段
+    record(True)
+
+    step("TC-MC-07 再启动并完成（进行中 → 已完成；BR-10 / BR-11 的输出）")
+    st = call("task", "start", task_no=t1_no)
+    assert st["status"] == "进行中", st
+    st = call("task", "complete", task_no=t1_no)
+    assert st["status"] == "已完成", st                        # BR-11 的输出字段
+    record(True)
+
+    step("TC-ERR-01 标题为空必须被拒（BR-1）")
+    expect_err(lambda: call("task", "create", title="", assignee_member_no="M002",
+                            priority="low"), "不能为空", "必填")
+    record(True)
+
+    step("TC-ERR-02 标题超长必须被拒（BR-2）")
+    expect_err(lambda: call("task", "create", title="x" * 201, assignee_member_no="M002",
+                            priority="low"), "长度", "200")
+    record(True)
+
+    step("TC-ERR-03 描述超长必须被拒（BR-3）")
+    expect_err(lambda: call("task", "create", title="ok", description="x" * 2001,
+                            assignee_member_no="M002", priority="low"), "长度", "2000")
+    record(True)
+
+    step("TC-ERR-04 优先级非法必须被拒（BR-4）")
+    expect_err(lambda: call("task", "create", title="ok", assignee_member_no="M002",
+                            priority="urgent"), "优先级", "low", "high")
+    record(True)
+
+    step("TC-ERR-05 指派不存在的成员必须被拒（BR-6 · 跨应用链的失败面）")
+    expect_err(lambda: call("task", "create", title="ok", assignee_member_no="M404",
+                            priority="low"), "成员", "不存在")
+    record(True)
+
+    step("TC-ERR-06 指派编号为空必须被拒（BR-5）")
+    expect_err(lambda: call("task", "create", title="ok", assignee_member_no="",
+                            priority="low"), "不能为空", "必填")
+    record(True)
+
+    step("TC-ERR-07~10 任务不存在时四个操作都必须被拒（BR-14）")
+    expect_err(lambda: call("task", "get", task_no="T404"), "不存在")
+    expect_err(lambda: call("task", "start", task_no="T404"), "不存在")
+    expect_err(lambda: call("task", "complete", task_no="T404"), "不存在")
+    expect_err(lambda: call("task", "reopen", task_no="T404"), "不存在")
+    record(True)
+
+    step("TC-ERR-11~12 列表筛选枚举非法必须被拒（BR-16）")
+    expect_err(lambda: call("task", "list", status="done"), "状态")
+    expect_err(lambda: call("task", "list", priority="urgent"), "优先级")
+    record(True)
+
+    step("TC-ERR-13 在「进行中」上再 start 必须被拒（BR-10）")
+    t2 = call("task", "create", title="二次启动", assignee_member_no="M002", priority="low")
+    call("task", "start", task_no=t2["task_no"])
+    expect_err(lambda: call("task", "start", task_no=t2["task_no"]),
+               "状态", "进行中", "不能再次")
+    record(True)
+
+    step("TC-ERR-14 在「待办」上 complete 必须被拒（BR-11）")
+    t3 = call("task", "create", title="待办即完成", assignee_member_no="M002", priority="low")
+    expect_err(lambda: call("task", "complete", task_no=t3["task_no"]),
+               "状态", "待办", "不能")
+    record(True)
+
+    step("TC-ERR-15 在「待办」上 reopen 必须被拒（BR-12）")
+    expect_err(lambda: call("task", "reopen", task_no=t3["task_no"]),
+               "状态", "待办", "不能")
+    record(True)
+
+    step("TC-ERR-16 已完成任务禁止任何状态流转（BR-13）")
+    t4 = call("task", "create", title="已完成锁", assignee_member_no="M002", priority="low")
+    call("task", "start", task_no=t4["task_no"])
+    call("task", "complete", task_no=t4["task_no"])
+    expect_err(lambda: call("task", "start", task_no=t4["task_no"]), "状态", "已完成")
+    expect_err(lambda: call("task", "complete", task_no=t4["task_no"]), "状态", "已完成")
+    expect_err(lambda: call("task", "reopen", task_no=t4["task_no"]), "状态", "已完成")
+    record(True)
+
+
+# ═══════════════ 范式段 D · 变异测试：证明断言有牙（新规范要求，别省）═══════════════
+def run_mutation_check(pf, call):
+    """**断言可失败性（变异测试）**：把一处校验改坏，对应用例必须变红。
+
+    这是第⑤步新规范要求、而此前**完全没有**的一步。它回答的是：
+    「这条断言真的在约束实现吗，还是只是"调通了"？」
+    """
+    step("MUT-01 变异测试：改坏 _validate_email 后 TC-DM-07 必须变红")
+    cls = pf.handle(f"{GROUP}/member").cls
+    orig = cls._validate_email
+
+    def broken(self, email):
+        return email                      # ← 邮箱格式校验被短路
+
+    cls._validate_email = broken
+    try:
+        try:
+            call("member", "create", member_no="M901", name="变异",
+                 email="not-an-email", role="member")
+        except Exception:                 # noqa: BLE001
+            record(False, "改坏校验后仍被拒 ⇒ TC-DM-07 的断言可能命中了别的分支，"
+                          "或该校验没被 create 调用")
+            return
+        # 走到这里说明校验被短路后确实放行了 —— 也就是 TC-DM-07 的断言有牙
+        record(True)
+        print("     ✓ 短路 _validate_email 后该创建真的放行了 ⇒ TC-DM-07 的断言能失败")
+    finally:
+        cls._validate_email = orig
+        try:
+            call("member", "get", member_no="M901")
+        except Exception:                 # noqa: BLE001
+            pass                          # 恢复后 M901 是否残留不影响结论
+
+
+# ═══════════════ 范式段 E · 入口与收尾（影子库 → 清表 → 加载平台 → 跑 → 计数）═══════════════
 def main():
+    """入口：先进**影子库**（业务库复制到副本，真库零字节接触、**不用停服**），再跑正文。"""
+    from fde_platform.shadowdb import shadow_dbs
+    with shadow_dbs():
+        return _run()
+
+
+def _run():
+    print("=" * 78)
+    print(f"应用组 {GROUP} 后端主链端到端（第⑤步）")
+    print("  用例唯一来源：app/e2e/测试用例.md")
+    print(f"  影子库：清空的是**副本**上 app/{GROUP}/ 各应用的表（真库不动、不用停服）")
+    print("=" * 78)
+
+    from fde_platform.runtime import FdePlatform
+    clean()
     pf = FdePlatform()
     pf.load_all()
-    for a in APPS:
-        assert f"{GROUP}/{a}" in pf.app_names(), f"应用未加载: {GROUP}/{a}"
+
+    for app in APPS:
+        assert pf.handle(f"{GROUP}/{app}") is not None, f"{app} 未加载"
 
     def call(app, svc, **kw):
-        return pf.call(f"{GROUP}/{app}", svc, **kw)   # 组限定，避免短名歧义
+        return pf.call(f"{GROUP}/{app}", svc, **kw)
 
-    # ════════════════════ §1 主数据准备 ════════════════════
-    step("TC-DM-01 同步客户 C001(外销)/C002(内销)")
-    call("customer", "sync", data={"customer_no": "C001", "name": "某外贸客户",
-         "inner_outer_flag": "外销", "grade": "A", "settlement_currency": "USD"})
-    call("customer", "sync", data={"customer_no": "C002", "name": "某内销客户",
-         "inner_outer_flag": "内销"})
-    c001 = call("customer", "get", customer_no="C001")
-    assert c001.get("inner_outer_flag") == "外销", c001
+    for fn in (part_member, part_task):
+        try:
+            fn(call)
+        except Exception as e:            # noqa: BLE001
+            record(False, f"[{fn.__name__}] 崩溃：{type(e).__name__}: {e}")
 
-    step("TC-DM-02 同步产品 CTCT-0001(材料)/CTCT-0002(冲压件)")
-    call("product", "sync", payload=[
-        {"ctct_code": "CTCT-0001", "material_code": "M0001", "sap_material_no": "SAP-M001",
-         "name": "铝箔", "material_type": "材料", "std_flag": "标品", "moq": 1000},
-        {"ctct_code": "CTCT-0002", "material_code": "M0002", "sap_material_no": "SAP-M002",
-         "name": "冲压支架", "material_type": "冲压件", "std_flag": "标品"},
-    ])
-    assert call("product", "get", ctct_code="CTCT-0001").get("material_type") == "材料"
+    try:
+        run_mutation_check(pf, call)
+    except Exception as e:                # noqa: BLE001
+        record(False, f"变异测试崩溃：{type(e).__name__}: {e}")
 
-    step("TC-DM-03 客户采购资格")
-    q = call("product", "check_purchase_qualification", customer_no="C001", ctct_code="CTCT-0001")
-    print("    资格返回:", q, flush=True)
-
-    step("TC-DM-04 创建保税手册 C12345678(进料加工·股份)")
-    call("bonded_manual", "create", manual_no="C12345678", manual_type="进料加工",
-         trading_entity="股份", valid_from="2026-01-01", valid_to="2026-12-31",
-         total_qty=100000)
-    bm = call("bonded_manual", "get", manual_no="C12345678")
-    assert bm.get("status") == "有效", bm
-
-    step("TC-DM-05 创建两级销售组织 ORG-1 / ORG-1-1")
-    call("sales_org", "create", org_code="ORG-1", name="销售一部", level="一级",
-         trading_entity="股份")
-    call("sales_org", "create", org_code="ORG-1-1", name="销售一科", level="二级",
-         trading_entity="股份", parent_org_code="ORG-1")
-    assert call("sales_org", "get_parent", org_code="ORG-1-1")["org_code"] == "ORG-1"
-
-    # ════════════════════ §2.1 正向主链 ════════════════════
-    # —— 预测单 FC ——
-    step("TC-FC-01 创建预测单(保税)")
-    fc = call("forecast_order", "create", customer_no="C001", ctct_code="CTCT-0001",
-              demand_qty=12000, required_inbound_date="2026-09-30",
-              manual_no="C12345678", org_code="ORG-1-1")
-    fc_no = fc["fc_no"]
-    assert fc.get("status") == "草稿", fc
-    step("TC-FC-02 提交预测单")
-    call("forecast_order", "submit", fc_no=fc_no)
-    assert call("forecast_order", "get", fc_no=fc_no)["status"] == "已提交"
-    step("TC-FC-03 计划接收")
-    call("forecast_order", "receive", fc_no=fc_no, reply_inbound_date="2026-09-28",
-         reply_opinion="可按期")
-    assert call("forecast_order", "get", fc_no=fc_no)["status"] == "计划接收"
-    step("TC-FC-04 APS 排产回写(E-01 回执模拟)")
-    call("forecast_order", "on_e01_schedule", fc_no=fc_no, scheduled_qty=12000,
-         batch_no="APS-B01", confirm_time="2026-08-10 10:00:00")
-    assert call("forecast_order", "get", fc_no=fc_no)["status"] == "已排产待转单"
-    print("    可转量:", call("forecast_order", "get_transferable", fc_no=fc_no), flush=True)
-
-    # —— 销售订单 SO ——
-    step("TC-SO-01 创建销售订单(外销·材料·保税)")
-    so = call("sales_order", "create", customer_no="C001", so_type="常规",
-              material_type="材料", trading_entity="股份", inner_outer_flag="外销",
-              org_code="ORG-1", consignment_flag="常规销售", manual_no="C12345678",
-              trade_term="FOB", trade_region="北美", currency="USD", hs_code="7607",
-              trade_country_port="上海/上海港", dest_country_port="US/洛杉矶",
-              intl_transport="海运",
-              items=[{"ctct_code": "CTCT-0001", "demand_qty": 10000, "tolerance": 5,
-                      "delivery_date": "2026-08-15", "delivery_place": "上海仓"}])
-    so_no = so["so_no"]
-    line_no = so["lines"][0]["line_no"]
-    assert so.get("status") == "草稿", so
-    step("TC-SO-02 提交销售订单")
-    call("sales_order", "submit", so_no=so_no)
-    assert call("sales_order", "get", so_no=so_no)["header"]["status"] == "审批中"
-    step("TC-SO-03 审批通过")
-    call("sales_order", "approve", so_no=so_no, opinion="同意")
-    assert call("sales_order", "get", so_no=so_no)["header"]["status"] == "审批完成"
-    step("TC-SO-04 生效下达")
-    call("sales_order", "release", so_no=so_no)
-    assert call("sales_order", "get", so_no=so_no)["header"]["status"] == "已提交"
-
-    # —— 履约单 FO（创建即提交，Saga 联动 FC/SO）——
-    step("TC-FO-01 创建履约单(SO 直下 + FC 转单)")
-    fo = call("fulfillment_order", "create", so_no=so_no, so_line_no=line_no,
-              order_qty=10000, related_fc_no=fc_no)
-    fo_no = fo["fo_no"]
-    assert call("fulfillment_order", "get", fo_no=fo_no)["status"] == "已提交"
-    step("TC-FO-02 工单回写(MOM E-04 回执模拟)")
-    call("fulfillment_order", "add_work_order", fo_no=fo_no, work_order_no="WO001",
-         work_order_qty=10000, planned_completion_time="2026-08-12")
-    assert call("fulfillment_order", "get", fo_no=fo_no)["status"] == "已排产"
-    step("TC-FO-03 入库回写(WMS E-05 回执模拟)")
-    call("fulfillment_order", "add_inbound", fo_no=fo_no, batch_no="B001",
-         batch_weight=10000, actual_inbound_time="2026-08-13 09:00:00")
-    fo3 = call("fulfillment_order", "get", fo_no=fo_no)
-    assert fo3["status"] in ("部分入库", "全部入库"), fo3["status"]
-    print("    已入库批次:", call("fulfillment_order", "list_inbound_batches", fo_no=fo_no), flush=True)
-
-    # —— 交货单 DN ——
-    step("TC-DN-01 创建交货单(归集 B001)")
-    dn = call("delivery_note", "create", customer_no="C001", address="上海仓",
-              batches=[{"batch_no": "B001", "fo_no": fo_no, "provisional_price": 20.0,
-                        "unit_price": 20.0}])
-    dn_no = dn["dn_no"]
-    assert call("delivery_note", "get", dn_no=dn_no)["status"] == "已提交"
-    step("TC-DN-02 运输信息回写(WMS E-09 → 触发 E-07 回执模拟)")
-    call("delivery_note", "on_transport_info", dn_no=dn_no,
-         transport_info={"waybill_no": "WB001"})
-    dn2 = call("delivery_note", "get", dn_no=dn_no)
-    assert dn2["status"] == "已完成", dn2
-
-    # —— 对账单 RECON ——
-    step("TC-RECON-01 创建对账单(归集未结算批次)")
-    rc = call("reconciliation", "create", customer_no="C001",
-              items=[{"batch_no": "B001", "dn_no": dn_no, "settle_weight": 10000,
-                      "aluminum_price": 18.0, "processing_fee": 1.5,
-                      "minor_metal_surcharge": 0.3, "other_charge": 0.2}],
-              invoice_no="INV-001")
-    recon_no = rc["recon_no"]
-    assert call("reconciliation", "get", recon_no=recon_no)["status"] == "草稿"
-    step("TC-RECON-02 提交结算(触发 E-08 stub)")
-    call("reconciliation", "submit_to_sap", recon_no=recon_no)
-    step("TC-RECON-03 结算结果回写(SAP E-08 回执模拟·成功路)")
-    call("reconciliation", "on_settlement_result", recon_no=recon_no, result="COMPLETED")
-    rc3 = call("reconciliation", "get", recon_no=recon_no)
-    assert rc3["status"] == "完成", rc3
-    assert call("delivery_note", "get", dn_no=dn_no).get("recon_no") == recon_no
-
-    # ════════════════════ §2.2 逆向链（CC → RO）════════════════════
-    step("TC-CC-01 创建客诉单(引用已完成 DN1)")
-    cc = call("customer_complaint", "create", dn_no=dn_no, complaint_type="质量问题",
-              description="表面瑕疵",
-              lines=[{"ctct_code": "CTCT-0001", "complaint_qty": 100,
-                      "problem_desc": "表面瑕疵"}])
-    cc_no = cc["cc_no"]
-    assert call("customer_complaint", "get", cc_no=cc_no)["status"] == "草稿"
-    step("TC-CC-02 提交客诉单")
-    call("customer_complaint", "submit", cc_no=cc_no)
-    assert call("customer_complaint", "get", cc_no=cc_no)["status"] == "已提交"
-    step("TC-CC-03 质量审批通过")
-    call("customer_complaint", "approve", cc_no=cc_no, approve_opinion="属实")
-    assert call("customer_complaint", "get", cc_no=cc_no)["status"] == "已审批"
-    step("TC-CC-04 确定退货结论")
-    call("customer_complaint", "set_conclusion", cc_no=cc_no, conclusion="退货",
-         conclusion_remark="退货处理")
-    assert call("customer_complaint", "get", cc_no=cc_no)["status"] == "处理中"
-
-    step("TC-RO-01 从客诉单创建退货单(1:1)")
-    ro = call("return_order", "create_from_cc", cc_no=cc_no)
-    ro_no = ro["ro_no"]
-    assert call("return_order", "get", ro_no=ro_no)["status"] == "draft"
-    step("TC-RO-02 编辑退货数量")
-    call("return_order", "edit_draft", ro_no=ro_no, line_no="10", return_qty=100,
-         return_date="2026-08-20")
-    step("TC-RO-03 提交退货单")
-    call("return_order", "submit", ro_no=ro_no)
-    assert call("return_order", "get", ro_no=ro_no)["status"] == "submitted"
-    step("TC-RO-04 审批通过(自动触发 E-14)")
-    call("return_order", "approve", ro_no=ro_no, opinion="同意退货")
-    ro4 = call("return_order", "get", ro_no=ro_no)
-    assert ro4["status"] == "sap_processing", ro4
-    step("TC-RO-05 SAP 结果回写(E-14 回执模拟·成功路)")
-    call("return_order", "on_sap_result", ro_no=ro_no, result="成功",
-         sap_return_order_no="SAP-RO-001")
-    ro5 = call("return_order", "get", ro_no=ro_no)
-    assert ro5["status"] == "completed", ro5
-    assert call("customer_complaint", "get", cc_no=cc_no)["status"] == "已结案"
-
-    # ════════════════════ §3 分支 / 异常用例（自包含，复用上述数据）════════════════════
-    # 3.1 主数据校验分支
-    step("TC-ERR-ORG-01 二级组织缺有效父组织")
-    expect_err(lambda: call("sales_org", "create", org_code="ORG-2-1", name="x",
-                            level="二级", trading_entity="股份", parent_org_code="ORG-9"),
-               "上级组织必须是一个有效")
-    step("TC-ERR-ORG-02 一级组织不允许有上级")
-    expect_err(lambda: call("sales_org", "create", org_code="ORG-3", name="y",
-                            level="一级", trading_entity="股份", parent_org_code="ORG-1"),
-               "一级组织不允许有上级组织")
-    step("TC-ERR-BM-01 手册余量不足")
-    expect_err(lambda: call("bonded_manual", "occupy", manual_no="C12345678",
-                            qty=99999999, business_mode="保税进料", trading_entity="股份"),
-               "手册余量不足")
-    step("TC-ERR-BM-02 手册类型↔业务模式不匹配")
-    expect_err(lambda: call("bonded_manual", "occupy", manual_no="C12345678",
-                            qty=100, business_mode="保税来料", trading_entity="股份"),
-               "手册不可用于")
-    step("TC-ERR-BM-03 手册交易主体不一致")
-    expect_err(lambda: call("bonded_manual", "occupy", manual_no="C12345678",
-                            qty=100, business_mode="保税进料", trading_entity="重庆"),
-               "手册交易主体与单据")
-
-    # 3.2 正向链创建异常分支
-    step("TC-ERR-FC-01 要求入库时间早于提前期(提交时校验)")
-    _fc_err = call("forecast_order", "create", customer_no="C001",
-                   ctct_code="CTCT-0001", demand_qty=1000,
-                   required_inbound_date="2026-08-05", org_code="ORG-1-1")
-    expect_err(lambda: call("forecast_order", "submit", fc_no=_fc_err["fc_no"]),
-               "要求成品入库时间不得早于提交日+提前期")
-    step("TC-ERR-SO-01 同物料同交期重复行")
-    expect_err(lambda: call("sales_order", "create", customer_no="C001", so_type="常规",
-                            material_type="材料", trading_entity="股份", inner_outer_flag="内销",
-                            org_code="ORG-1",
-                            items=[{"ctct_code": "CTCT-0001", "demand_qty": 1,
-                                    "delivery_date": "2026-08-15", "tolerance": 5},
-                                   {"ctct_code": "CTCT-0001", "demand_qty": 2,
-                                    "delivery_date": "2026-08-15", "tolerance": 5}]),
-               "同一物料同一交期只能有一行")
-    step("TC-ERR-FO-01 下单量超 SO 行剩余未下单量")
-    # SO1 已完成（非已提交），新建一个内销 SO 并生效用于 FO 下单校验
-    _so2 = call("sales_order", "create", customer_no="C002", so_type="常规",
-                material_type="材料", trading_entity="股份", inner_outer_flag="内销",
-                org_code="ORG-1", items=[{"ctct_code": "CTCT-0001", "demand_qty": 1000,
-                "delivery_date": "2026-08-15", "tolerance": 5, "delivery_place": "上海仓"}])
-    call("sales_order", "submit", so_no=_so2["so_no"])
-    call("sales_order", "approve", so_no=_so2["so_no"], opinion="同意")
-    call("sales_order", "release", so_no=_so2["so_no"])
-    _ln2 = _so2["lines"][0]["line_no"]
-    expect_err(lambda: call("fulfillment_order", "create", so_no=_so2["so_no"],
-                            so_line_no=_ln2, order_qty=99999999),
-               "下单量超过 SO 行剩余未下单量")
-    step("TC-ERR-CC-01 投诉数量大于 DN 发货数量")
-    expect_err(lambda: call("customer_complaint", "create", dn_no=dn_no,
-                            complaint_type="质量问题",
-                            lines=[{"ctct_code": "CTCT-0001", "complaint_qty": 99999999}]),
-               "投诉数量不得大于 DN 发货数量")
-
-    print("\nPHASE 1+2 PASS —— 主链全链联通（主数据/FC/SO/FO/DN/RECON/逆向 CC→RO）"
-          " + 分支异常校验（组织/手册/FC/SO/FO/CC 共 9 条 expect_err）", flush=True)
+    print("\n" + "=" * 78)
+    bad = [r for r in RESULTS if not r[1]]
+    print(f"共 {len(RESULTS)} 步；通过 {len(RESULTS) - len(bad)}；失败 {len(bad)}")
+    for name, _, note in bad:
+        print(f"  ✗ {name} —— {note}")
+    print(f"VERIFY_RESULT: {'PASS' if not bad else f'PARTIAL {len(RESULTS) - len(bad)}/{len(RESULTS)}'}")
+    print("=" * 78)
+    return 0 if not bad else 1
 
 
 if __name__ == "__main__":
     try:
-        main()
-    except AssertionError as e:
-        print(f"\nPHASE 1 FAIL @ {STEP}: {e}", flush=True)
+        sys.exit(main())
+    except Exception as e:                # noqa: BLE001
+        print(f"FAIL_STEP: {STEP}")
+        print(f"VERIFY_RESULT: CRASH —— {type(e).__name__}: {e}")
         sys.exit(1)

@@ -139,7 +139,7 @@ export default function pageXxx() {
 ### 第 4 步：端到端验证（不可跳过）
 
 新建验收脚本（两级粒度：逐应用 `app/<模块>/tests/verify_view_<模块>_<应用>.py` 各管一页 + 组级 `app/<模块>/tests/verify_view_<模块>.py` 管壳/菜单序/受限用户/dashboard），照 `design-plus/前端验收样板/verify_view_e2e.py` 范式（受限会话机制含 403 豁免分支、角色名 `limited_role`，六类断言齐全；逐应用脚本为范式按页切片，组级脚本与范式同构）：
-- `fde_platform.dbguard.isolate_dbs()` 隔离 + 动态端口起 `main.py`（运维红线——隔离 / 串行 / 跑前杀 dev server——见 README §测试与验收红线）；
+- **影子库隔离**：`fde_platform.shadowdb.shadow_dbs(env=True, inprocess=False, config=True)` + `shadow_clear(<组>)` + `shadow_clear_prefs()` + 动态端口起 `main.py`（真库只读复制 ⇒ **不用停 dev server**；`env=True` 必需——平台是子进程起的，只有环境变量穿得过去。`dbguard` 移库是备用路径，**用它才要停服**。运维红线见 README §测试与验收红线）；
 - 登录后浏览器内 fetch 造数（走真实 REST）→ 逐页切换断言有内容（非看板页断言无 `.kpi`，防挂载粘滞假过）→ 逐模态断言关键字段 → 表单字段完备性断言 → 写操作真实落库回显断言；
 - 受限用户菜单过滤断言（**组级脚本内**：播种仅授权一两个应用的用户 → 菜单收敛为「看板 + 授权应用 + 平台页」，直访无授权路由回落看板）；
 - 全程 0 console error / 0 pageerror / 0 HTTP≥400（受限会话的 403 属预期执法，单独豁免）；
@@ -159,7 +159,7 @@ export default function pageXxx() {
 4. **总体一致**：同模块各应用页的列表/模态/表单/校验风格统一（第 3 步④清单）。
 5. **契约先行**：字段以后端真实契约与返回为准（dump services + 读 create/update 源码），不照别的视图猜。
 6. **组件范式唯一**：架构、类名、交互模式一律照本正本与 `design-plus/view-convention/patterns.md` 的范式（经 e2e 参考实现实测），不发明新架构；用户明确要求的差异除外。
-7. **数据隔离**：一切测试经 dbguard（`fde_platform/dbguard.py`）、串行跑——运维红线（隔离 / 串行 / 杀 dev server，勿绕）见 README §测试与验收红线。
+7. **数据隔离**：一切测试经**影子库**（`fde_platform/shadowdb.py`，默认）——**不同组可并行、同一个组不要并行**；`dbguard`（移库）是备用路径且要停服。运维红线见 README §测试与验收红线。
 8. **生成边界 + 前后端同文件夹**：应用前端只写 `app/<组>/<应用>/view.{js,html}`（与后端 `<应用>.py` 同文件夹，加应用前端 = 2 文件零接线）；组级聚合页放 `app/<组>/<页>.{js,html}`（松散文件）；通用壳 / 品牌 / 菜单 / 路由由平台约定推导，`view/lib/`、`view/pages/` 与后端 `.py` 零改动（样式确需扩充规范表 `fde_platform/static/fde.css` 属平台演进，须先向用户说明；`lib/styles.css` 是 `@import` 别名，勿扩写）。
 9. **页面自描述约定**：每页 `export const PAGE_META = {key,name,ic,title,crumb,order}` + `export default function pageXxx()`（工厂默认导出、保留专名）。`order` 升序即菜单顺序，**必须显式给**。import 一律**绝对路径** `/view/lib/*`（相对路径在迁入应用目录后会断）；模板抓取用 `import.meta.url`。
 10. **鉴权零实现 + svc 字面量**：不另造认证；页面不判断权限（菜单按页面授权渲染在 shell，数据闸门在后端，隐式放行在闸门）；401 → api.js 自动跳登录。**页面调服务必须用 `svc("app", "service")` 字面量**（可包在闭包里逐项写，勿用变量拼名）——这是隐式放行派生扫描的唯一来源。

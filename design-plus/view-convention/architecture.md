@@ -115,5 +115,6 @@ bootShell("{{ module }}");
 ## 验证体系
 
 - Playwright + Chromium 无头实测（`pip install playwright && python -m playwright install chromium`）。
-- `fde_platform/dbguard.py isolate_dbs()`：测试前移走全部应用库/平台库，结束原样还回——**测试绝不污染用户数据**；守卫带跨进程互斥锁（`fde_platform/.dbguard.lock`），**并行跑测试会被干净拒绝**（2026-07-30 并行踩踏曾洗掉用户库，勿绕）。
+- **影子库（默认）**：`fde_platform/shadowdb.py` 的 `shadow_dbs(env=True, inprocess=False, config=True)` 把业务库与平台库**只读复制**到每进程一个临时目录（`tempfile.mkdtemp(prefix="fde_shadow_")`）——真库零字节接触、**不用停 dev server**；起点用 `shadow_clear(<组>)` + `shadow_clear_prefs()` 清成空表。**不同组可并行**；**同一个组不要并行**（争同一份业务数据口径）。
+- `fde_platform/dbguard.py isolate_dbs()`（**备用**）：测试前移走全部应用库/平台库，结束原样还回——**测试绝不污染用户数据**；守卫带跨进程互斥锁（`fde_platform/.dbguard.lock`），**并行会被干净拒绝**（2026-07-30 并行踩踏曾洗掉用户库，勿绕）。代价是**必须先停 dev server**（Windows 下 `main.py` 占 `.db` 句柄会让文件移不动），故它只在特殊场景用。
 - 范式模板：`design-plus/前端验收样板/verify_view_e2e.py`（登录 → 壳断言 → 逐路由渲染含挂载防粘滞守卫 → 浏览器内造数 → 逐模态字段断言 → 受限用户菜单过滤断言含 403 豁免 → 0 console error）。

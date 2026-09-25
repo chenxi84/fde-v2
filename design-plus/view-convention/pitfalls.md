@@ -60,7 +60,22 @@
 36. **每个模块必须有 dashboard 组级页（最致命的静默崩溃）**：平台壳 `shell.js` 的默认路由写死 `route: "dashboard"`（`view/lib/shell.js`）。模块若没有 `app/<组>/dashboard.{js,html}`，授权集到达**之前**的预渲染窗口与受限用户回落都会把空 `{}` 挂到默认路由上 → 模板里 `x-html="tpl"` 对 `undefined` 求值，连同看板要引用的 `list.items` 等一起喷一片 console error。2026-08 给 e2e 模块只建了应用页、漏了看板，verify_view 首屏即 5 个报错。✅ 规则：**新建模块 = 必产 `app/<组>/dashboard.{js,html}`**（key="dashboard"、PAGE_META.order 给最小、quiet 探测 + 零值兜底，照抄 `app/e2e/dashboard.*`）；它不是"可选聚合页"，是壳能正常启动的前提。
 37. **reactive 状态必须同步建好，再 await**：页面工厂的 `init()` 若先 `await`（如 `await loadMembers()`）再创建某个 `Alpine.reactive` 子对象（如 `self.list = pageable(...)`），`self.tpl` 一旦赋值 Alpine 即注入模板并求值 `list.items/total/page`，此刻 `list` 仍是 `null` → 「reading 'items' of null」。2026-08 task 页 init 先 await 成员映射、后建 list，首屏喷 4 个 null 错。✅ 规则：工厂体内**一切会被模板引用的 reactive 状态，必须在第一个 `await` 之前同步初始化**（list 先 `pageable(...)` 建好含空 `items:[]`，再 `await loadMembers()`，最后 `await self.list.load()`）——对标 e2e 范式。
 38. **加页面 = 同步更新 verify 受限用户断言（耦合极易漏）**：模块新增页面（尤其看板）后，`app/<组>/tests/verify_view_<组>.py` 里两处必须跟着改，否则受限阶段误报 403 / 回落断言失败：① 受限角色的授权清单要加上新页（如 `users.set_role_page_grants("limited_role", ["<组>:dashboard", "<组>:member", "_platform:workbench"])`（⚠ 2026-09-17 订正：平台置顶页的 key 是 `workbench`（侧栏名「AI管家」），**没有** `_platform:agent` / `_platform:agent_overview` 这两个页；授权键格式是 `_platform:<key>`，照 `view/lib/shell.js` 的 `PLATFORM_PAGES` 取））——新页进菜单后预渲染窗口会带 `X-Fde-Page="<组>:<新页>"` 发 svc，未授权即 403；② 直访无授权路由的**回落断言**要改成菜单首项（看板成 menu[0] 后回落目标由「某应用」变成「首页看板」）。2026-08 e2e 加看板后这两处没同步，多出 2 个 403。✅ 规则：改完页面把 `verify_view_<组>.py` 的 `limited_role` 授权清单与回落断言逐字对一遍（照 `verify_view_e2e.py` 范式）。
-39. **dbguard 隔离 + 平台配置库随清单演进（2026-07-30 洗库事故 / 2026-08 补 llm.db）**：① 一切测试必走 `fde_platform/dbguard.isolate_dbs()`：进入时移走全部应用库/平台库，退出（含断言失败，经 atexit）原样还回——**用户数据分毫不丢**；并行跑多个 verify 会互踩共享暂存洗掉用户库（2026-07-30 事故），故守卫持跨进程独占锁 `fde_platform/.dbguard.lock`，第二个并发进程干净拒绝（原 #19 并入）。② `dbguard._CONFIG_DBS` 枚举 `config/` 下的平台库，**新增任何 `config/*.db`（2026-08 前漏了 `llm.db`）必须同步加进清单**，否则用户真实配置泄漏进测试、使"未配置降级"类断言失准。③ 测试里逼 LLM 降级路径用 `FDE_LLM_RETRIES=1`/`FDE_LLM_BACKOFF=0` 压短重试（`fde_platform/llm.py` 读取，默认 3/8），连接拒绝即秒回，避免默认退避拖超测试超时。
+39. **数据库隔离只有一条红线（绝不污染用户数据），实现有两条路（2026-07-30 洗库事故 / 2026-08 补 llm.db / 2026-09 订正主次）**：
+    ① **默认走影子库** `fde_platform/shadowdb.py`：业务库与平台库**只读复制**到临时目录，真库零字节接触、
+    **不用停 dev server**、不同组可并行（同一个组别并行）。链测试在**本进程**跑 ⇒ `shadow_dbs()` 默认 `inprocess=True`
+    即可；前端 view e2e 是 `subprocess.Popen([python, main.py])` 起平台 ⇒ 必须 `shadow_dbs(env=True, inprocess=False, config=True)`
+    （**环境变量能穿透子进程**，进程内补丁过不去）。起点用 `shadow_clear(<组>)` + `shadow_clear_prefs()` 清成空表。
+    ⚠ 2026-09-25 实测：**范式样板**长期停在旧路（`isolate_dbs()`）且写死的组名早已不存在 —— 生成器把样板当「范式全文」
+    注入，于是**每个新组都生成"要停服"的脚本**。改隔离机制时**连范式样板与规格一起改**，别只改跑得最勤的那几个脚本。
+    ② **备用路** `fde_platform/dbguard.isolate_dbs()`（移库）：进入时移走全部应用库/平台库，退出（含断言失败，经 atexit）原样还回
+    ——**用户数据分毫不丢**；代价是**必须先停服**（Windows 下被打开的文件 rename 不了），且中途被强杀会让真库**离开原位**。
+    并行跑多个 verify 会互踩共享暂存洗掉用户库（2026-07-30 事故），故守卫持跨进程独占锁 `fde_platform/.dbguard.lock`，
+    第二个并发进程干净拒绝（原 #19 并入）。**用它时** 才有下面 ③④ 两条约束。
+    ③ 「移库」路的 `dbguard._CONFIG_DBS` 枚举 `config/` 下的平台库，**新增任何 `config/*.db`（2026-08 前漏了 `llm.db`）
+    必须同步加进清单**；影子库路同理——副本集合 =「除 `agent_service.db`（对话记录、体积大）外的 config 库」，
+    新增平台库也要同步。否则用户真实配置泄漏进测试、使"未配置降级"类断言失准。
+    ④ 测试里逼 LLM 降级路径用 `FDE_LLM_RETRIES=1`/`FDE_LLM_BACKOFF=0` 压短重试（`fde_platform/llm.py` 读取，默认 3/8），
+    连接拒绝即秒回，避免默认退避拖超测试超时。
 
 40. **`fill_labeled` 的 XPath `following::` 轴不受 locator scope 约束（2026-09-17 实测踩到）**：样板 helper 里写的是
     `scope.locator('xpath=.//label[contains(…)]/following::input[1]')` —— `following::` 是**文档序**轴，
@@ -86,6 +101,91 @@
     两次之间 DOM 收敛了。看到这种"期望与实际看起来一样"的报错，**先怀疑断言点选错了对象，而不是怀疑日志**。
     ✅ 规则：**等待条件必须与断言对象是同一个东西**（`wait_buttons(row, expect)` 轮询按钮本身），
     错误信息里**用等到的那个快照**、不要重新求值。同类记录：PSC `demand` 页「等了下拉文案却去断工具栏按钮」。
+
+43. **`PAGE_META.order` 并列 ⇒ 菜单序静默交给「key 字母序」，把设计意图换成文件名顺序**（2026-09-25 实测踩到）：
+    平台排序键是 `(order 缺省, order, key)`（`fde_platform/view_registry.py::boot_manifest`）——
+    并列时**兜底按 key 字母序**，不报错、不警告，`order` 字段看上去还是"编排过的"。
+    ⚠ **实测**：nasa_pms 首版把 `risk` / `configuration_item` 都写 620、`change_request`/`review`/`verification` 都写 630、
+    `decision`/`interface` 都写 640 ⇒ 侧栏把「配置项」排到了「风险」前面，**与 `architecture.md` ① 聚合根清单总表声明的序矛盾** ——
+    而单看每个 `view.js` 都"没写错"。
+    ⚠ **为什么难发现**：并列**有时恰好**落在正确序上（本例 630/640 两组恰好对），
+    于是评审时"看着没问题"；下一次**改个应用名**（key 变）就可能整段错位，且没有任何测试会红 ——
+    除非该组有组级 view 测试，且它按**平台同款排序键**现算期望表。
+    ✅ 规则：**`order` 逐页唯一、步长 10**（10/20/30… 预留插入空隙，VIEW_CONVENTION §4）；
+    新增页**插空用 5 的倍数**（如 635），**不要复用**已有值。
+    ✅ 组级 view 测试的期望菜单必须**现算**（扫 `PAGE_META` + `shell.js` 的 `PLATFORM_PAGES`），
+    且**排序键与 `boot_manifest` 逐字一致**（含 `key` 兜底）—— 手抄的期望表在并列时会与实现**一起漂**，
+    等于把缺陷固化成"正确行为"。
+    ✅ 发现并列后的处置是**改 `order`**，不是去改平台排序键、也不是把期望表调成字母序了事。
+
+44. **断言 `datalist` 必须带 `id` 限定（裸 `datalist option` 会数到同一模态里的**所有** datalist）**（2026-09-25 实测踩到）：
+    `interface` 页原有 `rec(m.locator('datalist option').count() == 2, "建议项来自配置项台账（2 个）")` ——
+    当天给同一模态又加了一个「责任人」候选 datalist（2 项）后，**这条断言当场变红**（2 → 4）。
+    ⚠ 它红得**像**产品缺陷（"建议项数量不对"），实际是**断言选择器不设界**：
+    `datalist` 是 `document` 级可重名的元素，`locator('datalist option')` 会跨 datalist 累加。
+    ✅ 规则：**写 `<datalist>` 就给 `id`，断言一律按 id 取**（`datalist#sh-options-modal option`）；
+    往一个模态里新增候选控件时，**回头扫一遍该页/该会话里有没有裸 `datalist` / 裸 `tag` 计数断言**。
+    同类：`following::` 轴越出 scope（#40）、`inner_text` 吃下全部 option（#42 附近）、`.kpi` 计数当"页面标识"。
+    ✅ 本仓范式：候选控件统一 `datalist id="<域>-options-<模态|表单>"`（如 `sh-options-modal` /
+    `cr-options-form`），值仍是文本、只作建议 —— 见各页 `前端详设.md` 与 `FE-5x/FE-7x` 用例。
+
+45. **门禁「空层」＝判据静默塌成空集：选了某一层却 0 个检查项，报告照样是「通过」**（2026-09-25 实测踩到）：
+    `scripts/run_gates.py` 的 chain 层原先按**精确名**取 `app/<组>/tests/verify_chain_<组>.py`；而 nasa_pms 的
+    ⑤ 产物是 **11 个逐应用分片、没有编排器** ⇒ `--group nasa_pms --tier chain` 取到 **0 项**，
+    输出里 `[chain]` 下面什么都没有，**结果仍是 PASS**。同时 ④《测试用例.md》第 9 行早就写着
+    「执行：`python app/nasa_pms/tests/verify_chain_nasa_pms.py`」—— **文档指向了一个不存在的入口**，
+    而 11 个分片各自绿，所以两周里没有一处会红。
+    ⚠ **为什么这是最坏的一类**：它不伪装成"没跑"，它伪装成"跑过了"。用户按 `CLAUDE.md` 的清单敲
+    `python app/<组>/tests/verify_chain_<组>.py` 会直接报文件不存在（这次反而是好事），
+    但**门禁**那条路是完全静默的 —— 报告上 `通过 8/8` 一个数字都不会变。
+    ✅ 已修（两侧）：
+    · **产物侧**：补编排器 `verify_chain_<组>.py`（跑全部分片 + 汇总 + 任一失败非零退出；**过滤后 0 分片报错退出**）；
+    · **闸门侧**：chain 层改为「**编排器优先、分片兜底**」（排除 `_part*`：那种片段被父脚本 exec、单独跑必崩），
+      并对**任何选中的空层**打 ⚠ 且 `VERIFY_RESULT: FAIL`（空集不算通过）。
+    ✅ 规则（通用）：**凡是"按名字取产物"的判据，都要处理"取到 0 个"**：要么 fail loud，要么显式声明
+    「本组无此类产物」。同理适用于 glob 类检查（view 层、静态检查清单）——新增/改名产物后先看
+    `--list` 的实际条数，别只看最后的 `通过 N/N`。
+    ✅ 同源教训：`verify_test_script_encoding.py` 的「扫不到文件就报错」、`clean()` 的「分母闸」、
+    `scripts/verify_*.py` 里「判据不许静默塌成空集」—— 都是这一条。
+
+46. **判据的"词汇表"必须与规格的模板一致 —— 否则整个组被静默假红（2026-09-25 实测，一次扫出 136+77 条）**：
+    nasa_pms 是**照规格手写**出来的组（没走 groupbuild 流水线），结果四条判据同时报红，逐条查完全是**判据只会读 PSC 的写法**：
+    | 判据 | 只认 | 而规格的模板/PSC 各自写的是 | 假红数 |
+    |---|---|---|---|
+    | `scan_structure.py` T2 / `br_coverage.py` / `view_coverage.py` V7 | `assert …` | ⑤《测试执行.md》模板规定 `def record(ok, note="")`；⑨ 范式的 view 脚本用 `rec(...)` | **114 + 77** |
+    | `scan_structure.py` 的 `_TC_RE` | `TC-<字母>-<n>`（PSC 的组内全局编号） | 逐应用编号 `TC-<n>` ⇒ **直接崩**在 `.group()` 上（`NoneType`） | 崩溃 |
+    | `view_coverage.py` 的 `_VT` | `VT-<段>-<n>` | ⑧ 规格明文规定 `VT-<段>-<n>`，但 nasa_pms 自造了 `FE-<n>` | 11（V1）+ 31（V3） |
+    | `br_coverage` 的「输出」解析 | `无（拒绝…` / `无（派生量…` / 真列名 | ② 规格**从没规定**这三种写法（只解释了"为什么必填"）⇒ 15 条 BR 写成散文 | 15 |
+    ⚠ **为什么危险**：这些红灯**看起来像产品缺陷**（"BR 输出没被断言引用""114 个步无断言"），排查方向完全跑偏；
+    而且**判据自己会崩**（`NoneType`）时，外层门禁把它显示成"结构检查 FAIL"—— 像报了缺陷，其实一条都没判。
+    ✅ 处置（2026-09-25）：① 三处判据的词汇表补齐（`record`/`rec` 都算断言；`TC-<n>` 也认；断言强度改判**首个实参形状**
+    而不是"整行含退化词就否"——`record(字段 == x and y is not None)` 这种"真比较+保险"不算空转）；
+    ② ② 规格补上「`输出` 的受控词汇」表；③ nasa_pms 的编号迁到 `VT-<段>-<n>`（409 条）。
+    ✅ **通用规则**：判据里凡是"按某种写法取信息"的正则/词表，**都要回到规格里找那句话**——规格没写的，
+    要么补进规格（推荐），要么让判据两种写法都认。**判据与规格不一致时，被冤的是产物，不是判据。**
+    ✅ 同源于 #43（`order` 并列静默交给字母序）、#45（空层静默报通过）、
+    **架构声明的跨应用边 ↔ 代码的对账**（`scripts/verify_app_edges.py`，2026-09-25 加）：
+    同一族 —— **声明与实现之间没有对账，就没有任何测试会红**（测试也是照声明写的）。
+    该判据把「后端的 `self.fde.call`」与「视图层的字面量 `svc(...)`」**分开归类**：
+    候选建议（值仍是文本、后端不校验）与真依赖（要做存在性校验）是两件事，文档不写清就会误导下游。
+
+47. **流程编排：条件分支的两处"越写对越卡"**（2026-09-25 实测，真跑一条 flow 才暴露）：
+    静态预检（装配 / 拓扑 / 上游 / 工具面）全绿，`call` 节点也真跑通了 —— 于是我以为声明没问题。
+    直到**真跑一次**才连撞三处：
+    ① **`not_empty` 对容器恒真**：`_check_condition` 原来是 `bool(str(val).strip())`，而 list/dict 的
+       字符串形式**永远非空** ⇒ `when: {key: 告警清单, op: not_empty}` 这条闸形同不存在
+       （实测：没有未了结告警时照样跑了 4 个 agent 节点，**白烧 290 秒模型**，而且 agent 见输入是空的
+       就自己找活干，把关掉了一条本不该动的度量）。
+    ② **跳过的节点不标 done ⇒ 死循环**：修好①之后流程改成了**卡死**（`while len(done) < total` 永不结束）
+       —— 因为被 `when` 跳过的节点 `continue` 时没进 `done`，永远留在 ready 里。
+    ③ **`when` 只写在链首 ⇒ 下游拿着未解析的 `{占位符}` 照跑**：`depends_on` 只约束顺序，
+       上游被跳过时下游的输出键根本不在 state 里。`app/psc/_flow_alert_heal.yaml`（平台自带示例）
+       与 nasa_pms 那条**都是**这个形状。
+    ✅ 处置：平台侧三处都修（容器感知的取值语义 / 跳过即 done / 上游跳过则下游跳过 —— 于是作者只需在链首写 `when`）；
+    规范补进《流程编排方案.md》§三；`app/nasa_pms/_flow_*.yaml` 三条流程真跑验证。
+    ✅ **通用规则**：**"声明合法"不等于"跑得通"**。静态检查（装配/拓扑/工具面）覆盖不了执行语义 ——
+   条件分支、循环、占位符填充、跳过传播**只有真跑一遍才验证得了**。凡是声明式的东西（flow / `_roles.py` /
+    架构边），除了对账"声明 ↔ 代码"，还要**至少真跑一条**。同源于 #45（空层）、#46（判据词汇表）。
 
 ## 架构事实速查（不是坑，详见 architecture.md / patterns.md）
 
