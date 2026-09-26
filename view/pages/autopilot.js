@@ -31,8 +31,10 @@ export function pageAutopilot() {
     },
 
     async loadOptions() {
-      self.flows = (await get("/api/flows", { quiet: true }).catch(() => [])) || [];
-      self.skills = (await get("/api/skills", { quiet: true }).catch(() => [])) || [];
+      const g = window.__fdeModule || "";
+      const qs = g ? "?group=" + encodeURIComponent(g) : "";
+      self.flows = (await get("/api/flows" + qs, { quiet: true }).catch(() => [])) || [];
+      self.skills = (await get("/api/skills" + qs, { quiet: true }).catch(() => [])) || [];
     },
 
     async create() {

@@ -27,15 +27,25 @@ def _conn():
             title TEXT NOT NULL,
             detail TEXT DEFAULT '',
             time TEXT DEFAULT '',
+            module TEXT,
             created_at TEXT DEFAULT (datetime('now','localtime'))
         )"""
     )
+    # 加列式迁移（老库补列）。⚠ 刻意**不带 DEFAULT** —— 那样存量行会被填成 ''，
+    # "没归属"与"显式平台级"就分不开了（同 skills.py 的注释）。
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(agent_alerts)").fetchall()}
+    if "module" not in cols:
+        conn.execute("ALTER TABLE agent_alerts ADD COLUMN module TEXT")
     return conn
 
 
 def raise_alert(source: str, level: str, title: str, detail: str = "",
-                time: str = "") -> dict:
-    """写入一条 agent 上报的告警。level 非法时归一为 amber。"""
+                time: str = "", module: str = None) -> dict:
+    """写入一条 agent 上报的告警。level 非法时归一为 amber。
+
+    `module` = 上报该告警的 agent 所属**应用组**（空/None = 平台级）。
+    告警按组隔离的键就是它 —— 组视角只看「本组 ∪ 平台级」。
+    """
     if not title:
         return {"error": "告警标题不能为空"}
     if level not in _LEVELS:
@@ -44,9 +54,9 @@ def raise_alert(source: str, level: str, title: str, detail: str = "",
     conn = _conn()
     try:
         cur = conn.execute(
-            "INSERT INTO agent_alerts (source, level, title, detail, time) "
-            "VALUES (?,?,?,?,?)",
-            (source or "Agent 上报", level, title, detail or "", time),
+            "INSERT INTO agent_alerts (source, level, title, detail, time, module) "
+            "VALUES (?,?,?,?,?,?)",
+            (source or "Agent 上报", level, title, detail or "", time, module or ""),
         )
         conn.commit()
         return {"id": cur.lastrowid, "message": "告警已上报"}
@@ -54,15 +64,22 @@ def raise_alert(source: str, level: str, title: str, detail: str = "",
         conn.close()
 
 
-def list_agent_alerts(limit: int = 100) -> list[dict]:
-    """读最近 N 条 agent 上报的告警（与 /api/alerts 统一结构 {source,level,title,detail,time}）。"""
+def list_agent_alerts(limit: int = 100, module: str = None) -> list[dict]:
+    """读最近 N 条 agent 上报的告警（统一结构；`module` 一并带出，供页面打「平台级」标记）。
+
+    `module` 给定时按「本组 ∪ 平台级」过滤（不给 = 全量，平台管理视角）。
+    """
     conn = _conn()
     try:
-        rows = conn.execute(
-            "SELECT source, level, title, detail, time FROM agent_alerts "
-            "ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        sql = ("SELECT source, level, title, detail, time, "
+               "COALESCE(module,'') AS module FROM agent_alerts")
+        args = []
+        if module:
+            sql += " WHERE COALESCE(module,'') IN ('', ?)"
+            args.append(module)
+        sql += " ORDER BY id DESC LIMIT ?"
+        args.append(limit)
+        rows = conn.execute(sql, tuple(args)).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()

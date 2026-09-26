@@ -368,21 +368,25 @@ def _index(platform) -> dict:
     return idx
 
 
-def _call_platform_tool(platform, user, service: str, args: dict):
-    """平台级工具执行分发（非应用作用域）。"""
+def _call_platform_tool(platform, user, service: str, args: dict, module: str = None):
+    """平台级工具执行分发（非应用作用域）。
+
+    `module` = 调用方 agent 所属**应用组**（由 `execute` 从会话上下文带下来）——
+    skill 沉淀与告警上报都按它落归属，AI管家的 SKILL / 告警才谈得上组隔离。
+    """
     if service == "propose_skill":
         from fde_platform import skills
 
         return skills.propose(
             args.get("name", ""), args.get("description", ""), args.get("trigger", ""),
-            args.get("steps", []), created_by="agent",
+            args.get("steps", []), created_by="agent", module=module,
         )
     if service == "raise_alert":
         from fde_platform import alerts as alerts_mod
 
         return alerts_mod.raise_alert(
             args.get("source", "Agent 上报"), args.get("level", "amber"),
-            args.get("title", ""), args.get("detail", ""),
+            args.get("title", ""), args.get("detail", ""), module=module,
         )
     if service == "list_flows":
         from fde_platform import flow
@@ -534,8 +538,12 @@ def _call_platform_tool(platform, user, service: str, args: dict):
     raise FdeError(f"未知平台工具：{service}")
 
 
-def execute(platform, user, tool_name: str, args: dict) -> str:
-    """执行一次工具调用（按 user 服务授权 fail-closed），返回 JSON 文本。"""
+def execute(platform, user, tool_name: str, args: dict, module: str = None) -> str:
+    """执行一次工具调用（按 user 服务授权 fail-closed），返回 JSON 文本。
+
+    `module` = 该 agent 所属应用组（调用方传入；None/空 = 平台级）—— 只影响
+    **平台级工具写入时的归属**（skill / 告警），不参与授权判定。
+    """
     args = dict(args or {})
     args.pop("context", None)  # 身份只由平台注入，拒绝客户端伪造
 
@@ -547,7 +555,7 @@ def execute(platform, user, tool_name: str, args: dict) -> str:
     # 平台工具（非应用作用域，如 skill 沉淀 / 集成 / 定时任务配置）
     if app == "__platform__":
         try:
-            result = _call_platform_tool(platform, user, service, args)
+            result = _call_platform_tool(platform, user, service, args, module)
         except FdeError as e:
             return json.dumps({"error": f"业务失败：{e}"}, ensure_ascii=False)
         except TypeError as e:

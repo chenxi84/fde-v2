@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS flow_runs (
     step_total INTEGER NOT NULL DEFAULT 0,
     current_role TEXT DEFAULT '',
     result TEXT DEFAULT '',
+    module TEXT,
     updated_at TEXT NOT NULL
 );
 
@@ -83,9 +84,44 @@ CREATE TABLE IF NOT EXISTS flow_run_history (
     status TEXT NOT NULL,
     step_total INTEGER NOT NULL DEFAULT 0,
     result TEXT DEFAULT '',
+    module TEXT,
     updated_at TEXT NOT NULL
 );
 """
+
+
+def _migrate(conn) -> None:
+    """老库补 `module` 列 + **一次性回填**（2026-09-26 加的应用组隔离）。
+
+    ⚠ 补列**刻意不带 DEFAULT**：带了存量行会被填成 ''，"没归属"与"显式平台级"就分不开，
+    回填的 `module IS NULL` 一条都匹配不到（同 skills.py 的注释）。
+
+    回填判据：运转历史里存的是流程**显示名**，拿它对回 `_flow_*.yaml` 注册表即可定位组；
+    同名流程出现在多个组时**不猜**，留空 = 平台级。
+    """
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(flow_run_history)").fetchall()}
+    if "module" not in cols:
+        conn.execute("ALTER TABLE flow_run_history ADD COLUMN module TEXT")
+        conn.execute("ALTER TABLE flow_runs ADD COLUMN module TEXT")
+    # ⚠ 回填与"加列"**分开判**（同 skills.py 的教训）：回填看"还有没有 NULL 行"，
+    #   否则首次迁移一旦中断，回填就再也没有第二次机会。
+    pending = conn.execute(
+        "SELECT DISTINCT flow_name FROM flow_run_history WHERE module IS NULL").fetchall()
+    if not pending:
+        return
+    if "module" not in cols:
+        conn.commit()                      # 至少把加列落盘（原表还没 module 时不该白跑）
+    by_name: dict = {}
+    for name, f in (_load_flows() or {}).items():
+        g = f.get("group") or ""
+        by_name[name] = "" if (name in by_name and by_name[name] != g) else g
+    for row in pending:
+        g = by_name.get(row["flow_name"]) or ""
+        if g:
+            conn.execute("UPDATE flow_run_history SET module=? WHERE flow_name=? "
+                         "AND module IS NULL", (g, row["flow_name"]))
+    # 显式提交：`list_runs` / `get_progress` 都是只读路径，不会 commit。
+    conn.commit()
 
 
 def _load_flows() -> dict[str, dict]:
@@ -168,23 +204,27 @@ def delete_flow(group: str, key: str) -> dict:
 # ── 进度上报（只保留最近一次执行）────────────────────────
 
 def _report_progress(flow_name: str, status: str, step_index: int,
-                     step_total: int, current_role: str, result: str = "") -> None:
+                     step_total: int, current_role: str, result: str = "",
+                     module: str = "") -> None:
+    """写进度 / 历史。`module` = 该流程所属**应用组**（运转动态按它做组隔离）。"""
     conn = sqlite3.connect(str(config_path("flow_runs.db")))
     try:
         conn.executescript(_SCHEMA)
+        _migrate(conn)
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         conn.execute("DELETE FROM flow_runs")  # 当前进度只留最近一次
         conn.execute(
             "INSERT INTO flow_runs (flow_name, status, step_index, step_total, "
-            "current_role, result, updated_at) VALUES (?,?,?,?,?,?,?)",
-            (flow_name, status, step_index, step_total, current_role, result, now),
+            "current_role, result, module, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+            (flow_name, status, step_index, step_total, current_role, result,
+             module or "", now),
         )
         if status == "done":
             # 运行结束：追加一条历史（裁剪到 _MAX_RUNS 条，供协同总览时间线）
             conn.execute(
-                "INSERT INTO flow_run_history (flow_name, status, step_total, result, updated_at) "
-                "VALUES (?,?,?,?,?)",
-                (flow_name, status, step_total, result, now),
+                "INSERT INTO flow_run_history (flow_name, status, step_total, result, "
+                "module, updated_at) VALUES (?,?,?,?,?,?)",
+                (flow_name, status, step_total, result, module or "", now),
             )
             conn.execute(
                 "DELETE FROM flow_run_history WHERE id NOT IN "
@@ -208,17 +248,25 @@ def get_progress() -> dict | None:
         conn.close()
 
 
-def list_runs(limit: int = 20) -> list[dict]:
-    """读最近 N 条 flow 运行历史（时间线，最新在前）。"""
+def list_runs(limit: int = 20, module: str = None) -> list[dict]:
+    """读最近 N 条 flow 运行历史（时间线，最新在前）。
+
+    `module` 给定时按「本组 ∪ 平台级」过滤（不给 = 全量，平台管理视角）。
+    """
     conn = sqlite3.connect(str(config_path("flow_runs.db")))
     conn.row_factory = sqlite3.Row
     try:
         conn.executescript(_SCHEMA)
-        rows = conn.execute(
-            "SELECT flow_name, status, step_total, result, updated_at "
-            "FROM flow_run_history ORDER BY id DESC LIMIT ?",
-            (max(1, min(int(limit), _MAX_RUNS)),),
-        ).fetchall()
+        _migrate(conn)
+        sql = ("SELECT flow_name, status, step_total, result, "
+               "COALESCE(module,'') AS module, updated_at FROM flow_run_history")
+        args = []
+        if module:
+            sql += " WHERE COALESCE(module,'') IN ('', ?)"
+            args.append(module)
+        sql += " ORDER BY id DESC LIMIT ?"
+        args.append(max(1, min(int(limit), _MAX_RUNS)))
+        rows = conn.execute(sql, tuple(args)).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
@@ -529,12 +577,12 @@ def run_flow(name: str, platform, user) -> dict:
     problems = _preflight(nodes, platform, user)
     if problems:
         msg = "；".join(problems)
-        _report_progress(name, "error", 0, total, "", msg[:2000])
+        _report_progress(name, "error", 0, total, "", msg[:2000], group)
         return {"error": "流程预检未通过：" + msg}
 
     state: dict = {}
     done: set = set()
-    _report_progress(name, "running", 0, total, "")
+    _report_progress(name, "running", 0, total, "", "", group)
     while len(done) < total:
         ready = [nid for nid in deps if nid not in done and deps[nid] <= done]
         if not ready:
@@ -542,7 +590,7 @@ def run_flow(name: str, platform, user) -> dict:
         try:
             batch = _run_ready(ready, node_by_id, state, platform, user, group)
         except FlowAbort as e:
-            _report_progress(name, "error", len(done), total, "", str(e)[:2000])
+            _report_progress(name, "error", len(done), total, "", str(e)[:2000], group)
             return {"error": f"流程中止：{e}"}
         for nid, result in batch.items():
             node = node_by_id[nid]
@@ -557,7 +605,7 @@ def run_flow(name: str, platform, user) -> dict:
             if key and result is not None:
                 state[key] = result
             done.add(nid)
-            _report_progress(name, "running", len(done), total, node.get("role", ""))
+            _report_progress(name, "running", len(done), total, node.get("role", ""), "", group)
     _report_progress(name, "done", len(done), total, "",
-                     json.dumps(state, ensure_ascii=False)[:2000])
+                     json.dumps(state, ensure_ascii=False)[:2000], group)
     return state

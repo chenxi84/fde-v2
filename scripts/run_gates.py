@@ -96,6 +96,13 @@ def _tiers(group):
             # 而且快（不起服务、不写盘）。由它守着的那个偏差见 `shadowdb._copy_all` 注释。
             ("影子库隔离自检", [PY, "scripts/verify_shadow_isolation.py"], False),
             ("智能体工具面结构", [PY, "scripts/verify_agent_tools.py"], False),
+            # **应用组数据隔离**（2026-09-26 加）：AI管家的 SKILL / 告警 / 运转动态三块此前
+            # **数据本身就不带组**（三张表都没有组字段），于是 A 组的页面会列出 B 组的数据；
+            # 而"库存预警"那条来源还硬编码直调 psc/inventory_projection。
+            # 这类缺陷**没有任何测试会红**（端点 200、页面正常、数字还挺丰富），故单独对账：
+            # 组视角 = 本组 ∪ 平台级 / 平台视角 = 全量 / 写入带归属 / 前端取数带 group。
+            # 全程在临时 config 根里跑，真库零接触。
+            ("应用组数据隔离", [PY, "scripts/verify_group_isolation.py"], False),
             # **跨应用边对账**（2026-09-25 加）：架构声明的边 ↔ 代码里真实存在的边
             # （后端 `self.fde.call` + 前端页面 `svc(...)` 字面量）。架构声明是第①步的产物、
             # 下游全照它推，而"声明与实现不一致"**没有任何测试会红** —— 所以单独对账。

@@ -121,7 +121,9 @@ export function pageFlowEditor() {
     },
 
     async load() {
-      self.flows = (await get("/api/flows", { quiet: true }).catch(() => [])) || [];
+      const g = window.__fdeModule || "";
+      const qs = g ? "?group=" + encodeURIComponent(g) : "";
+      self.flows = (await get("/api/flows" + qs, { quiet: true }).catch(() => [])) || [];
     },
 
     async loadRoles() {
@@ -135,7 +137,10 @@ export function pageFlowEditor() {
     },
 
     async loadSkills() {
-      const d = await get("/api/skills", { quiet: true }).catch(() => null);
+      // 技能候选按**本组 ∪ 平台级**取：技能节点里写的是具体工具，别组技能选了也跑不动
+      const g = window.__fdeModule || "";
+      const qs = g ? "?group=" + encodeURIComponent(g) : "";
+      const d = await get("/api/skills" + qs, { quiet: true }).catch(() => null);
       self.skills = (d && Array.isArray(d)) ? d : [];
     },
 

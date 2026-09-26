@@ -40,11 +40,58 @@ CREATE TABLE IF NOT EXISTS skill (
     rating_count INTEGER NOT NULL DEFAULT 0,
     usage_count  INTEGER NOT NULL DEFAULT 0,
     created_by   TEXT NOT NULL DEFAULT '',
+    module       TEXT DEFAULT '',
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_skill_status ON skill(status);
 """
+
+# 加列式迁移（老库补列，幂等）。
+# ⚠ 老库补的列**刻意不带 DEFAULT** —— 那样存量行会被填成 `''`，"没归属"与"显式平台级"
+#   就分不开了，一次性回填会**永远匹配不到**行（`module IS NULL` 一条都不命中）。
+# ⚠ `module` 的索引**不能写进 `_SCHEMA`**：老库还没有这一列，`executescript` 建索引会先炸
+#   （`no such column: module`），迁移根本没机会跑 —— 实测踩过。
+_MIGRATIONS = (("module", "TEXT"),)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """老库补列 + 回填 `module`（2026-09-26 加的应用组隔离）。
+
+    回填判据：技能步骤里调的工具名前缀（`psc__xxx__yyy` 的 `psc`）若**唯一**指向一个
+    真实存在的应用组目录，就据此归属；混用多组 / 只有 `platform_*` / 判不出来 → 留空
+    ＝ **平台级**（按约定"平台级各组都可见"）。
+
+    ⚠ **回填与"加列"分开判**（都幂等，但触发条件不同）：加列看列在不在，回填看**还有没有
+    `module IS NULL` 的行**。曾把两者写成一条 `if 列不在: 加列+回填`，结果：列加上了、
+    回填因为没 commit 被回滚 ⇒ 第二个条件永远不成立 ⇒ **回填再也不会有第二次机会**。
+    """
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(skill)").fetchall()}
+    for name, decl in _MIGRATIONS:
+        if name not in cols:
+            conn.execute(f"ALTER TABLE skill ADD COLUMN {name} {decl}")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_skill_module ON skill(module)")   # 列建好再建索引
+    pending = conn.execute("SELECT id, steps_json FROM skill WHERE module IS NULL").fetchall()
+    if not pending:
+        return
+    try:
+        groups = {d.name for d in (Path(__file__).resolve().parents[1] / "app").iterdir()
+                  if d.is_dir()}
+    except OSError:
+        return
+    for r in pending:
+        try:
+            steps = json.loads(r["steps_json"] or "[]")
+        except (ValueError, TypeError):
+            steps = []
+        found = {str(st.get("tool", "")).split("__")[0] for st in steps
+                 if isinstance(st, dict)}
+        found &= groups
+        if len(found) == 1:                     # 唯一归属才回填；多组/无组一律平台级
+            conn.execute("UPDATE skill SET module=? WHERE id=?", (found.pop(), r["id"]))
+    # ⚠ 迁移必须**显式提交**：调用方多数是**只读**路径（`list_skills` 等），不会 commit ——
+    #   不提交的话 ALTER 与回填会在 close() 时整笔回滚（实测踩过：列留下了、值没了）。
+    conn.commit()
 
 
 def _now() -> str:
@@ -58,7 +105,18 @@ def _conn() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.executescript(_SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _module_filter(module):
+    """组视角的可见性口径（2026-09-26）：**本组 ∪ 平台级**。
+
+    `module` 为 None（平台管理视角 / 未指定）时不加条件 —— 看全量。
+    """
+    if not module:
+        return "", []
+    return " AND COALESCE(module,'') IN ('', ?)", [module]
 
 
 def init_schema() -> None:
@@ -105,7 +163,7 @@ def _validate_steps(steps) -> list:
 
 # ── 生命周期 ────────────────────────────────────────────
 
-def propose(name, description, trigger, steps, created_by="agent") -> dict:
+def propose(name, description, trigger, steps, created_by="agent", module=None) -> dict:
     """agent 提议沉淀一个 skill（draft）；同名已存在则更新 draft（幂等）。"""
     name = (name or "").strip()
     if not name:
@@ -117,17 +175,19 @@ def propose(name, description, trigger, steps, created_by="agent") -> dict:
         if row:
             conn.execute(
                 "UPDATE skill SET description=?, trigger=?, steps_json=?, status='draft', "
-                "version=version+1, updated_at=? WHERE id=?",
+                "module=COALESCE(NULLIF(module,''), ?), version=version+1, updated_at=? "
+                "WHERE id=?",
                 ((description or "").strip(), (trigger or "").strip(),
-                 json.dumps(steps, ensure_ascii=False), _now(), row["id"]),
+                 json.dumps(steps, ensure_ascii=False), module or "", _now(), row["id"]),
             )
             sid = row["id"]
         else:
             cur = conn.execute(
                 "INSERT INTO skill (name, description, trigger, steps_json, status, "
-                "created_by, created_at, updated_at) VALUES (?,?,?,?, 'draft', ?,?,?)",
+                "created_by, module, created_at, updated_at) VALUES (?,?,?,?, 'draft', ?,?,?,?)",
                 ((name), (description or "").strip(), (trigger or "").strip(),
-                 json.dumps(steps, ensure_ascii=False), created_by, _now(), _now()),
+                 json.dumps(steps, ensure_ascii=False), created_by, module or "",
+                 _now(), _now()),
             )
             sid = cur.lastrowid
         conn.commit()
@@ -239,25 +299,30 @@ def get_skill_by_name(name) -> dict | None:
         conn.close()
 
 
-def list_skills(status=None) -> list:
+def list_skills(status=None, module=None) -> list:
     conn = _conn()
     try:
+        sql = "SELECT * FROM skill WHERE 1=1"
+        args = []
         if status:
-            rows = conn.execute("SELECT * FROM skill WHERE status=? ORDER BY id", (status,)).fetchall()
-        else:
-            rows = conn.execute("SELECT * FROM skill ORDER BY status, id").fetchall()
-        return [_row_to_skill(r) for r in rows]
+            sql += " AND status=?"
+            args.append(status)
+        cond, margs = _module_filter(module)
+        sql += cond + (" ORDER BY id" if status else " ORDER BY status, id")
+        args += margs
+        return [_row_to_skill(r) for r in conn.execute(sql, tuple(args)).fetchall()]
     finally:
         conn.close()
 
 
-def published_skills() -> list:
+def published_skills(module=None) -> list:
     """已发布（approved）的 skill，按评分 × 使用次数排序，供注入 system prompt。"""
     conn = _conn()
     try:
+        cond, margs = _module_filter(module)
         rows = conn.execute(
-            "SELECT * FROM skill WHERE status='approved' "
-            "ORDER BY usage_count DESC, score DESC, id"
+            "SELECT * FROM skill WHERE status='approved'" + cond
+            + " ORDER BY usage_count DESC, score DESC, id", tuple(margs)
         ).fetchall()
         return [_row_to_skill(r) for r in rows]
     finally:
@@ -313,15 +378,15 @@ PROPOSE_INSTRUCTION = (
 )
 
 
-def agent_prompt() -> str:
+def agent_prompt(group=None) -> str:
     """注入 Agent system prompt 的 skill 片段：沉淀指令（恒在）+ 已发布技能清单（若有）。"""
-    block = published_prompt_block()
+    block = published_prompt_block(group)
     return (block + "\n\n" + PROPOSE_INSTRUCTION) if block else ("\n\n" + PROPOSE_INSTRUCTION)
 
 
-def published_prompt_block() -> str:
+def published_prompt_block(group=None) -> str:
     """已发布 skill 的 system prompt 注入片段（无 skill 返回空串）。"""
-    skills = published_skills()
+    skills = published_skills(group)
     if not skills:
         return ""
     lines = ["", "## 已沉淀技能库（可复用的操作流程，经人工审批发布）", "",

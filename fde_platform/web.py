@@ -760,7 +760,10 @@ def _leader_prompt(group: str = "") -> str:
     # 追加已发布 skill 库（经人工审批的巡检流程等），leader 匹配触发条件时按固定步骤执行
     # 工作纪律也带给 leader：它是派活的人，若没这条，它会把「先去刷新一下确保数据最新」
     # 当成合理步骤派给 worker（实测就是这么发生的：分析类提问触发了 refresh/decide）。
-    return base + arch_block + skills.agent_prompt() + agent_roles.AGENT_DISCIPLINE
+    # 技能库按**本组 ∪ 平台级**注入：技能步骤里写的是具体工具（`psc__xxx`），
+    # 把别组的技能注进 prompt，只会让 agent 照着调一个不在它工具面里的工具。
+    return (base + arch_block + skills.agent_prompt(group)
+            + agent_roles.AGENT_DISCIPLINE)
 
 
 def _agent2_headers():
@@ -1438,7 +1441,10 @@ def api_skills():
     """skill 列表。默认已发布（approved，供下拉）；?all=1 返回全部（含状态，供协同总览工具区）。"""
     from fde_platform import skills
     all_skills = request.args.get("all") == "1"
-    src = skills.list_skills() if all_skills else skills.published_skills()
+    # ?group= 按「本组 ∪ 平台级」过滤（不给 = 全量，平台管理视角）
+    group = (request.args.get("group") or "").strip() or None
+    src = (skills.list_skills(module=group) if all_skills
+           else skills.published_skills(module=group))
 
     def _fmt(s):
         item = {
@@ -1446,6 +1452,7 @@ def api_skills():
             "name": s["name"],
             "description": s.get("description", ""),
             "trigger": s.get("trigger", ""),
+            "module": s.get("module") or "",
             "steps": [{"tool": st.get("tool", ""), "args": st.get("args", {}),
                        "output": st.get("output", "")}
                       for st in s.get("steps", [])],
@@ -1556,14 +1563,15 @@ def api_flow_delete(group, key):
 
 @app.route("/api/flow-runs")
 def api_flow_runs():
-    """最近 N 条 flow 运行历史（协同总览时间线用），?limit= 控制条数。"""
+    """最近 N 条 flow 运行历史（协同总览时间线用）。?limit= 条数，?group= 按组过滤。"""
     from fde_platform import flow
     limit = request.args.get("limit", "20")
     try:
         limit = int(limit)
     except (TypeError, ValueError):
         limit = 20
-    return jsonify({"status": "ok", "data": flow.list_runs(limit)})
+    group = (request.args.get("group") or "").strip() or None
+    return jsonify({"status": "ok", "data": flow.list_runs(limit, module=group)})
 
 
 @app.route("/api/scheduler-jobs", methods=["GET"])
@@ -1888,42 +1896,65 @@ def api_agent_overview():
 
 @app.route("/api/alerts")
 def api_alerts():
-    """通用告警列表：聚合多种来源，统一结构 {source, level, title, detail, time}。
+    """通用告警列表：聚合多种来源，统一结构 {source, level, title, detail, time, module}。
 
-    来源：库存预警（inventory_projection）、定时任务失败（scheduler runs）、
-    集成接口失败（integration call_logs）。任何来源的告警都可装入此结构。
+    来源：库存预警（`psc/inventory_projection`）、定时任务失败（scheduler runs）、
+    集成接口失败（integration call_logs）、Agent 主动上报（agent_alerts）。
+
+    **`module` = 归属应用组**（空串 = 平台级）；`?group=` 给定时按「本组 ∪ 平台级」过滤
+    （不给 = 全量，平台管理视角）。2026-09-26 加：此前四条来源都不带组，在 A 组的
+    AI管家里会看到 B 组的告警 —— 其中「库存预警」最露骨：它**无条件**直调
+    `psc/inventory_projection`，跟当前组毫无关系。
     """
+    group = (request.args.get("group") or "").strip() or None
+
+    def _vis(module: str) -> bool:
+        """该条在本组视角下是否可见（本组 ∪ 平台级）。"""
+        return (not group) or module in ("", group)
+
     alerts = []
-    # 1. 库存预警（alert_type 非「无」）
-    try:
-        result = platform.call("psc/inventory_projection", "list", ctx=users.current_caller_ctx())
-        items = (result or {}).get("items", []) if isinstance(result, dict) else []
-        for it in items:
-            at = it.get("alert_type")
-            if at and at != "无":
-                alerts.append({
-                    "source": "库存预警",
-                    "level": "red" if at in ("缺货", "击穿最低", "击穿安全") else "amber",
-                    "title": f"{it.get('material_no')} {at}",
-                    "detail": f"{it.get('biz_date')} 余额 {it.get('balance')}",
-                    "time": it.get("biz_date"),
-                })
-    except Exception:
-        pass
+    # 1. 库存预警（alert_type 非「无」）—— 这个源**本身属于 psc**（平台直调它的投影服务），
+    #    所以归属写死 psc；并且只在 psc 视角（或无组视角）才去拉，别人的组不再被串进来。
+    if not group or group == "psc":
+        try:
+            result = platform.call("psc/inventory_projection", "list", ctx=users.current_caller_ctx())
+            items = (result or {}).get("items", []) if isinstance(result, dict) else []
+            for it in items:
+                at = it.get("alert_type")
+                if at and at != "无":
+                    alerts.append({
+                        "source": "库存预警",
+                        "level": "red" if at in ("缺货", "击穿最低", "击穿安全") else "amber",
+                        "title": f"{it.get('material_no')} {at}",
+                        "detail": f"{it.get('biz_date')} 余额 {it.get('balance')}",
+                        "time": it.get("biz_date"),
+                        "module": "psc",
+                    })
+        except Exception:
+            pass
     # 2. 定时任务失败（scheduler runs）
     try:
         import sqlite3
         c = sqlite3.connect(str(config_path("scheduler.db")))
         c.row_factory = sqlite3.Row
-        rows = c.execute("SELECT * FROM runs WHERE status != 'ok' ORDER BY rowid DESC LIMIT 50").fetchall()
+        rows = c.execute(
+            "SELECT r.*, j.app_name AS app_name FROM runs r "
+            "LEFT JOIN jobs j ON j.id = r.job_id "
+            "WHERE r.status != 'ok' ORDER BY r.rowid DESC LIMIT 50"
+        ).fetchall()
         c.close()
         for r in rows:
+            # 组归属从**任务的 app_name**（`psc/xxx`）的前缀取；取不到 = 平台级
+            mod = (r["app_name"] or "").split("/")[0]
+            if not _vis(mod):
+                continue
             alerts.append({
                 "source": "定时任务",
                 "level": "red",
                 "title": f"任务 #{r['job_id']} 失败",
                 "detail": r["error_message"] or r["status"] or "",
                 "time": r["finished_at"] or r["started_at"],
+                "module": mod,
             })
     except Exception:
         pass
@@ -1937,19 +1968,23 @@ def api_alerts():
         ).fetchall()
         c.close()
         for r in rows:
+            mod = (r["app_name"] or "").split("/")[0]
+            if not _vis(mod):
+                continue
             alerts.append({
                 "source": "集成接口",
                 "level": "amber",
                 "title": f"{r['app_name']}.{r['method_name']}",
                 "detail": r["error_msg"] or r["status"] or "",
                 "time": r["created_at"],
+                "module": mod,
             })
     except Exception:
         pass
     # 4. Agent 主动上报（platform_raise_alert 工具写入）
     try:
         from fde_platform import alerts as alerts_mod
-        for a in alerts_mod.list_agent_alerts():
+        for a in alerts_mod.list_agent_alerts(module=group):
             alerts.append(a)
     except Exception:
         pass

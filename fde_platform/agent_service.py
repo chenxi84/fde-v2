@@ -428,10 +428,17 @@ async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str):
     if user is None:
         return ([], [])
 
+    # 该 agent 的**应用组**：闭包捕获一个可变格子，下面定完 leader/worker 再回填。
+    # 工具是**之后**才被调用的，所以回填来得及；但值必须等 `_toolkit` 里算完组才知道
+    # （leader 从 system_prompt 的 FDE_GROUP 标记取，worker 从角色反推）。
+    # 用途：平台级工具（skill 沉淀 / 告警上报）按它落归属 —— AI管家的 SKILL / 告警要组隔离。
+    _grp = {"m": ""}
+
     def _make_call(tool_name: str):
         # 闭包捕获工具名 + user，避免与工具自身参数（如 propose_skill 的 name）冲突
         def _call(**kwargs):
-            return _as_tool_result(bridge.execute(_platform, user, tool_name, kwargs))
+            return _as_tool_result(bridge.execute(_platform, user, tool_name, kwargs,
+                                                  module=_grp["m"]))
         return _call
 
     def _mk_ft(t):
@@ -464,6 +471,7 @@ async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str):
         # 应用的职责边界天然适合；更细会让模型多几次开关组往返，而研究指出
         # 纯分组不减往返时反而 +15% 开销。
         role = agent_roles.extract_role(record.data.system_prompt)
+        _grp["m"] = agent_roles.role_group(role) or ""
         allowed = agent_roles.allowed_tools_for_role(role, defs)
         basic, keep = [], []
         for t in defs:
@@ -479,6 +487,7 @@ async def _fde_tool_factory(user_id: str, agent_id: str, session_id: str):
 
     # ── leader：按组收窄业务工具（从 system_prompt 的 FDE_GROUP 标记提取组）──
     group = _extract_group(record.data.system_prompt) if record is not None else None
+    _grp["m"] = "" if group == "__platform__" else (group or "")
     if group and group != "__platform__":
         defs = [t for t in defs
                 if t["_meta"]["app"] == "__platform__"

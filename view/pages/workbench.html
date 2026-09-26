@@ -83,7 +83,8 @@
 
   <!-- ④ 工具（skill 图标网格 · 全状态 + admin 操作） -->
   <div class="card">
-    <div class="hd"><h3>工具（skill）</h3><span class="hint" x-text="'共 ' + skills.length + ' 个'"></span></div>
+    <div class="hd"><h3>工具（skill）</h3><span class="hint"
+      x-text="'共 ' + skills.length + ' 个 · ' + scopeLabel()"></span></div>
     <div class="bd">
       <template x-if="!skills.length"><div class="empty">暂无技能</div></template>
       <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(130px,1fr)); gap:10px">
@@ -94,6 +95,8 @@
               <span style="font-weight:600; font-size:13px" x-text="s.name"></span>
               <span class="tag" :class="skillStatusClass(s.status)" x-text="skillStatusLabel(s.status)"></span>
               <span class="tag t-slate" x-text="s.steps.length + ' 步'"></span>
+              <span class="tag t-slate" x-show="isPlatformLevel(s)"
+                title="没有组归属的技能，各组都可见">平台级</span>
               <span class="muted" style="font-size:11px" x-text="s.rating_count ? '★ ' + s.score.toFixed(1) + '（' + s.rating_count + '人）' : '未评分'"></span>
             </div>
             <div x-show="isAdmin" style="display:flex; gap:4px; margin-top:4px; flex-wrap:wrap; justify-content:center">
@@ -177,13 +180,16 @@
 
   <!-- ⑥ 告警 -->
   <div class="card">
-    <div class="hd"><h3>告警</h3><span class="hint" x-text="'共 ' + alerts.length + ' 条'"></span><button class="b-ghost b-sm" style="margin-left:auto" @click="gotoAlerts()">详情 ↗</button></div>
+    <div class="hd"><h3>告警</h3><span class="hint"
+      x-text="'共 ' + alerts.length + ' 条 · ' + scopeLabel()"></span><button class="b-ghost b-sm" style="margin-left:auto" @click="gotoAlerts()">详情 ↗</button></div>
     <div class="bd">
       <template x-if="!alerts.length"><div class="empty">暂无告警</div></template>
       <template x-for="a in alerts.slice(0, 10)" :key="a.time + a.title">
         <div style="display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--line)">
           <span x-text="alertIcon(a.level)"></span>
           <span class="tag t-slate" x-text="a.source"></span>
+          <span class="tag t-slate" x-show="isPlatformLevel(a)"
+            title="没有组归属的告警，各组都可见">平台级</span>
           <b style="font-size:13px" x-text="a.title"></b>
           <span class="tag" :class="alertClass(a.level)" x-text="a.level === 'red' ? '严重' : '警告'"></span>
           <span class="muted mono" style="font-size:11px; margin-left:auto" x-text="a.time"></span>
@@ -194,7 +200,8 @@
 
   <!-- ⑦ 运转动态时间线 -->
   <div class="card">
-    <div class="hd"><h3>运转动态</h3><span class="hint" x-text="'最近 ' + runs.length + ' 次运行'"></span></div>
+    <div class="hd"><h3>运转动态</h3><span class="hint"
+      x-text="'最近 ' + runs.length + ' 次运行 · ' + scopeLabel()"></span></div>
     <div class="bd">
       <template x-if="!runs.length"><div class="empty">暂无运行记录</div></template>
       <template x-for="r in runs" :key="r.updated_at + r.flow_name">
@@ -202,6 +209,8 @@
           <span class="muted mono" style="font-size:12px" x-text="r.updated_at"></span>
           <b x-text="r.flow_name"></b>
           <span class="tag" :class="runStatusClass(r.status)" x-text="runStatus(r.status)"></span>
+          <span class="tag t-slate" x-show="isPlatformLevel(r)"
+            title="没有组归属的运行记录，各组都可见">平台级</span>
           <span class="muted" style="font-size:12px" x-text="'共 ' + r.step_total + ' 步'"></span>
         </div>
       </template>

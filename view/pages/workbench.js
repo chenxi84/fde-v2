@@ -36,12 +36,15 @@ export function pageWorkbench() {
     async load() {
       const group = window.__fdeModule || "";
       const qs = group ? "?group=" + encodeURIComponent(group) : "";
+      // ⚠ 2026-09-26：下面**每一个**取数都要带 group —— 这三块（技能 / 告警 / 运转动态）
+      //   此前漏了，A 组的 AI管家里会列出 B 组的数据（见 /api/alerts 的注释）。
+      const andG = qs ? "&group=" + encodeURIComponent(group) : "";
       const [ov, fl, runs, alerts, skills, apiJobs, integrations, knowledge] = await Promise.all([
         get("/api/agent-overview" + qs, { quiet: true }).catch(() => null),
         get("/api/flows" + qs, { quiet: true }).catch(() => []),
-        get("/api/flow-runs?limit=20", { quiet: true }).catch(() => []),
-        get("/api/alerts", { quiet: true }).catch(() => []),
-        get("/api/skills?all=1", { quiet: true }).catch(() => []),
+        get("/api/flow-runs?limit=20" + andG, { quiet: true }).catch(() => []),
+        get("/api/alerts" + qs, { quiet: true }).catch(() => []),
+        get("/api/skills?all=1" + andG, { quiet: true }).catch(() => []),
         get("/api/scheduler-jobs?group=" + encodeURIComponent(window.__fdeModule || ""), { quiet: true }).catch(() => []),
         get("/api/integration/endpoints?group=" + encodeURIComponent(window.__fdeModule || ""), { quiet: true }).catch(() => []),
         get("/api/knowledge", { quiet: true }).catch(() => ({ files: [], index: {} })),
@@ -59,6 +62,15 @@ export function pageWorkbench() {
       self.apiJobs = apiJobs || [];
       self.integrations = integrations || [];
       self.knowledge = knowledge || { files: [], index: {} };
+    },
+
+    /* —— 组视角（2026-09-26）：页面按当前组的「本组 ∪ 平台级」取数 ——
+       平台级 = 没有组归属的数据（`module` 为空），按约定**各组都可见**，但要标出来，
+       免得让人以为它是本组的。无组上下文（平台管理视角）时取全量。 */
+    isPlatformLevel(x) { return !(x && x.module); },
+    scopeLabel() {
+      const g = window.__fdeModule || "";
+      return g ? ("本组 " + g + " + 平台级") : "全部组（平台视角）";
     },
 
     /* —— 图标 / 标签 —— */

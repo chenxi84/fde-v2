@@ -17,7 +17,10 @@ export function pageAlerts() {
     async load() {
       self.loading = true;
       try {
-        self.alerts = (await get("/api/alerts", { quiet: true }).catch(() => [])) || [];
+        // 按当前组取（本组 ∪ 平台级）；组上下文来自 shell 注入的 window.__fdeModule
+        const g = window.__fdeModule || "";
+        const qs = g ? "?group=" + encodeURIComponent(g) : "";
+        self.alerts = (await get("/api/alerts" + qs, { quiet: true }).catch(() => [])) || [];
       } finally {
         self.loading = false;
       }
