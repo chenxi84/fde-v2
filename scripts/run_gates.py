@@ -82,7 +82,11 @@ def _tiers(group):
             # 只会在真 PG 上现形的缺陷（字面量 `%` 未转义 ⇒ 所有模糊搜索全崩；审计注入的
             # 占位符又被那次转义吃掉 ⇒ 所有 UPDATE 全崩）。纯 Python、不起库、<1s，
             # 两条断言都用突变验过「能失败」。
-            ("PG 方言改写层", [PY, "scripts/verify_pg_translate.py"], False),
+            # 2026-09-26 扩成**两条路都覆盖**：A 段钉死 legacy（字符串手术）验既有行为，
+            # B 段验编译层（`sqlc.py`，sqlglot AST 改写：占位符按**词法顺序**改名、审计注入
+            # 到每一行/投影、`%` 只对 %-插值驱动且只在会插值时转义、mysql 按驱动改写、
+            # PG 追加 RETURNING、边界明确报错、缓存不缓存参数）。
+            ("SQL 方言编译层", [PY, "scripts/verify_pg_translate.py"], False),
             # **多方言渲染**（2026-09-20 加）：把 app/**/schema.sql 逐个渲染成
             # postgres / mysql / tsql / oracle，检查产物里有没有留下源方言（SQLite）
             # 专有的写法。**不需要安装任何数据库** —— 建表 DDL 的生成是纯函数，

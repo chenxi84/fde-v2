@@ -1,4 +1,11 @@
-r"""PG 方言改写层的验收（平台级，自包含，**不需要 PostgreSQL、不需要起服务**）。
+r"""SQL 方言改写/编译层的验收（平台级，自包含，**不需要 PostgreSQL、不需要起服务**）。
+
+⚠ **本脚本覆盖两条路**（2026-09-26 扩展）：
+  · **A. legacy**：`db.py` 内联的字符串手术（`_inject_audit` + `%`/`?` 替换）—— 默认路径；
+  · **B. 编译层**：`fde_platform/sqlc.py`（sqlglot AST 改写）—— `FDE_SQL_COMPILER=sqlglot` 时启用。
+A 段先把开关**钉死成 legacy**（否则门禁结果随环境变量漂），B 段直接调 `sqlc` 的 API。
+两条路都要绿：切开关那天，判据不能跟着漂。
+
 
 ## 为什么需要它
 
@@ -28,6 +35,7 @@ psycopg2 默认走**客户端插值**，其行为与 Python 的 `%` 运算一致
 用法：`python scripts/verify_pg_translate.py`（退出码 0 全过 / 1 有失败）
 """
 import io
+import os
 import sys
 from pathlib import Path
 
@@ -35,7 +43,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
+os.environ["FDE_SQL_COMPILER"] = "legacy"        # A 段钉死 legacy（见文件头）
+
 from fde_platform import db  # noqa: E402
+from fde_platform import sqlc  # noqa: E402
+from fde import FdeError  # noqa: E402
 
 # 输出编码：控制台代码页在本机默认是 GBK，而本脚本的结论里有 ✓/✗/⚠/⇒ 这类**非 GBK 码位** ——
 # 不钉住的话 print 自己会抛 UnicodeEncodeError（**崩在打印结论那一步**），
@@ -137,9 +149,120 @@ if r:
     print(f"  ✓ ⑤ SELECT 同时含 % 与 ?：{r}")
 
 print()
+print("── B 段：编译层（sqlc，sqlglot AST 改写）──────────────────────────")
+
+
+def cmp_sql(label, sql, params, dialect, *,
+            want_in=(), want_not_in=(), raw_in=(), raw_not_in=(), ctx=None, expect_err=None):
+    """编译一条 SQL 并用 `%` 渲染（与 psycopg2 的 pyformat 同口径），断言片段。"""
+    try:
+        text, named, meta = sqlc.compile_sql(sql, params, ctx or {"userno": "tester"}, dialect)
+    except FdeError as e:
+        if expect_err:
+            if expect_err in str(e):
+                print(f"  ✓ {label}：按预期报错")
+            else:
+                _fail.append(f"{label}：报错信息里没有 {expect_err!r}，实际：{e}")
+            return ""
+        _fail.append(f"{label}：不该报错却报了 → {e}")
+        return ""
+    if expect_err:
+        _fail.append(f"{label}：应当报错（{expect_err}）却没报")
+        return ""
+    # `raw_*` 看的是**未渲染**的编译产物：`%%` 这种"给驱动看的转义"在渲染时会被还原成
+    # `%`，所以只能在这一层断言（否则"转对了"与"没转"渲染后长得一模一样）。
+    for frag in raw_in:
+        if frag not in text:
+            _fail.append(f"{label}：产物缺 {frag!r} ｜ 实际：{text}")
+    for frag in raw_not_in:
+        if frag in text:
+            _fail.append(f"{label}：产物里不该有 {frag!r} ｜ 实际：{text}")
+    try:
+        rendered = text % named if named else text
+    except Exception as e:                                    # noqa: BLE001
+        _fail.append(f"{label}：编译产物无法插值 → {type(e).__name__}: {e} ｜ 实际：{text}")
+        return ""
+    for frag in want_in:
+        if frag not in rendered:
+            _fail.append(f"{label}：缺 {frag!r} ｜ 实际：{rendered}")
+    for frag in want_not_in:
+        if frag in rendered:
+            _fail.append(f"{label}：残留 {frag!r} ｜ 实际：{rendered}")
+    if not _fail or _fail[-1] != f"{label}：缺":
+        print(f"  ✓ {label}：{rendered[:96]}")
+    return rendered
+
+
+# ⑥ 占位符顺序 —— **这条是 2026-09-26 实测踩到的真 bug 的固化**
+#    根因：`find_all()` 的遍历次序不是文本次序（AND 链是嵌套节点，先到右子树），
+#    于是 `WHERE a = ? AND b = ? AND c = ?` 被错位成 p1/p2/p0 —— **静默写错值**。
+#    修法：走 tokenizer 的**词法位置**（token.start/end，闭区间）。
+cmp_sql("⑥ 占位符按文本次序（AND 链）",
+        "SELECT a FROM t WHERE x = ? AND y = ? AND z = ?", ("1", "2", "3"), "postgres",
+        want_in=("x = 1 AND y = 2 AND z = 3",))
+
+# ⑦ 引号里的 `?` 不是占位符（tokenizer 知道引号边界；旧的正则替换会在这里炸）
+cmp_sql("⑦ 引号里的 ? 不算占位符",
+        "SELECT a FROM t WHERE note = 'why?' AND x = ?", ("v",), "postgres",
+        want_in=("note = 'why?' AND x = v",))
+
+# ⑧ 审计注入：多行 VALUES **每一行**都补（旧的只补到最后一行）
+cmp_sql("⑧ 多行 INSERT 每行都补审计",
+        "INSERT INTO t (a, b) VALUES (?, ?), (?, ?)", (1, 2, 3, 4), "sqlite",
+        want_in=("created_by", "(:p0, :p1", "(:p2, :p3"))
+
+# ⑨ 审计注入：INSERT…SELECT 补在投影里（旧的整条不匹配）
+cmp_sql("⑨ INSERT…SELECT 补投影",
+        "INSERT INTO t (a) SELECT x FROM y WHERE z = ?", ("k",), "sqlite",
+        want_in=("INSERT INTO t (a, created_at", "SELECT x, DATETIME"))
+
+# ⑩ UPDATE：只补审计列，且应用自己写的 updated_* 不重复补
+cmp_sql("⑩ UPDATE 补审计（不重复补）",
+        "UPDATE t SET a = ?, updated_by = ? WHERE id = ?", ("v", "someone", 7), "sqlite",
+        want_in=("a = :p0, updated_by = :p1", "updated_at = DATETIME", "id = :p2"),
+        want_not_in=("updated_by = DATETIME",))
+
+# ⑪ 字面量 % 的转义**只在驱动会插值时**做（无参数时不转义，否则 LIKE 模式当场变错）
+cmp_sql("⑪ 无参数不转义 %",
+        "SELECT a FROM t WHERE y LIKE '%流水%'", None, "postgres",
+        want_in=("LIKE '%流水%'",), want_not_in=("%%",))
+cmp_sql("⑪ 有参数才转义 %",
+        "SELECT a FROM t WHERE y LIKE '%' || ? || '%'", ("k",), "postgres",
+        raw_in=("LIKE '%%' || %(p0)s || '%%'",),
+        want_in=("LIKE '%' || k || '%'",))
+
+# ⑫ mysql 的按驱动占位符（sqlglot 给 :name，pymysql 要 %(name)s）+ 拼接换 CONCAT
+cmp_sql("⑫ mysql 按驱动改写",
+        "SELECT a FROM t WHERE y LIKE '%' || ? || '%'", ("k",), "mysql",
+        raw_in=("CONCAT('%%', %(p0)s, '%%')",), raw_not_in=(":p0",),
+        want_in=("CONCAT('%', k, '%')",))
+
+# ⑬ PG 的 RETURNING：主键自增时编译期追加（替掉 currval hack）
+_r = sqlc._compile_cached("INSERT INTO t (a) VALUES (?)", "postgres", "id", True)
+if _r[2] and "RETURNING id" in _r[0]:
+    print(f"  ✓ ⑬ PG 追加 RETURNING：{_r[0][-24:]}")
+else:
+    _fail.append(f"⑬ PG 未追加 RETURNING：{_r}")
+
+# ⑭ 边界必须**明确报错**，不静默
+cmp_sql("⑭ 参数个数不匹配", "INSERT INTO t (a, b) VALUES (?, ?)", (1,), "sqlite",
+        expect_err="参数个数与占位符不匹配")
+cmp_sql("⑭ INSERT 无列清单", "INSERT INTO t DEFAULT VALUES", (), "sqlite",
+        expect_err="没有列清单")
+cmp_sql("⑭ 语法错", "SELECT FROM WHERE", (), "sqlite", expect_err="SQL 无法解析")
+
+# ⑮ 缓存**只缓存 SQL 与参数计划，绝不缓存参数值**
+_s1, _p1, _m1 = sqlc.compile_sql("UPDATE t SET a = ? WHERE id = ?", (1, 2), {"userno": "甲"})
+_s2, _p2, _m2 = sqlc.compile_sql("UPDATE t SET a = ? WHERE id = ?", (1, 2), {"userno": "乙"})
+if _p1["u_updated_by"] == "甲" and _p2["u_updated_by"] == "乙":
+    print("  ✓ ⑮ 同 SQL 不同身份 → 参数各算各的（没把参数缓存进去）")
+else:
+    _fail.append(f"⑮ 参数被缓存污染：{_p1} / {_p2}")
+
+print()
 if _fail:
     print(f"失败 {len(_fail)} 项：")
     for f in _fail:
         print("  ✗", f)
     sys.exit(1)
-print("PG 方言改写层：全部通过")
+print("SQL 方言改写/编译层：两条路全部通过")

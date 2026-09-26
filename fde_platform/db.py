@@ -12,6 +12,9 @@ import sqlite3
 import time
 from pathlib import Path
 
+# 编译层（FDE_SQL_COMPILER=sqlglot 时启用）：把"字符串手术"换成 AST 改写，见 sqlc.py 的 docstring
+from fde_platform import sqlc
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _logger = logging.getLogger(__name__)
 
@@ -133,6 +136,11 @@ class _SqliteAuditWrapper:
 
     def execute(self, sql, params=None):
         ctx = getattr(self, "_fde_ctx", None) or {}
+        if sqlc.enabled():
+            # 编译层：AST 注入审计 + 命名占位符（`_conn` 是**原生** sqlite3 连接，
+            # 传给它做元数据探测不会递归回本函数）
+            text, named, _meta = sqlc.compile_sql(sql, params, ctx, "sqlite", raw_conn=self._conn)
+            return self._conn.execute(text, named) if named else self._conn.execute(text)
         sql, params = _inject_audit(sql, params, ctx)
         return self._conn.execute(sql, params or ())
 
@@ -181,18 +189,26 @@ def _pg_pool():
     import urllib.parse
     url = urllib.parse.urlparse(_PG_URL)
 
+    # 池大小可配（2026-09-26）：默认仍是 2/10。⚠ **不是越大越好** —— 真正的天花板是
+    # min(池大小, PG 的 max_connections)；多组 × 多进程一起开大会把 PG 打满。
+    try:
+        p_min = max(1, int(os.environ.get("FDE_PG_POOL_MIN", "2") or 2))
+        p_max = max(p_min, int(os.environ.get("FDE_PG_POOL_MAX", "10") or 10))
+    except ValueError:
+        p_min, p_max = 2, 10
     for attempt in range(1, _PG_RETRIES + 1):
         try:
             _PG_POOL = pg_pool_mod.ThreadedConnectionPool(
-                2, 10,
+                p_min, p_max,
                 host=url.hostname,
                 port=url.port or 5432,
                 user=url.username,
                 password=url.password,
                 dbname=url.path.lstrip("/"),
             )
-            _logger.info("PostgreSQL 连接池已创建：%s:%d/%s（第 %d 次尝试）",
-                         url.hostname, url.port or 5432, url.path.lstrip("/"), attempt)
+            _logger.info("PostgreSQL 连接池已创建：%s:%d/%s（%d–%d 条连接，第 %d 次尝试）",
+                         url.hostname, url.port or 5432, url.path.lstrip("/"),
+                         p_min, p_max, attempt)
             _PG_FAIL_REASON = None
             return _PG_POOL
         except Exception as e:
@@ -280,10 +296,11 @@ class _PgCursorWrapper:
       写路径零影响；取不到时保持原值，行为不比今天更糟。
     """
 
-    def __init__(self, cursor, conn=None, insert_table=None):
+    def __init__(self, cursor, conn=None, insert_table=None, pk_value=None):
         from datetime import datetime, date
         from decimal import Decimal
         self._cur = cursor
+        self._pk_value = pk_value          # 编译层带 RETURNING 时直接给（最可靠的一条路）
         self._raw_lastrowid = cursor.lastrowid
         self._conn = conn
         self._insert_table = insert_table
@@ -295,7 +312,12 @@ class _PgCursorWrapper:
 
     @property
     def lastrowid(self):
-        """刚插入行的主键；PostgreSQL 下由 currval 惰性回填（见类 docstring）。"""
+        """刚插入行的主键。
+
+        取法按可靠性排序：**RETURNING 带回的**（编译层）→ 驱动原生 lastrowid → currval 兜底。
+        """
+        if self._pk_value is not None:
+            return self._pk_value
         if self._raw_lastrowid:
             return self._raw_lastrowid
         if self._resolved is _PG_SEQ_PK_MISS:
@@ -353,6 +375,23 @@ class _PgConnection:
         ctx = getattr(self, "_fde_ctx", None) or {}
         user = (ctx or {}).get("userno", "") or ""
         sql_upper = sql.upper()
+
+        if sqlc.enabled():
+            # 编译层：AST 注入审计 + 命名占位符 + （INSERT 且主键自增时）RETURNING 带主键。
+            # ⚠ `_conn` 是**原生** psycopg2 连接 —— 元数据探测必须走它，否则递归。
+            text, named, meta = sqlc.compile_sql(sql, params, ctx, "postgres",
+                                                  raw_conn=self._conn)
+            self._cursor = self._conn.cursor()
+            if named:
+                self._cursor.execute(text, named)
+            else:
+                self._cursor.execute(text)
+            pk_value = None
+            if meta.get("returns_pk"):
+                row = self._cursor.fetchone()      # RETURNING 带回的那一行
+                pk_value = row[0] if row else None
+            return _PgCursorWrapper(self._cursor, conn=None, insert_table=None,
+                                    pk_value=pk_value)
 
         # ⚠ 约定：本函数内**所有**占位符（应用写的 + 本节审计注入的）一律先用 `?`，
         # 函数末尾统一做一次「转义字面量 % → 把 ? 换成 %s」。审计注入这里**必须**写 `?`：
