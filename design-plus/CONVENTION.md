@@ -355,9 +355,9 @@ class Todo:
 
 | 决策 | 理由 | 什么情况下重新评估 |
 |---|---|---|
-| **不整体换 SQLAlchemy / Alembic 接管数据层** | 「裸 SQL + `?` 占位符 + `schema.sql` 单一真相源」是**产品属性**（应用由 AI 按规范批量生成、要给人看）。SQLAlchemy Core 的中性绑定风格是 `:name` ⇒ 换它等于改全仓约 297 条应用 SQL 的写法 + 九步法第③步的规范与提示词；ORM 更会推翻"一个聚合根 = 一个文件 = 一个事务边界"的心智 | 若哪天**不再要求应用 SQL 保持这个形状**（例如产品定位变了），则技术最优会变成 SQLAlchemy Core |
+| **不整体换 SQLAlchemy / Alembic 接管数据层** | 「裸 SQL + `?` 占位符 + `schema.sql` 单一真相源」是**产品属性**（应用由 AI 按规范批量生成、要给人看）。SQLAlchemy Core 的中性绑定风格是 `:name` ⇒ 换它等于改全仓 **336 处 `self.db.execute` 调用点**（其中 242 处是字面量 SQL，其余由拼接构成）的写法 + 九步法第③步的规范与提示词；ORM 更会推翻"一个聚合根 = 一个文件 = 一个事务边界"的心智 | 若哪天**不再要求应用 SQL 保持这个形状**（例如产品定位变了），则技术最优会变成 SQLAlchemy Core |
 | **SQLite 刻意不池化**（开发底座：标准库 `sqlite3`、每次调用开/关；**部署侧** PG/MySQL 才用 Engine 池） | ① SQLite 只是 Windows 本地开发底座，商业部署走服务器 PG（容器化）；② 池对 SQLite **没有并发收益**（单文件单写者）；③ 保住"clone 下来 `python main.py` 就能跑、零数据库依赖"；④ 风险最小化：影子库隔离靠"复制文件 + 环境变量换根"，每次新开连接让它天然正确 | 不需要（这是定位问题，不是权衡问题） |
-| **不引 Alembic** | 应用库的加列演进**已有机制**：`ddl.execute_schema` 在加载时把已有表**对账补齐**到 `schema.sql` 声明（只加列、绝不删，有 `verify_ddl_reconcile` 门禁守着）；平台自有库（`config/*.db`）用手写幂等 `_migrate()`。Alembic 与"`schema.sql` 是唯一真相源"天然打架（会变成第二份真相） | 平台自有库需要**非常规**结构演进（改类型 / 拆表 / 需要 downgrade）时再评估 |
+| **不引 Alembic** | 应用库的加列演进**已有机制**：`ddl.execute_schema` 在加载时把已有表**对账补齐**到 `schema.sql` 声明（只加列、绝不删，有 `verify_ddl_reconcile` 门禁守着）；平台自有库（`config/*.db`）用手写幂等迁移（`skills`/`flow` 是 `_migrate()`，`alerts`/`integration`/`users` 是内联的幂等 `ALTER TABLE ADD COLUMN`）。Alembic 与"`schema.sql` 是唯一真相源"天然打架（会变成第二份真相） | 平台自有库需要**非常规**结构演进（改类型 / 拆表 / 需要 downgrade）时再评估 |
 
 ### 14.2 DML 编译层（`fde_platform/sqlc.py`，2026-09-26 落地，默认启用）
 
@@ -392,7 +392,7 @@ psycopg2 原生池），池参数 `FDE_PG_POOL_MIN/MAX/TIMEOUT/RECYCLE`。
 |---|---|
 | 驱动 paramstyle | 选驱动 + 一行改写规则（⚠ sqlglot 给 mysql 的是 `:name`，而 pymysql 只认 `%(name)s`） |
 | 主键取回策略 | MySQL **没有** `RETURNING` ⇒ 用驱动 `lastrowid`；PG 必须 `RETURNING` |
-| 内省适配 | `runtime._load` / `ddl._existing_columns` / `sqlc.pk_column` 目前只认 sqlite(PRAGMA) 与 pg(information_schema) |
+| 内省适配 | **要补的是 `ddl._existing_columns`**（建表对账用）：它只认 sqlite(`PRAGMA`) 与 pg(`information_schema`)，mysql 会落到 `PRAGMA` 分支。`sqlc.pk_column` **已有** mysql 分支（`information_schema` + `auto_increment`）；`runtime._load` 本身不做方言相关内省（委托给 `ddl`） |
 | schema 语义 | pg 是 `CREATE SCHEMA` + `search_path`；**mysql 的 schema 就是 database**，要 `USE` 或全限定 |
 | **读数归一** | bool：pg 回 `True/False`、mysql/sqlite 回 `0/1`；date/decimal 各驱动返回类型也不同 ⇒ JSON 契约层要按方言归一（**不报错、是读数漂移**，最易漏） |
 | **真实服务器暴露周期** | 静态渲染便宜；真行为必须真库跑。**每加一个方言 = 一轮暴露**（2026-09-20 一天在真 PG 上撞四个就是这么来的） |
