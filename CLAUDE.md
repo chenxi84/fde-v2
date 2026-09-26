@@ -105,7 +105,7 @@ python app/<组>/tests/verify_view_<组>.py             # 组级壳/菜单/dashb
 - 数据库默认 SQLite；配 `DATABASE_URL` 即切 PostgreSQL，建表/SQL 方言自动翻译，应用零改动。
   **DML 编译层**（2026-09-26 加，`fde_platform/sqlc.py`）：应用照旧写 SQLite 方言裸 SQL + `?` 占位符，
   平台用 sqlglot 在 AST 层做方言翻译（审计列注入 / 占位符命名化 / 字面量 `%` 按驱动转义 / 多方言）。
-  `FDE_SQL_COMPILER=sqlglot` 启用（**默认 `legacy`**：仍是 `db.py` 内联的字符串手术）；两条路由
+  **默认已启用**（2026-09-26 切），退回用 `FDE_SQL_COMPILER=legacy`（仍是 `db.py` 内联的字符串手术）；两条路由
   `scripts/verify_pg_translate.py`（现名「SQL 方言编译层」）同时覆盖。**部署侧取连接走 SQLAlchemy
   Engine**（2026-09-26 加：等待超时 / pre-ping / recycle / 溢出；未装 SQLAlchemy 自动回落 psycopg2
   原生池），池参数 `FDE_PG_POOL_MIN/MAX/TIMEOUT/RECYCLE`（默认 2/10/30s/1800s，`db_mode()` 横幅会报）。
