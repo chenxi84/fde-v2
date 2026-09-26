@@ -21,8 +21,17 @@
         style="width:170px">
       <button class="b-ghost b-sm" @click="search()">搜索</button>
       <button class="b-ghost b-sm" @click="runCheck()">网络体检</button>
-      <button class="b-ghost b-sm" @click="switchView(view === 'schedule' ? 'list' : 'schedule')"
-        x-text="view === 'schedule' ? '台账视图' : '排程视图'"></button>
+      <button class="b-ghost b-sm" @click="switchView('list')">台账视图</button>
+      <button class="b-ghost b-sm" @click="switchView('schedule')">排程视图</button>
+      <button class="b-ghost b-sm" data-role="to-gantt" @click="switchView('gantt')">甘特视图</button>
+      <!-- 日历（工期口径 + 假日表）：候选是**动态**的，所以用 datalist（枚举下拉才必须写静态 option） -->
+      <input data-role="cal-pick" x-model="cal_no" list="act-cal-options" @change="changeCal()"
+        style="width:170px" title="工作日历：决定工期口径（工作日 / 日历天）与假日表">
+      <datalist id="act-cal-options">
+        <template x-for="c in cals" :key="'cal' + c.cal_no">
+          <option :value="c.cal_no" x-text="c.cal_no + ' · ' + c.name"></option>
+        </template>
+      </datalist>
       <button class="b-pri b-sm" @click="openForm('activity')">新建活动</button>
       <button class="b-sm" @click="openForm('milestone')">新建里程碑</button>
     </div>
@@ -50,8 +59,10 @@
   <!-- 排程视图：**派生**日期 + 浮时 + 关键路径（不落库） -->
   <div data-role="schedule" x-show="view === 'schedule'" x-cloak style="padding:4px 16px 14px">
     <div class="muted" style="font-size:12px;margin-bottom:8px">
-      派生排程 —— 日期由**工期与逻辑链**正推（材料 §5.5.9.3）；工期按工作日计，不含节假日
-      <span x-show="schedule" x-text="schedule ? ('　·　项目起始 ' + schedule.project_start + '　完工 ' + schedule.project_finish) : ''"></span>
+      派生排程 —— 日期由**工期与逻辑链**正推（材料 §5.5.9.3）
+      <span x-show="schedule" data-role="sch-cal"
+        x-text="schedule ? ('　·　口径 ' + schedule.unit_cn + '　·　日历 ' + schedule.calendar_no
+              + '　·　' + schedule.project_start + ' → ' + schedule.project_finish) : ''"></span>
     </div>
     <table class="tbl tight">
       <tr><th>活动编号</th><th>名称</th><th>类型</th><th>工期</th><th>最早开始</th>
@@ -76,6 +87,43 @@
     </table>
   </div>
 
+  <!-- 甘特视图：由派生排程画条图（x 轴 = 日历天），关键路径用琥珀色 -->
+  <div data-role="gantt" x-show="view === 'gantt'" x-cloak style="padding:4px 16px 14px">
+    <div class="muted" style="font-size:12px;margin-bottom:8px">
+      甘特图 —— 由派生排程画出（横轴按日历天）；<b style="color:#f5b04c">琥珀色 = 关键路径</b>
+      <span x-show="schedule" x-text="schedule ? ('　·　' + schedule.unit_cn + '　·　'
+        + schedule.project_start + ' → ' + schedule.project_finish) : ''"></span>
+    </div>
+    <template x-if="!ganttRows().length">
+      <div class="empty">还没有活动 —— 点「新建活动」建第一条</div>
+    </template>
+    <div style="position:relative">
+      <div style="height:20px;position:relative;border-bottom:1px solid var(--line)">
+        <template x-for="tk in ganttTicks()" :key="'t' + tk.label">
+          <span class="muted mono" style="position:absolute;font-size:11px;top:2px"
+            :style="'left:' + tk.left + '%'" x-text="tk.label"></span>
+        </template>
+      </div>
+      <template x-for="g in ganttRows()" :key="'g' + g.act_no">
+        <div class="sline" data-role="gantt-row" :data-act="g.act_no"
+          style="position:relative;height:26px;padding-left:0">
+          <span class="mono" style="width:82px;flex:none" x-text="g.act_no"></span>
+          <span style="width:160px;flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            x-text="g.name"></span>
+          <span style="flex:1;position:relative;height:14px;min-width:120px">
+            <span data-role="gantt-bar" :data-crit="g.critical ? '1' : '0'"
+              :title="g.early_start + ' → ' + g.early_finish"
+              :style="'position:absolute;left:' + g.left + '%;width:' + g.width
+                + '%;height:14px;border-radius:3px;background:'
+                + (g.critical ? '#f5b04c' : '#4cc3ff')"></span>
+          </span>
+          <span class="muted mono" style="width:180px;flex:none;text-align:right"
+            x-text="g.early_start + ' → ' + g.early_finish"></span>
+        </div>
+      </template>
+    </div>
+  </div>
+
   <div class="scroll-x" x-show="view === 'list'">
     <table class="tbl tight">
       <tr>
@@ -93,8 +141,9 @@
           <td x-text="kindOf(d)"></td>
           <td class="mono" x-text="d.wbs_no"></td>
           <td class="mono" data-role="duration" x-text="d.duration_days + ' 天'"></td>
-          <td class="mono" style="max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-            x-text="dash(d.predecessors)"></td>
+          <td class="mono" data-role="rels"
+            style="max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            x-text="relsText(d)"></td>
           <td><span class="st" :class="stCls(d)" data-role="status" x-text="stName(d)"></span></td>
           <td class="mono" x-text="(d.percent_complete || 0) + '%'"></td>
           <td class="mono" style="max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
@@ -148,7 +197,7 @@
         <input data-role="modal-duration" type="number" x-model="modal.d.duration_days"
           :disabled="ro(modal.d)" placeholder="里程碑恒为 0">
         <label>前置活动</label>
-        <div class="mono muted" x-text="dash(modal.d.predecessors)"></div>
+        <div class="mono muted" data-role="modal-rels" x-text="relsText(modal.d)"></div>
         <label>责任方</label>
         <!-- 文本输入 + datalist 建议；datalist **必须带 id**（否则按 id 查找的断言会假通过） -->
         <div>
@@ -256,9 +305,23 @@
           </template>
         </datalist>
       </div>
+      <label>关系类型</label>
+      <!-- 枚举下拉用**静态** option（x-for 渲染的 option 会让回填停在第一项） -->
+      <select data-role="link-type" x-model="lm.rel_type">
+        <option value="FS">FS 完成→开始（默认）</option>
+        <option value="SS">SS 开始→开始</option>
+        <option value="FF">FF 完成→完成</option>
+        <option value="SF">SF 开始→完成</option>
+      </select>
+      <label>滞后（天）</label>
+      <input data-role="link-lag" type="number" x-model="lm.lag_days"
+        placeholder="0 = 无滞后；负数 = 提前量（lead）">
+      <label>理由</label>
+      <input data-role="link-reason" x-model="lm.reason"
+        :placeholder="lm.rel_type === 'FS' ? '选填（非 FS 必填）' : '非标准关系必须写明理由（§5.5.8.2）'">
     </div>
     <div class="tagline" style="padding:12px 16px;border-top:1px solid var(--line)">
-      <span class="muted">冗余链接与环都会被拒（BR-02 / BR-03，材料 §5.5.8）</span>
+      <span class="muted">四种关系模型见材料 §5.5.8.2；冗余链接与环都会被拒（BR-02 / BR-03）</span>
       <div class="right">
         <button class="b-pri b-sm" data-role="link-submit" :disabled="lm.saving"
           @click="submitLink()">连上</button>

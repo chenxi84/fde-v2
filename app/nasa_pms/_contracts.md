@@ -9,34 +9,65 @@
 ```
 add_milestone(name*, wbs_no*, predecessors=None:string, owner=None:string, phase=None:string, note=None:string)
     — 建里程碑（工期恒 0 的便捷入口 —— 里程碑是**事件**不是工作，§5.5.7.1）。
-baseline(act_nos*, project_start=None:string)
+baseline(act_nos*, project_start=None:string, calendar_no=None:string)
     — 建立进度基线：把**派生日期**冻进 `baseline_start` / `baseline_finish`。
 change(act_no*, change_no*, note=None:string)
     — 对已基线的活动发起修订：挂上**已批准**的变更号（跨应用只读校验 `change_request.get`）。
 check_network()
-    — 网络体检：返回四类**图论可判**的问题 + 一类跨应用问题。
+    — 网络体检：返回**图论与格式可判**的问题 + 一类跨应用问题。
 create(name*, wbs_no*, duration_days=1:integer, kind='activity':string, predecessors=None:string, owner=None:string, phase=None:string, note=None:string)
     — 建一个活动（或汇总活动）。编号系统生成；`wbs_no` 必须是 **WBS 的叶子元素**。
-critical_path()
+create_calendar(name*, unit='days':string, holidays=None:string, is_default=False:boolean)
+    — 建一个工作日历。`unit` 是**项目级口径**：`days`（工作日，跳过周末与假日）/ `edays`（日历天）。
+critical_path(project_start=None:string, calendar_no=None:string)
     — 只取关键路径（浮时为 0 的活动，按最早开始排序）。
 get(act_no*)
-    — 按编号查活动；未命中返回 None，不抛异常。
-link(act_no*, predecessor_no*)
-    — 给活动加一条前置（逻辑链，完成→开始）。
+    — 按编号查活动（带回 `pred_list` 结构化逻辑链与当前日历口径）；未命中返回 None。
+get_calendar(cal_no*)
+    — 按编号取日历；未命中返回 None。
+link(act_no*, predecessor_no*, rel_type='FS':string, lag_days=0:integer, reason=None:string)
+    — 给活动加一条前置关系（默认 **完成→开始（FS）、无滞后**）。
 list(status=None:string, kind=None:string, wbs_no=None:string, owner=None:string, baselined=None:string, keyword=None:string, page=None:integer, size=None:integer)
     — 按状态 / 类型 / 挂靠元素 / 责任方 / 是否已基线 / 关键词筛选，**分页返回 `{items,total}`**。
+list_calendars()
+    — 全部日历（默认的排前面）。
 record_progress(act_no*, percent_complete=None:integer, actual_start=None:string, actual_finish=None:string, note=None:string)
     — 回填实绩：实际开始 / 完成 / 完成百分比。
-schedule_view(project_start=None:string)
-    — **派生排程**：正推最早日期、逆推最晚日期、算浮时、标关键路径。
+schedule_view(project_start=None:string, calendar_no=None:string)
+    — **派生排程**：按四种关系 + 滞后正推最早日期、逆推最晚日期、算浮时、标关键路径。
 unlink(act_no*, predecessor_no*)
     — 断掉一条前置。已基线的活动同样要走变更流程（BR-07）。
 update(act_no*, name=None:string, duration_days=None:integer, predecessors=None:string, wbs_no=None:string, owner=None:string, note=None:string, change_no=None:string)
-    — 改**计划字段**（名称 / 工期 / 前置 / 挂靠元素 / 责任方 / 备注）。
+    — 改**计划字段**（名称 / 工期 / 逻辑链 / 挂靠元素 / 责任方 / 备注）。
+update_calendar(cal_no*, name=None:string, unit=None:string, holidays=None:string, add_holiday=None:string, remove_holiday=None:string, is_default=None:boolean)
+    — 改日历（名称 / 工期口径 / 假日表）。`add_holiday` / `remove_holiday` 是单条增删的便捷入口。
 ```
 
 ### get/list 示例
 （未造出样例 —— 字段请读源码 get()/INSERT 语句）
+
+### list 返回项示例
+```json
+{
+ "act_no": "ACT-001",
+ "name": "星务软件开工",
+ "kind": "milestone",
+ "phase": "start",
+ "wbs_no": "400000.01.01.01",
+ "duration_days": 0,
+ "predecessors": null,
+ "owner": "星务分系统",
+ "status": "completed",
+ "percent_complete": 100,
+ "actual_start": "2026-10-05",
+ "actual_finish": "2026-10-05",
+ "baseline_start": "2026-10-05",
+ "baseline_finish": "2026-10-05",
+ "change_no": null,
+ "note": "",
+ "pred_list": []
+}
+```
 
 
 ## change_request

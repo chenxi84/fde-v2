@@ -12,6 +12,7 @@ import atexit
 import http.client
 import os
 import pathlib
+import re
 import socket
 import sqlite3
 import subprocess
@@ -482,6 +483,77 @@ def main():
             # VT-ACT-57 BR-08 回填实绩**不动基线**
             rec(after == before,
                 f"VT-ACT-57 BR-08 回填实绩**不动基线**：{before} → {after}")
+
+            # ── §8 甘特视图（2026-09-26 增补）──────────────────
+            step("§8 甘特视图（VT-GANTT-71..74）")
+            # VT-GANTT-71 切到甘特
+            page.click('[data-role="to-gantt"]')
+            page.wait_for_selector('[data-role="gantt"]:visible', timeout=8000)
+            page.wait_for_timeout(600)
+            n_l = rows(page).count()
+            rec(page.locator('[data-role="gantt-row"]').count() == n_l,
+                f"VT-GANTT-71 甘特行数 = 台账行数（{n_l}）")
+            # VT-GANTT-72 每条都画出了条形（宽度 > 0）
+            bars = page.locator('[data-role="gantt-bar"]')
+            # ⚠ `page.evaluate` 收的是 **ElementHandle**，不是 Locator —— 传 Locator 会报
+            #   "Cannot read properties of undefined (reading 'style')"（实测）。读 style 属性再解析更省事。
+            def _bar_w(i):
+                st = bars.nth(i).get_attribute("style") or ""
+                m = re.search(r"width:\s*([\d.]+)%", st)
+                return float(m.group(1)) if m else 0.0
+            widths = [_bar_w(i) for i in range(bars.count())]
+            rec(len(widths) == n_l and all(w > 0 for w in widths),
+                f"VT-GANTT-72 每条都有条形（宽度 {[round(w,1) for w in widths[:4]]}…）")
+            # VT-GANTT-73 关键路径用 data-crit 标出
+            crit_n = sum(1 for i in range(bars.count())
+                         if bars.nth(i).get_attribute("data-crit") == "1")
+            rec(0 < crit_n < bars.count(), f"VT-GANTT-73 关键路径标出 {crit_n}/{bars.count()} 条")
+            # VT-GANTT-74 切回台账
+            page.click('button:has-text("台账视图")')
+            page.wait_for_selector(".scroll-x table.tbl", timeout=8000)
+            rec(rows(page).count() == n_l, "VT-GANTT-74 切回台账视图正常")
+
+            # ── §9 四种关系 / 滞后 / 日历（2026-09-26 增补）──────
+            step("§9 四种关系与日历（VT-REL-81..83 / VT-CAL-91..92）")
+            # VT-REL-81 关系类型是四值枚举（静态 option）
+            row_of(page, "ACT-005").locator('button:has-text("连前置")').click()
+            page.wait_for_selector('.modal-mask:visible [data-role="link-type"]', timeout=8000)
+            opts = page.locator('[data-role="link-type"] option').all_inner_texts()
+            rec(len(opts) == 4 and all(k in " ".join(opts) for k in ("FS", "SS", "FF", "SF")),
+                # VT-REL-81 四种关系模型
+                f"VT-REL-81 关系类型四个选项：{opts}")
+            # VT-REL-82 非 FS 不带理由 → 被拒
+            # ⚠ 选 ACT-006（热控涂层，独立分支）当候选：挑 ACT-003 会被后端判**冗余链接**
+            #   （ACT-001 已通过 ACT-002、ACT-003 间接前置了 ACT-005）—— 那是闸门正确，不是 bug
+            page.select_option('[data-role="link-type"]', "SS")
+            page.fill('[data-role="link-pred"]', "ACT-006")
+            page.fill('[data-role="link-reason"]', "")
+            drain_toasts(page)
+            page.click('[data-role="link-submit"]')
+            t = wait_toast(page, "必须写明理由")
+            rec("必须写明理由" in t, f"VT-REL-82 非 FS 缺理由被拒（§5.5.8.2）：{t[:44]}")
+            # VT-REL-83 带上滞后与理由 → 连上，前置列显示关系与滞后
+            page.fill('[data-role="link-lag"]', "2")
+            page.fill('[data-role="link-reason"]', "与它并行启动，等资源到位")
+            drain_toasts(page)
+            page.click('[data-role="link-submit"]')
+            t = wait_toast(page, "SS")
+            rec("SS" in t, f"VT-REL-83 连上有回执（含关系类型）：{t[:44]}")
+            r = wait_text(row_of(page, "ACT-005").locator('[data-role="rels"]'), "SS+2", timeout=6000)
+            rec("SS+2" in r, f"VT-REL-83 前置列显示关系与滞后：{r[:40]}")
+            close_modal(page)
+            # VT-CAL-91 日历候选取自服务，默认日历已就位
+            cal_opts = page.evaluate(
+                "() => Array.from(document.querySelectorAll('#act-cal-options option')).map(o => o.value)")
+            rec(len(cal_opts) >= 1 and page.input_value('[data-role="cal-pick"]') == cal_opts[0],
+                f"VT-CAL-91 日历候选 {cal_opts}，输入框已选 {page.input_value('[data-role="cal-pick"]')}")
+            # VT-CAL-92 排程视图标出工期口径与日历
+            page.click('button:has-text("排程视图")')
+            page.wait_for_selector('[data-role="sch-cal"]', timeout=8000)
+            txt = wait_text(page.locator('[data-role="sch-cal"]'), "口径", timeout=6000)
+            rec("口径" in txt and "CAL-" in txt, f"VT-CAL-92 排程标注口径与日历：{txt[:60]}")
+            page.click('button:has-text("台账视图")')
+            page.wait_for_selector(".scroll-x table.tbl", timeout=8000)
 
             # 豁免清单受检（V5）
             for _ig in ignored:

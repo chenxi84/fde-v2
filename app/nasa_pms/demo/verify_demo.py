@@ -78,6 +78,10 @@ CHECKS = [
      "基线冻在**派生日期**上（不是手填的）"),
     ("activity.get(act_no=ACT-005)", "baseline_start", None,
      "有一条未基线的活动（它还是开口端）"),
+    ("activity.get(act_no=ACT-004)", "predecessors", "ACT-003",
+     "主线是完成→开始（默认关系）"),
+    ("activity.get(act_no=ACT-006)", "predecessors", "ACT-003:SS:3:与单元测试并行，文档随代码走",
+     "另有一条 **SS + 滞后 + 理由**（§5.5.8.2 的四种关系模型）"),
     ("interface.get(if_no=IF-001)", "status", "released", "接口已发布"),
 ]
 COUNT_CHECKS = [
@@ -86,7 +90,7 @@ COUNT_CHECKS = [
     ("risk", "list", {}, 6, "风险"),
     ("technical_measure", "list", {}, 4, "技术度量"),
     ("wbs", "list", {}, 8, "WBS 元素"),
-    ("activity", "list", {}, 5, "进度活动"),
+    ("activity", "list", {}, 6, "进度活动"),
 ]
 
 

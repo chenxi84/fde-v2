@@ -1,7 +1,7 @@
 /* 进度活动台账 · IMS 里的一个离散可度量工作单元（活动 / 里程碑）。
-   日期是**派生量**（由工期与逻辑链正推），所以有两个视图：台账 + 排程。
-   依据：NASA/SP-2010-3403《Schedule Management Handbook》Rev 1（§5.5.5 命名 / §5.5.8 逻辑链 /
-   §5.5.9 工期 / §7.3 基线与变更控制） */
+   三种视图：台账 / 排程（派生表）/ 甘特（派生条图）—— 日期都是**派生量**，不落库。
+   依据：NASA/SP-2010-3403《Schedule Management Handbook》Rev 1
+   （§5.5.5 命名 / §5.5.8.2 四种关系模型与滞后 / §5.5.9 工期与日历 / §7.3 基线与变更控制） */
 import { svc, toast } from "/view/lib/api.js";
 import { pageable } from "/view/lib/shell.js";
 
@@ -21,33 +21,34 @@ const STATUS = {
   in_progress: ["进行中", "st-amber"],
   completed: ["已完成", "st-green"],
 };
+/* 四种关系模型（§5.5.8.2）；非 FS 必须写理由 */
+const RELS = [["FS", "完成→开始"], ["SS", "开始→开始"],
+              ["FF", "完成→完成"], ["SF", "开始→完成"]];
 
 export default function pageActivity() {
   const self = Alpine.reactive({
     tpl: "",
     list: null,
-    view: "list",                       // list | schedule
-    // 筛选（与后端 list 的可过滤参数一一对应）
+    view: "list",                       // list | schedule | gantt
     f_status: "", f_kind: "", f_wbs: "", f_keyword: "",
-    // 派生排程 / 网络体检（都是服务现算，不落库）
     schedule: null, check: null,
-    // 详情 / 编辑
     modal: { open: false, d: null, mode: "view", busy: false },
-    // 新建（活动 / 里程碑同一表单，kind 选）
     form: { open: false, saving: false, name: "", kind: "activity", wbs_no: "",
             duration_days: 1, predecessors: "", owner: "", phase: "", note: "" },
-    // 连前置
-    lm: { open: false, d: null, predecessor_no: "", saving: false },
-    // 发起修订
+    // 连前置（四种关系 + 滞后 + 理由）
+    lm: { open: false, d: null, predecessor_no: "", rel_type: "FS", lag_days: 0,
+          reason: "", saving: false },
     fm: { open: false, d: null, change_no: "", note: "", saving: false },
-    // 回填实绩
     pm: { open: false, d: null, percent_complete: 0, actual_start: "", actual_finish: "",
           note: "", saving: false },
-    // 候选集 —— 跨应用只读（**值仍是文本**）：叶子元素 ← wbs、变更号 ← change_request、责任方 ← stakeholder
+    // 候选集 —— 跨应用只读（**值仍是文本**）
     leaves: [], crs: [], owners: [],
+    // 日历（工期口径与假日表）
+    cals: [], cal_no: "",
 
-    kinds: KINDS,
+    kinds: KINDS, rels: RELS,
     kindName(v) { const k = KINDS.find((x) => x[0] === v); return k ? k[1] : (v || "—"); },
+    relName(v) { const r = RELS.find((x) => x[0] === v); return r ? r[1] : (v || "—"); },
     statusName(v) { return (STATUS[v] || [v, ""])[0]; },
     statusCls(v) { return (STATUS[v] || ["", "st-slate"])[1]; },
     dash(v) { return (v === null || v === undefined || v === "") ? "—" : v; },
@@ -58,22 +59,28 @@ export default function pageActivity() {
       return (d && d.baseline_start) ? (d.baseline_start + " → " + d.baseline_finish) : "未基线";
     },
     baselined(d) { return !!(d && d.baseline_start); },
-    /* ⚠ 模态里读 `modal.d` 一律走空安全 helper，模板里不写裸 `modal.d.status` */
     isStatus(d, s) { return !!d && d.status === s; },
     inStatus(d, list) { return !!d && list.indexOf(d.status) >= 0; },
     ro(d) { return self.modal.mode === "view"; },
-    /** 已基线的活动改计划字段要走变更流程（BR-07 的前端镜像：这里只提示，判据在后端） */
-    lockedPlan(d) { return self.baselined(d); },
+    canEdit(d) { return !!d && !self.baselined(d); },
+    /** 逻辑链的可读写法：`ACT-001` / `ACT-002·SS+2`（带上关系与滞后） */
+    relsText(d) {
+      const ps = (d && d.pred_list) || [];
+      if (!ps.length) return "—";
+      return ps.map((x) => x.type === "FS" && !x.lag ? x.pred
+        : x.pred + "·" + x.type + (x.lag ? (x.lag > 0 ? "+" : "") + x.lag : "")).join("、");
+    },
     /** 排程视图里的派生列 */
     schOf(act_no) {
-      const it = ((self.schedule && self.schedule.items) || []).find((x) => x.act_no === act_no);
-      return it || {};
+      return ((self.schedule && self.schedule.items) || []).find((x) => x.act_no === act_no) || {};
     },
-    critCls(act_no) { return self.schOf(act_no).critical ? "st-amber" : "st-slate"; },
-    critText(act_no) { return self.schOf(act_no).critical ? "关键路径" : "—"; },
+    calText() {
+      const c = self.cals.find((x) => x.cal_no === self.cal_no);
+      return c ? (c.name + " · " + (c.unit === "edays" ? "日历天" : "工作日")
+                  + (c.holidays ? (" · 假日 " + c.holidays.split(",").length + " 天") : "")) : "";
+    },
 
     async init() {
-      // ⚠ 先把会被模板引用的响应式状态建好，再挂模板（模板注入即求值 `list.items`）
       const tpl = await fetch(new URL("view.html", import.meta.url)).then((r) => r.text());
       self.list = pageable(async (q) => svc("activity", "list", {
         status: self.f_status || undefined,
@@ -83,11 +90,10 @@ export default function pageActivity() {
         ...q,
       }));
       self.tpl = tpl;
-      await Promise.all([self.loadLeaves(), self.loadCrs(), self.loadOwners()]);
+      await Promise.all([self.loadLeaves(), self.loadCrs(), self.loadOwners(), self.loadCals()]);
       await self.list.load();
     },
 
-    /** 叶子元素候选（`wbs`）：只做候选、值仍是文本 `wbs_no`。失败静默兜底。 */
     async loadLeaves() {
       try {
         const r = await svc("wbs", "list", {}, { quiet: true });
@@ -108,27 +114,71 @@ export default function pageActivity() {
         self.owners = (r && r.items) || [];
       } catch { self.owners = []; }
     },
+    async loadCals() {
+      try {
+        const r = await svc("activity", "list_calendars", {}, { quiet: true });
+        self.cals = (r && r.items) || [];
+        const dft = self.cals.find((x) => x.is_default) || self.cals[0];
+        self.cal_no = self.cal_no || (dft && dft.cal_no) || "";
+      } catch { self.cals = []; }
+    },
 
     search() { self.list.load(1); },
     async reload() {
       await self.list.load(self.list.page);
-      if (self.view === "schedule") await self.loadSchedule();
+      if (self.view !== "list") await self.loadSchedule();
     },
     async switchView(v) {
       self.view = v;
-      if (v === "schedule") await self.loadSchedule();
+      if (v !== "list") await self.loadSchedule();
     },
-    /** 排程视图：**派生**（正推日期 + 浮时 + 关键路径），不落库 */
+    async changeCal() { await self.loadSchedule(); },
     async loadSchedule() {
       try {
-        self.schedule = await svc("activity", "schedule_view", {}, { quiet: true });
+        self.schedule = await svc("activity", "schedule_view",
+                                  { calendar_no: self.cal_no || undefined }, { quiet: true });
       } catch (e) { self.schedule = null; toast(String(e.message || e)); }
     },
-    /** 网络体检：开口端 / 冗余 / 环 / 工期 / 非叶子挂靠 */
     async runCheck() {
       try {
         self.check = await svc("activity", "check_network", {}, { quiet: true });
       } catch (e) { toast(String(e.message || e)); }
+    },
+
+    /** 甘特视图的行：把派生日期折算成时间轴上的百分比（x 轴 = 项目起止之间的**日历天**） */
+    ganttRows() {
+      const s = self.schedule;
+      if (!s || !(s.items || []).length) return [];
+      const base = Date.parse(s.project_start + "T00:00:00Z");
+      const end = Date.parse(s.project_finish + "T00:00:00Z");
+      const total = Math.max(1, Math.round((end - base) / 86400000) + 1);
+      return s.items.map((x) => {
+        const a = Math.round((Date.parse(x.early_start + "T00:00:00Z") - base) / 86400000);
+        const b = Math.round((Date.parse(x.early_finish + "T00:00:00Z") - base) / 86400000);
+        return {
+          act_no: x.act_no, name: x.name, kind: x.kind, critical: x.critical,
+          early_start: x.early_start, early_finish: x.early_finish, float_days: x.float_days,
+          left: Math.max(0, a) / total * 100,
+          width: Math.max((b - a + 1) / total * 100, x.kind === "milestone" ? 1.2 : 0.8),
+          is_ms: x.kind === "milestone",
+        };
+      });
+    },
+    /** 时间轴的刻度（每周一个，标签用 MM-DD） */
+    ganttTicks() {
+      const s = self.schedule;
+      if (!s) return [];
+      const base = Date.parse(s.project_start + "T00:00:00Z");
+      const end = Date.parse(s.project_finish + "T00:00:00Z");
+      const total = Math.max(1, Math.round((end - base) / 86400000) + 1);
+      const out = [];
+      for (let d = 0; d < total; d += 7) {
+        const dt = new Date(base + d * 86400000);
+        out.push({ left: d / total * 100,
+                   label: String(dt.getUTCMonth() + 1).padStart(2, "0") + "-" +
+                          String(dt.getUTCDate()).padStart(2, "0") });
+      }
+      return out;
     },
 
     /* ── 详情 / 编辑 ──────────────────────────────────── */
@@ -142,7 +192,6 @@ export default function pageActivity() {
       } catch (e) { toast(String(e.message || e)); }
     },
     closeModal() { self.modal.open = false; self.modal.d = null; },
-    canEdit(d) { return !!d && !self.baselined(d); },
     async saveEdit() {
       const d = self.modal.d;
       if (!d || self.modal.busy) return;
@@ -190,17 +239,26 @@ export default function pageActivity() {
       finally { f.saving = false; }
     },
 
-    /* ── 连前置 ───────────────────────────────────────── */
-    openLink(d) { self.lm = { open: true, d, predecessor_no: "", saving: false }; },
+    /* ── 连前置（四种关系 + 滞后 + 理由）───────────────── */
+    openLink(d) {
+      self.lm = { open: true, d, predecessor_no: "", rel_type: "FS", lag_days: 0,
+                  reason: "", saving: false };
+    },
     async submitLink() {
       const f = self.lm;
       if (f.saving) return;
       if (!f.predecessor_no) { toast("请选择一个前置活动"); return; }
+      if (f.rel_type !== "FS" && !String(f.reason || "").trim()) {
+        toast(`非标准关系（${f.rel_type} ${self.relName(f.rel_type)}）必须写明理由（材料 §5.5.8.2）`);
+        return;
+      }
       f.saving = true;
       try {
-        await svc("activity", "link", { act_no: f.d.act_no,
-                                        predecessor_no: f.predecessor_no });
-        toast(`已给 ${f.d.act_no} 连上前置 ${f.predecessor_no}`);
+        await svc("activity", "link", { act_no: f.d.act_no, predecessor_no: f.predecessor_no,
+                                        rel_type: f.rel_type, lag_days: Number(f.lag_days || 0),
+                                        reason: f.reason || undefined });
+        toast(`已给 ${f.d.act_no} 连上前置 ${f.predecessor_no}（${f.rel_type}`
+              + (Number(f.lag_days) ? (" 滞后 " + f.lag_days + " 天") : "") + "）");
         f.open = false;
         await self.reload();
       } catch (e) { toast(String(e.message || e)); }
@@ -212,7 +270,9 @@ export default function pageActivity() {
       self.modal.busy = true;
       try {
         const r = await svc("activity", "baseline", {
-          act_nos: [d.act_no], project_start: (self.schedule && self.schedule.project_start) || undefined });
+          act_nos: [d.act_no],
+          project_start: (self.schedule && self.schedule.project_start) || undefined,
+          calendar_no: self.cal_no || undefined });
         toast(`已基线：${r.items[0].baseline_start} → ${r.items[0].baseline_finish}`);
         self.modal.d = r.items[0];
         await self.reload();

@@ -418,6 +418,12 @@ def seed(pf):
     # 基线：**显式给 project_start**，免得基线随"今天"漂（BR-07 的基准要可复现）
     call("activity", "baseline", act_nos=["ACT-001", "ACT-002", "ACT-003", "ACT-004"],
          project_start="2026-10-05")
+    # 一条**并行支线**：用 SS + 滞后 + 理由（演示四种关系模型，材料 §5.5.8.2）；挂另一个叶子、不参与主线
+    call("activity", "create", name="星务软件文档编写", wbs_no="400000.01.01.01",
+         duration_days=6, predecessors="ACT-003:SS:3:与单元测试并行，文档随代码走",
+         owner="星务分系统")
+    # 日历：假日表放**十二月**（不影响上面按十月冻结的基线，只让"跳过非工作日"看得见）
+    call("activity", "update_calendar", cal_no="CAL-001", add_holiday="2026-12-25")
     # 实绩：一条已完成（演示 BR-08：基线不动）、一条进行中
     call("activity", "record_progress", act_no="ACT-001", percent_complete=100,
          actual_start="2026-10-05", actual_finish="2026-10-05")
@@ -438,7 +444,7 @@ def seed(pf):
         # WBS（2026-09-26 并入）：8 个元素 —— 已基线 4 / 变更中 1 / 已关闭 2 / 草稿 1
         "wbs": 8, "wbs_baselined": 4, "wbs_in_change": 1, "wbs_closed": 2, "wbs_draft": 1,
         # 进度活动（2026-09-26 并入）：5 条 —— 已基线 4 / 已完成 1 / 进行中 1 / 计划 3
-        "activity": 5, "activity_baselined": 4, "activity_completed": 1,
+        "activity": 6, "activity_baselined": 4, "activity_completed": 1,
         "activity_in_progress": 1,
     }
 

@@ -322,6 +322,98 @@ def main():
     want = {"planned", "in_progress", "completed"}
     record(STATES_SEEN == want, f"本链已到达的状态 = {sorted(STATES_SEEN)}")
 
+    # ── §3 四种关系 / 滞后 / 日历（2026-09-26 增补：材料 §5.5.8.2 与 §5.5.9.2）──
+    # 独立起一条新网络，免得扰动前面那些"按默认日历算的日期"断言
+    step("TC-30 四种关系模型都能用（FS/SS/FF/SF）")
+    call("add_milestone", name="四条关系开工", wbs_no="800000.01", phase="start")
+    call("create", name="R-甲", wbs_no="800000.01", duration_days=5, predecessors="ACT-007")
+    call("create", name="R-乙", wbs_no="800000.01", duration_days=3,
+         predecessors="ACT-008:SS:2:与甲并行启动")
+    call("create", name="R-丙", wbs_no="800000.01", duration_days=4,
+         predecessors="ACT-008:FF:1:与甲同步收口")
+    call("create", name="R-丁", wbs_no="800000.01", duration_days=2,
+         predecessors="ACT-009:SF:0:装配线移交")
+    call("add_milestone", name="四条关系收尾", wbs_no="800000.01",
+         predecessors="ACT-010,ACT-011", phase="finish")
+    v3 = call("schedule_view", project_start="2026-10-05")
+    by3 = {x["name"]: x for x in v3["items"]}
+    record(by3["R-甲"]["early_start"] == "2026-10-06" and by3["R-甲"]["early_finish"] == "2026-10-12",
+           f"FS：R-甲 {by3['R-甲']['early_start']}→{by3['R-甲']['early_finish']}（紧随里程碑）")
+    record(by3["R-乙"]["early_start"] == "2026-10-08",
+           f"SS+2：R-乙 与甲**同时起算再滞后 2 个工作日** → {by3['R-乙']['early_start']}")
+    record(by3["R-丙"]["early_finish"] == "2026-10-13",
+           f"FF+1：R-丙 的完成 = 甲的完成 + 1 → {by3['R-丙']['early_finish']}")
+    record(by3["R-丁"]["early_finish"] == "2026-10-08",
+           f"SF：R-丁 的完成挂在甲的**开始**上 → {by3['R-丁']['early_finish']}")
+    # ⚠ 别断言"甲的浮时 = 0"：整张网还有前一条链（项目完工由**全局**最晚完成决定），
+    #   跨链比较才有意义 —— 甲在紧的那条链上，乙/丁有并行余量
+    record(by3["R-甲"]["float_days"] <= by3["R-乙"]["float_days"]
+           and by3["R-甲"]["float_days"] <= by3["R-丁"]["float_days"],
+           f"浮时正确：甲的余量 {by3['R-甲']['float_days']} ≤ 乙 {by3['R-乙']['float_days']}"
+           f" / 丁 {by3['R-丁']['float_days']}（并行支线有余量）")
+    rels = {r["name"]: r["predecessors"] for r in call("list")["items"]}
+    record(":SS:2:" in (rels["R-乙"] or "") and ":FF:1:" in (rels["R-丙"] or ""),
+           f"关系与理由落库：{rels['R-乙']} / {rels['R-丙']}")
+    record(call("list", keyword="R-")["total"] == 4,
+           "新网络四条活动（两个边界里程碑名字里没有 R-，不进这个筛）")
+
+    step("TC-31 非 FS 必须写明理由（材料 §5.5.8.2 的 BoE 要求）")
+    expect_err(lambda: call("create", name="没写理由的", wbs_no="800000.01", duration_days=1,
+                            predecessors="ACT-008:SS:0"), "必须写明理由")
+    expect_err(lambda: call("link", act_no="ACT-011", predecessor_no="ACT-008",
+                            rel_type="FF", lag_days=0), "必须写明理由")
+    # 理由是**中文**，全角逗号是合法字符；真正会破坏格式的是**冒号**（多出一段）
+    expect_err(lambda: call("create", name="理由带冒号", wbs_no="800000.01", duration_days=1,
+                            predecessors="ACT-008:SS:0:因为:所以"), "理由里出现了冒号")
+    ok_rel = call("create", name="理由带全角逗号", wbs_no="800000.01", duration_days=1,
+                  predecessors="ACT-008:SS:0:与甲并行，待资源到位")
+    record("与甲并行，待资源到位" in (ok_rel["predecessors"] or ""),
+           f"全角逗号的理由正常落库：{ok_rel['predecessors']}")
+    n_before = call("list")["total"]
+    expect_err(lambda: call("create", name="还是不写理由", wbs_no="800000.01", duration_days=1,
+                            predecessors="ACT-009:SF:0"), "必须写明理由")
+    record(call("list")["total"] == n_before, f"四次被拒都没落库（仍 {n_before} 条）")
+
+    step("TC-32 关系类型与滞后受校验")
+    expect_err(lambda: call("create", name="关系类型非法", wbs_no="800000.01", duration_days=1,
+                            predecessors="ACT-008:XX:0:瞎写的"), "四种关系模型")
+    expect_err(lambda: call("link", act_no="ACT-011", predecessor_no="ACT-008",
+                            rel_type="FF", lag_days="两天", reason="理由是给了"),
+               "滞后必须是整数")
+
+    step("TC-33 日历：假日与非工作日会被跳过（§5.5.9.2）")
+    cals = call("list_calendars")
+    record(cals["total"] >= 1 and any(c["is_default"] for c in cals["items"]),
+           f"默认日历已自动建立：{[(c['cal_no'], c['unit']) for c in cals['items']]}")
+    before = call("schedule_view", project_start="2026-10-05")["project_finish"]
+    call("update_calendar", cal_no="CAL-001", add_holiday="2026-10-07")
+    call("update_calendar", cal_no="CAL-001", add_holiday="2026-10-08")
+    after = call("schedule_view", project_start="2026-10-05")["project_finish"]
+    record(after > before, f"加两个假日后完工顺延：{before} → {after}")
+    hol = call("get_calendar", cal_no="CAL-001")["holidays"]
+    record(hol == "2026-10-07,2026-10-08", f"假日表落库：{hol}")
+    call("update_calendar", cal_no="CAL-001", remove_holiday="2026-10-08")
+    record(call("get_calendar", cal_no="CAL-001")["holidays"] == "2026-10-07", "单条移除假日")
+    c2 = call("create_calendar", name="按日历天算的日历", unit="edays")
+    record(c2["unit"] == "edays" and c2["is_default"] == 0, f"另建 edays 日历 {c2['cal_no']}")
+    expect_err(lambda: call("create_calendar", name="乱口径", unit="半天"), "工期口径只能是")
+
+    step("TC-34 edays 口径：忽略周末与假日（§5.5.9.1 的 elapsed duration）")
+    v_ed = call("schedule_view", project_start="2026-10-05", calendar_no=c2["cal_no"])
+    by_ed = {x["name"]: x for x in v_ed["items"]}
+    record(v_ed["unit"] == "edays" and v_ed["unit_cn"].startswith("日历天"),
+           f"口径随日历切换：{v_ed['unit_cn']}")
+    record(by_ed["R-甲"]["early_start"] == "2026-10-06"
+           and by_ed["R-甲"]["early_finish"] == "2026-10-10",
+           f"R-甲 5 天按**日历天**排：{by_ed['R-甲']['early_start']}→{by_ed['R-甲']['early_finish']}"
+           "（不停周末、也不理会假日表）")
+    record(v_ed["holidays"] == [], "edays 日历的假日表为空（该口径下不适用）")
+
+    step("TC-35 默认日历仍按工作日（两套口径并存互不影响）")
+    v_days = call("schedule_view", project_start="2026-10-05")
+    record(v_days["unit"] == "days" and v_days["project_finish"] != v_ed["project_finish"],
+           f"工作日口径完工 {v_days['project_finish']} ≠ 日历天口径 {v_ed['project_finish']}")
+
     # ── 汇总 ─────────────────────────────────────────────
     bad = [r for r in RESULTS if not r[0]]
     print(f"\n{'='*60}")
