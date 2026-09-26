@@ -243,7 +243,7 @@ class Activity:
         return self.get(act_no)
 
     def check_network(self):
-        """网络体检：返回**图论与格式可判**的问题 + 一类跨应用问题。
+        """网络体检：返回**图论与格式可判**的问题 + 两类跨应用问题（挂靠非叶子 / 叶子无活动）。
 
         · `open_ends`     开口端（非边界活动入度或出度为 0）—— §5.5.8 的 no "open ends"
         · `redundant`     冗余链接（直接边被传递闭包覆盖）—— §5.5.8 原文的例子
@@ -251,6 +251,10 @@ class Activity:
         · `bad_duration`  工期异常（里程碑 ≠ 0 / 活动 ≤ 0）
         · `bad_rel`       关系不合法（类型不在四值里、或**非 FS 没写理由**）—— §5.5.8.2
         · `non_leaf`      挂靠的 WBS 元素**已不是叶子**（元素下面长了新子元素）—— 跨应用读 `wbs`
+        · `no_activity`   **还没有任何活动的 WBS 叶子元素** —— 材料 WBS 手册 §4 原话：
+          "The lowest level of each WBS element should have at least one task or activity"。
+          这是**反方向**的判据（`non_leaf` 管"活动挂错了地方"，它管"地方还空着"）；
+          只报**未收口**的元素（已关闭的不再要求补活动）。
         """
         rows = self.list()["items"]
         idx = {r["act_no"]: r for r in rows}
@@ -296,11 +300,24 @@ class Activity:
             if self._wbs_children(r["wbs_no"]):
                 non_leaf.append({"act_no": no, "wbs_no": r["wbs_no"]})
 
+        # 反方向判据（跨应用读 `wbs`，一次取全表在内存里判叶子）：**还空着的最底层元素**。
+        # ⚠ 跨应用读失败**不静默降级**（同 `_wbs_children`）：体检答不出就说答不出。
+        try:
+            els = (self.fde.call("wbs", "list", page=1, size=9999) or {}).get("items") or []
+        except Exception as e:
+            raise FdeError(f"体检失败：wbs 应用不可用（{str(e)[:60]}）")
+        parents = {e["parent_no"] for e in els if e.get("parent_no")}
+        covered = {r["wbs_no"] for r in rows}
+        no_activity = [{"wbs_no": e["wbs_no"], "title": e["title"], "status": e["status"]}
+                       for e in els
+                       if e["wbs_no"] not in parents and e["wbs_no"] not in covered
+                       and e["status"] != "closed"]
+
         problems = (len(open_ends) + len(redundant) + len(cycles) + len(bad_duration)
-                    + len(bad_rel) + len(non_leaf))
+                    + len(bad_rel) + len(non_leaf) + len(no_activity))
         return {"total": problems, "activities": len(rows), "open_ends": open_ends,
                 "redundant": redundant, "cycles": cycles, "bad_duration": bad_duration,
-                "bad_rel": bad_rel, "non_leaf": non_leaf}
+                "bad_rel": bad_rel, "non_leaf": non_leaf, "no_activity": no_activity}
 
     def schedule_view(self, project_start: str = None, calendar_no: str = None):
         """**派生排程**：按四种关系 + 滞后正推最早日期、逆推最晚日期、算浮时、标关键路径。

@@ -115,6 +115,7 @@ SEED_JS = r"""async () => {
   };
   const REQ = "nasa_pms/requirement", WBS = "nasa_pms/wbs";
   const CI = "nasa_pms/configuration_item", CR = "nasa_pms/change_request";
+  const ACT = "nasa_pms/activity";
 
   await call(REQ, "create", {title: "星上存储器容量不小于 2 Tbit",
     statement: "在轨 5 年内不出现容量不足", req_type: "technical", verify_method: "test"});
@@ -135,9 +136,13 @@ SEED_JS = r"""async () => {
   await call(WBS, "update", {wbs_no: "123456.01", scope_ref: "SOW §3.2", req_nos: "REQ-001"});
   await call(WBS, "update", {wbs_no: "123456.02", scope_ref: "SOW §3.3", req_nos: "REQ-002"});
   await call(WBS, "add_child", {parent_no: "123456.01", title: "星务计算机"});
+  // 「元素 ↔ 活动」那一节要两个状态都验到：123456.01.01 有 1 条活动 → 显示「1 条」；
+  // 其余叶子（123456.02 / 654321 / 123456.03）没有 → 显示琥珀色「加活动」
+  const act = await call(ACT, "create", {name: "星务计算机热试验", wbs_no: "123456.01.01",
+    duration_days: 5});
   await call(WBS, "baseline", {wbs_no: "123456"});
   await call(WBS, "baseline", {wbs_no: "123456.01"});
-  return {seeded: true, cr_no: cr.cr_no};
+  return {seeded: true, cr_no: cr.cr_no, act_no: act.act_no};
 }"""
 
 STEP = ""
@@ -516,13 +521,55 @@ def main():
             page.wait_for_selector("table.tbl", timeout=8000)
             rec(page.locator("table.tbl tr.data").count() == 6, "VT-TREE-43 切回列表视图正常")
 
-            # ── §6 版式（VT-LAYOUT-01..03，2026-09-26 增补）──────────────────
+            # ── §6 元素 ↔ 活动（VT-REL-01..03，2026-09-26 增补）──────────────────
+            # 材料依据：WBS 手册 §4 "The lowest level of each WBS element should have at least
+            #   one task or activity" —— 台账上要看得见"这个叶子有没有活动"，并能一步跳过去建。
+            # ⚠ 本页对 `activity` **只读**（跳转过去；写活动仍是活动页自己的事）：全仓的视图层
+            #   跨应用调用**一律只读**，第一条写边不从这里开（见 architecture.md 的方向表）。
+            step("§6 元素 ↔ 活动（VT-REL-01..03）")
+
+            def act_cell(no):
+                c = row_of(page, no).locator('[data-role="act-cell"]')
+                b = c.locator('button[data-role="act-entry"]')
+                return b.inner_text().strip() if (b.count() and b.is_visible()) else c.inner_text().strip()
+
+            # VT-REL-01 叶子显示读数/入口，非叶子显示「—」
+            rec(act_cell("123456.01.01") == "1 条",
+                "VT-REL-01 有活动的叶子显示「1 条」")
+            rec(all(act_cell(x) == "加活动" for x in ("123456.02", "123456.03")),
+                "VT-REL-01 没有活动的叶子显示「加活动」（材料 §4 那条的可见证据）")
+            rec(all(act_cell(x) == "—" for x in ("123456", "123456.01")),
+                "VT-REL-01 非叶子显示「—」（活动只能挂最底层元素）")
+
+            # VT-REL-02 点「1 条」→ 跳到进度活动台账并**按该元素筛选**
+            row_of(page, "123456.01.01").locator('[data-role="act-entry"]').click()
+            page.wait_for_selector('[data-role="f-wbs"]', timeout=10000)
+            page.wait_for_timeout(1000)
+            rec(page.input_value('[data-role="f-wbs"]') == "123456.01.01",
+                "VT-REL-02 跳过去带着「挂靠元素」筛选：" + page.input_value('[data-role="f-wbs"]'))
+            n = page.locator(".scroll-x table.tbl tr.data").count()
+            rec(n == 1, f"VT-REL-02 活动台账只剩该元素下的 1 条（实际 {n} 行）")
+
+            # VT-REL-03 点「加活动」→ 跳到活动台账、**新建模态已开且元素已预选**
+            page.evaluate("location.hash = '#/wbs'")
+            page.wait_for_selector("table.tbl tr.data", timeout=10000)
+            page.wait_for_timeout(800)
+            row_of(page, "123456.02").locator('[data-role="act-entry"]').click()
+            page.wait_for_selector('.modal-mask:visible [data-role="form-wbs"]', timeout=10000)
+            rec(page.input_value('[data-role="form-wbs"]') == "123456.02",
+                "VT-REL-03 「加活动」跳过去：新建模态已开、挂靠元素已预选 123456.02")
+            close_modal(page)
+            page.evaluate("location.hash = '#/wbs'")          # §7 版式要在**本页**量
+            page.wait_for_selector("table.tbl tr.data", timeout=10000)
+            page.wait_for_timeout(800)
+
+            # ── §7 版式（VT-LAYOUT-01..03，2026-09-26 增补）──────────────────
             # 判据来源：本页 15 列**同时铺开**时表格最小内容宽 1380px > 卡片 1238px（1500 宽 ·
             #   右栏收起实测），浏览器只能把最后一列「操作」压到 48px → 四个按钮竖排 →
             #   行高从 39px 涨到 223px，整页看着散架。下面是修完后的固化判据。
             # ⚠ 量版式必须**说清画布**：默认 context 是 1280×720 且 Agent 右栏默认展开 ——
             #   那是"更窄的另一种版式"，所以本段显式两档量（默认档 + 1920 档），且量完还原。
-            step("§6 版式（VT-LAYOUT-01..03）")
+            step("§7 版式（VT-LAYOUT-01..03）")
 
             def _layout(pg):
                 return pg.evaluate("""() => {
@@ -561,7 +608,7 @@ def main():
             for _ig in ignored:
                 rec(("/favicon.ico" in _ig or ".map" in _ig), f"豁免理由成立：{_ig[:90]}")
 
-            step("§7 硬件指标（VT-HW-90）")
+            step("§8 硬件指标（VT-HW-90）")
             rec(not errors, f"0 console error / 0 pageerror / 0 HTTP≥400（实际 {len(errors)}）")
             for e in errors[:6]:
                 print("      ✗", e)

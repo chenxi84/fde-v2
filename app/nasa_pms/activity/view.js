@@ -91,7 +91,30 @@ export default function pageActivity() {
       }));
       self.tpl = tpl;
       await Promise.all([self.loadLeaves(), self.loadCrs(), self.loadOwners(), self.loadCals()]);
+      await self.applyPreset();                    // WBS 侧跳过来带的预置（叶子 / 新建）
       await self.list.load();
+    },
+
+    /** WBS 台账跳过来的预置：`fde.activity_preset` = `{wbs_no, mode}`（mode = filter | new）。
+     *
+     *  ⚠ 跨页传参走 sessionStorage 而不是 hash —— 平台的 route key 取的是**整段 hash**
+     *  （`location.hash.replace(/^#\//,"")`），写成 `#/activity?wbs=x` 会变成页名
+     *  `activity?wbs=x` 匹配不上任何页，直接白屏。读完即清，二次进入不再弹。
+     */
+    async applyPreset() {
+      let raw = null;
+      try { raw = sessionStorage.getItem("fde.activity_preset"); } catch { raw = null; }
+      if (!raw) return;
+      try { sessionStorage.removeItem("fde.activity_preset"); } catch { /* 忽略 */ }
+      let p = null;
+      try { p = JSON.parse(raw); } catch { p = null; }
+      if (!p || !p.wbs_no) return;
+      if (!self.leaves.some((x) => x.wbs_no === p.wbs_no)) {
+        toast(`WBS 元素 ${p.wbs_no} 不是叶子元素，活动只能挂最底层元素`);
+        return;
+      }
+      if (p.mode === "new") { self.openForm("activity"); self.form.wbs_no = p.wbs_no; }
+      else { self.f_wbs = p.wbs_no; }              // filter：挂靠元素筛选，随后的 list.load 生效
     },
 
     async loadLeaves() {

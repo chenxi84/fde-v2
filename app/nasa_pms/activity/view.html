@@ -17,6 +17,15 @@
         <option value="activity">活动</option>
         <option value="milestone">里程碑</option>
       </select>
+      <!-- 挂靠元素筛选：候选是**动态**的（叶子随 WBS 变），所以用 input+datalist（枚举下拉才写静态 option）；
+           这一栏也是 WBS 台账「N 条 / 加活动」跳过来的落点 —— 跳过来能看见自己筛在哪条元素上 -->
+      <input data-role="f-wbs" x-model="f_wbs" list="act-leaf-options" @change="search()"
+        placeholder="挂靠元素（WBS 叶子）" style="width:170px">
+      <datalist id="act-leaf-options">
+        <template x-for="l in leaves" :key="'lf' + l.wbs_no">
+          <option :value="l.wbs_no" x-text="l.wbs_no + ' · ' + (l.title || '')"></option>
+        </template>
+      </datalist>
       <input x-model="f_keyword" @keydown.enter="search()" placeholder="编号 / 名称 / 挂靠元素"
         style="width:170px">
       <button class="b-ghost b-sm" @click="search()">搜索</button>
@@ -37,10 +46,11 @@
     </div>
   </div>
 
-  <!-- 网络体检面板：四类图论问题 + 一类跨应用问题（都是服务现算） -->
+  <!-- 网络体检面板：五类图论/格式问题 + 两类跨应用问题（都是服务现算） -->
   <div data-role="network-check" x-show="check" x-cloak style="padding:4px 16px 12px">
     <div class="muted" style="font-size:12px;margin-bottom:6px">
-      网络体检 —— 开口端 / 冗余链接 / 环 / 工期异常 / 挂靠非叶子（材料 §5.5.8 的横向可追溯）
+      网络体检 —— 开口端 / 冗余链接 / 环 / 工期异常 / 关系不合法 / 挂靠非叶子 / **叶子无活动**
+      （材料 §5.5.8 的横向可追溯 + WBS 手册 §4 的"每个最底层元素至少一条活动"）
     </div>
     <div class="stats">
       <div class="s"><div class="v" data-role="check-total" x-text="check ? check.total : 0"></div>
@@ -49,10 +59,18 @@
       <div class="s"><div class="v" x-text="check ? check.redundant.length : 0"></div><div class="k">冗余链接</div></div>
       <div class="s"><div class="v" x-text="check ? check.cycles.length : 0"></div><div class="k">环</div></div>
       <div class="s"><div class="v" x-text="check ? check.non_leaf.length : 0"></div><div class="k">挂靠非叶子</div></div>
+      <!-- ⚠ `(… || [])` 不是多余的防御：后端是**另一个进程**里的模块，改完不重启服务就还是老返回 ——
+           裸写 `check.no_activity.length` 会当场喷 "Cannot read properties of undefined"（0 报错是硬指标） -->
+      <div class="s"><div class="v" data-role="check-noact"
+        x-text="check ? (check.no_activity || []).length : 0"></div><div class="k">叶子无活动</div></div>
     </div>
     <template x-if="check && check.open_ends.length">
       <div class="tagline" data-role="check-open-ends"
         x-text="'开口端：' + check.open_ends.map(x => x.act_no + '（缺' + x.missing + '）').join('、')"></div>
+    </template>
+    <template x-if="check && (check.no_activity || []).length">
+      <div class="tagline" data-role="check-no-activity"
+        x-text="'叶子无活动：' + check.no_activity.map(x => x.wbs_no + '（' + x.title + '）').join('、')"></div>
     </template>
   </div>
 

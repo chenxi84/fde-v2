@@ -14,7 +14,7 @@ baseline(act_nos*, project_start=None:string, calendar_no=None:string)
 change(act_no*, change_no*, note=None:string)
     — 对已基线的活动发起修订：挂上**已批准**的变更号（跨应用只读校验 `change_request.get`）。
 check_network()
-    — 网络体检：返回**图论与格式可判**的问题 + 一类跨应用问题。
+    — 网络体检：返回**图论与格式可判**的问题 + 两类跨应用问题（挂靠非叶子 / 叶子无活动）。
 create(name*, wbs_no*, duration_days=1:integer, kind='activity':string, predecessors=None:string, owner=None:string, phase=None:string, note=None:string)
     — 建一个活动（或汇总活动）。编号系统生成；`wbs_no` 必须是 **WBS 的叶子元素**。
 create_calendar(name*, unit='days':string, holidays=None:string, is_default=False:boolean)

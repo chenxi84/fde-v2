@@ -52,6 +52,11 @@ export default function pageWbs() {
     // 候选集 —— 跨应用只读（**值仍是文本**）：责任人 ← stakeholder、变更号 ← change_request
     owners: [],
     crs: [],
+    // 每个叶子元素下的活动数（跨应用只读 `activity.list`，**只读不写**；见 architecture.md 方向表）
+    acts: {},
+    // ⚠ 是**父号集合**（谁当过父），不是"子号集合" —— 判叶子要问「我自己有孩子吗」。
+    //   写成"把每个 child 塞进去"会把**叶子本身**也收进来（它也是别人的孩子），实测当场判错。
+    parentSet: new Set(),
 
     kinds: KINDS,
     kindName(v) { const k = KINDS.find((x) => x[0] === v); return k ? k[1] : (v || "—"); },
@@ -92,8 +97,9 @@ export default function pageWbs() {
       self.tpl = tpl;
       await self.loadOwners();
       await self.loadCrs();
-      await self.list.load();
       await self.loadTree();
+      await self.loadActCounts();
+      await self.list.load();
     },
 
     /** 责任人候选（`stakeholder` 主数据）：只做候选、值仍是**文本姓名**
@@ -118,10 +124,31 @@ export default function pageWbs() {
       try {
         self.tree = await svc("wbs", "tree", {}, { quiet: true }) || [];
       } catch { self.tree = []; }
+      const parents = new Set();
+      const walk = (rows) => (rows || []).forEach((r) => {
+        if ((r.children || []).length) parents.add(r.wbs_no);
+        walk(r.children);
+      });
+      walk(self.tree);
+      self.parentSet = parents;
+    },
+
+    /** 每个叶子元素下的活动数（跨应用**只读**一次取全表，在内存里归并 —— 不按行发 N 次请求）。
+     *  取不到就退化成 0 条（只是读数缺失，页面照常用；不喷 toast）。 */
+    async loadActCounts() {
+      try {
+        const r = await svc("activity", "list", { size: 9999 }, { quiet: true });
+        const m = {};
+        for (const a of ((r && r.items) || [])) m[a.wbs_no] = (m[a.wbs_no] || 0) + 1;
+        self.acts = m;
+      } catch { self.acts = {}; }
     },
 
     search() { self.list.load(1); },
-    async reload() { await self.list.load(self.list.page); await self.loadTree(); },
+    async reload() {
+      await self.list.load(self.list.page);
+      await Promise.all([self.loadTree(), self.loadActCounts()]);
+    },
     switchView(v) { self.view = v; if (v === "tree") self.loadTree(); },
 
     /** 树视图的**缩进索引**（材料 §3.4.4 图 3-12：缩进列出以体现层级） */
@@ -134,6 +161,23 @@ export default function pageWbs() {
       return out;
     },
     treeRows() { return self.flat(self.tree, 0); },
+
+    /* ── 元素与活动的关系（材料 WBS 手册 §4：每个最底层元素至少一条活动/里程碑）──
+       读数与入口都做成**跨应用只读**：本页看得到、点得动，但**不写** `activity` 的聚合
+       —— 全仓的视图层跨应用调用一律只读，第一条写边不从这里开。 */
+    isLeaf(d) { return !!d && !self.parentSet.has(d.wbs_no); },
+    actCount(d) { return (d && self.acts[d.wbs_no]) || 0; },
+    /** 叶子且一条活动都没有 —— 对应材料 §4 那条，标出来（前端只做提示，判据在后端体检） */
+    noActivity(d) { return self.isLeaf(d) && self.actCount(d) === 0 && d.status !== "closed"; },
+    canAddActivity(d) { return self.isLeaf(d) && !!d && d.status !== "closed"; },
+    /** 跳到进度活动台账去建/看（**只读跳转**：写活动仍由 `activity` 页自己做） */
+    jumpActivity(d, mode) {
+      try {
+        sessionStorage.setItem("fde.activity_preset",
+                               JSON.stringify({ wbs_no: d.wbs_no, mode: mode || "filter" }));
+      } catch { /* 存不进就退化成普通跳转 */ }
+      location.hash = "#/activity";
+    },
 
     /* ── 详情 / 编辑 ──────────────────────────────────── */
     async openDetail(row, mode) {

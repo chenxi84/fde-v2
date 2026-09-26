@@ -148,11 +148,15 @@ def main():
               phase="finish")
     record(m2["act_no"] == "ACT-004" and m2["phase"] == "finish", f"{m2['act_no']} 完成里程碑")
 
-    step("TC-05 网络体检：干净网络应报 0 个问题")
+    step("TC-05 网络体检：网络本身干净，唯一的问题是「叶子还没活动」")
     chk = call("check_network")
-    record(chk["total"] == 0 and chk["activities"] == 4,
+    # 材料 §4（WBS 手册）："The lowest level of each WBS element should have at least one task
+    # or activity" —— 800000.02 此刻还没有活动，所以它**必须**被报出来；其余六类必须全空。
+    record(chk["total"] == 1 and chk["activities"] == 4,
            f"体检 total={chk['total']}（活动 {chk['activities']} 条）")
-    for k in ("open_ends", "redundant", "cycles", "bad_duration", "non_leaf"):
+    record([x["wbs_no"] for x in chk["no_activity"]] == ["800000.02"],
+           f"叶子无活动 = {chk['no_activity']}")
+    for k in ("open_ends", "redundant", "cycles", "bad_duration", "bad_rel", "non_leaf"):
         record(chk[k] == [], f"体检 · {k} 为空")
 
     step("TC-06 派生排程：日期由逻辑与工期**正推**（工作日），浮时与关键路径")
@@ -233,6 +237,8 @@ def main():
     step("TC-12 挂靠另一棵叶子也能建（换一个叶子元素）")
     a5 = call("create", name="热控涂层", wbs_no="800000.02", duration_days=2, phase="start")
     record(a5["wbs_no"] == "800000.02", f"{a5['act_no']} 挂到 800000.02")
+    record([x["wbs_no"] for x in call("check_network")["no_activity"]] == [],
+           "该叶子建了活动后，从「叶子无活动」里消失")
 
     # ── §2 负例（BR 逐条） ────────────────────────────────
     step("TC-13 BR-01 开口端：体检能报出来")
@@ -413,6 +419,15 @@ def main():
     v_days = call("schedule_view", project_start="2026-10-05")
     record(v_days["unit"] == "days" and v_days["project_finish"] != v_ed["project_finish"],
            f"工作日口径完工 {v_days['project_finish']} ≠ 日历天口径 {v_ed['project_finish']}")
+
+    # ── §4 反方向判据：叶子无活动（2026-09-26 增补，材料 WBS 手册 §4 原话）──
+    step("TC-36 反方向：新叶子进报告 → 建了活动就出报告")
+    call_wbs("add_child", parent_no="800000", title="测控分系统")
+    before = sorted(x["wbs_no"] for x in call("check_network")["no_activity"])
+    record("800000.03" in before, f"新建的叶子立刻进报告：{before}")
+    call("create", name="测控应答机联试", wbs_no="800000.03", duration_days=4, phase="start")
+    after = sorted(x["wbs_no"] for x in call("check_network")["no_activity"])
+    record("800000.03" not in after, f"建了活动就出报告（报告里还剩 {after}）")
 
     # ── 汇总 ─────────────────────────────────────────────
     bad = [r for r in RESULTS if not r[0]]

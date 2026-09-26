@@ -116,6 +116,10 @@ SEED_JS = r"""async () => {
   await call(WBS, "add_child", {parent_no: "900000", title: "热控分系统"});
   await call(WBS, "update", {wbs_no: "900000.01", scope_ref: "SOW §9.1"});
   await call(WBS, "update", {wbs_no: "900000.02", scope_ref: "SOW §9.2"});
+  // 第三个叶子**故意不给活动**：体检面板的「叶子无活动」要有一个能报出来的样本
+  // （材料 WBS 手册 §4："The lowest level of each WBS element should have at least one task
+  //  or activity"）
+  await call(WBS, "add_child", {parent_no: "900000", title: "地面支持分系统"});
 
   const ci = await call(CI, "create", {name: "进度基线对象", ci_type: "document"});
   const cr = await call(CR, "create", {title: "进度调整", requester: "进度组",
@@ -293,10 +297,11 @@ def main():
             seed = page.evaluate(SEED_JS)
             # VT-ROUTE-01 标题「进度活动台账」可见
             rec(bool(seed and seed.get("seeded")),
-               "900000（父）/ 900000.01 / 900000.02；CR 已批准；ACT-001..005（含一条开口端）")
+               "900000（父）/ 900000.01 / 900000.02 / 900000.03（无活动）；CR 已批准；"
+               "ACT-001..005（含一条开口端）")
 
             # ── §1 渲染与入口 ────────────────────────────────
-            step("§1 渲染与入口（VT-ROUTE-01..04）")
+            step("§1 渲染与入口（VT-ROUTE-01..05）")
             page.evaluate("location.hash = '#/activity'")
             page.wait_for_selector('button:has-text("新建活动")', timeout=10000)
             page.wait_for_timeout(900)
@@ -317,17 +322,25 @@ def main():
             # VT-CHECK-11 问题合计 = {total.strip
             rec("里程碑" in r4 and "计划" in r4 and "未基线" in r4,
                 "VT-ROUTE-04 ACT-004：里程碑 / 计划 / 未基线")
+            # VT-ROUTE-05 「挂靠元素」筛选框在（WBS 台账的「N 条 / 加活动」跳过来就落在这里；
+            #   跳转后的**行为**在 wbs 的 e2e 里验 —— 见 `wbs/前端测试用例.md` §6，此处只验入口）
+            rec(page.locator('[data-role="f-wbs"]').count() == 1,
+                "VT-ROUTE-05 「挂靠元素」筛选框在（WBS 跳转的落点）")
 
             # ── §2 网络体检 ─────────────────────────────────
-            step("§2 网络体检（VT-CHECK-11..12）")
+            step("§2 网络体检（VT-CHECK-11..13）")
             page.click('button:has-text("网络体检")')
             page.wait_for_selector('[data-role="network-check"]:visible', timeout=8000)
-            total = wait_text(page.locator('[data-role="check-total"]'), "2", timeout=6000)
+            total = wait_text(page.locator('[data-role="check-total"]'), "3", timeout=6000)
             # VT-CHECK-12 开口端点名 ACT-005
-            rec(total.strip() == "2", f"VT-CHECK-11 问题合计 = {total.strip()}（ACT-005 缺前置 + 缺后续）")
+            rec(total.strip() == "3",
+                f"VT-CHECK-11 问题合计 = {total.strip()}（ACT-005 缺前置 + 缺后续 + 900000.03 无活动）")
             oe = page.locator('[data-role="check-open-ends"]').inner_text()
-            # VT-SCH-21 派生日期非空且形如 YYYY-MM-DD
+            # VT-CHECK-13 叶子无活动点名 900000.03
             rec("ACT-005" in oe, f"VT-CHECK-12 开口端点名 ACT-005：{oe[:60]}")
+            na = page.locator('[data-role="check-no-activity"]').inner_text()
+            rec("900000.03" in na,
+                f"VT-CHECK-13 叶子无活动点名 900000.03（材料 WBS 手册 §4）：{na[:60]}")
 
             # ── §3 排程视图（派生）────────────────────────────
             step("§3 排程视图（VT-SCH-21..24）")

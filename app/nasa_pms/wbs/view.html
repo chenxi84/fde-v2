@@ -54,10 +54,11 @@
       <tr>
         <th>元素编号</th><th>元素名称</th><th>类型</th><th>层级</th><th>父元素</th>
         <th>状态</th><th>版次</th><th>责任方</th><th>范围定义出处</th><th>关联需求</th>
+        <th>活动</th>
         <th>内容描述</th><th>规范号</th><th>预算与报告号</th><th>修订授权</th><th>操作</th>
       </tr>
       <template x-if="!list.items.length">
-        <tr><td colspan="15" class="empty">暂无元素 —— 点「新建顶层元素」登记第一个工作包</td></tr>
+        <tr><td colspan="16" class="empty">暂无元素 —— 点「新建顶层元素」登记第一个工作包</td></tr>
       </template>
       <template x-for="d in list.items" :key="d.wbs_no">
         <tr class="data">
@@ -73,6 +74,26 @@
           <td style="max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
             x-text="dash(d.scope_ref)"></td>
           <td class="mono" x-text="dash(d.req_nos)"></td>
+          <!-- 活动（跨应用**只读**读数 + 入口）：叶子才谈得上"它下面有哪些活动"。
+               · 一条都没有 → 琥珀色「加活动」→ 跳到进度活动台账并**预选本元素、自动开新建模态**
+               · 已有 N 条  → 「N 条」→ 跳到进度活动台账并**按本元素筛选**
+               材料依据：WBS 手册 §4 "The lowest level of each WBS element should have at least
+               one task or activity"；两个动作都只是**跳转**，写活动的仍是 `activity` 页自己
+               （视图层跨应用调用一律只读 —— 见 architecture.md 的方向表）。 -->
+          <td class="mono" data-role="act-cell">
+            <template x-if="isLeaf(d)">
+              <button class="b-link" data-role="act-entry"
+                :style="noActivity(d) ? 'color:#b45309;font-weight:700' : ''"
+                :title="noActivity(d)
+                  ? '这个最底层元素还没有活动 —— 点它去建一条（材料 WBS 手册 §4）'
+                  : '看这个元素下的活动（跳到进度活动台账并按元素筛选）'"
+                @click="noActivity(d) ? jumpActivity(d, 'new') : jumpActivity(d, 'filter')"
+                x-text="noActivity(d) ? '加活动' : (actCount(d) + ' 条')"></button>
+            </template>
+            <template x-if="!isLeaf(d)">
+              <span class="muted" title="活动只能挂在最底层元素上（BR-05）">—</span>
+            </template>
+          </td>
           <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
             x-text="dash(d.description)"></td>
           <td class="mono" x-text="dash(d.spec_no)"></td>
