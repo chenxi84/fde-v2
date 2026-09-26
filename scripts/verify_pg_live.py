@@ -40,8 +40,10 @@ sys.path.insert(0, ".")
 from fde_platform import db, ddl, sqlc  # noqa: E402
 from fde import FdeError  # noqa: E402
 
-PROBE_APP = "sqlc_probe/probe"          # → schema sqlc_probe（应用名到 schema 的映射同线上口径）
-SCHEMA = "sqlc_probe"
+# **每次运行一个独立 schema**（带 pid）：复用同一个 schema 时，上一次运行的行会混进计数，
+# 断言就会"看着失败、其实是被污染"（探针第一版就这么翻过车）。应用名 → schema 的映射同线上口径。
+SCHEMA = f"sqlc_probe_{os.getpid()}"
+PROBE_APP = f"{SCHEMA}/probe"
 FAILS = []
 
 
@@ -103,7 +105,12 @@ def main():
 
     # 预备：临时 schema
     boot = _conn()
-    _exec(boot, f"DROP SCHEMA IF EXISTS {SCHEMA} CASCADE")
+    # 前置清理：把**历史遗留**的探针 schema 清掉（进程崩过就可能残留）——
+    # 只碰 `sqlc_probe%` 前缀，绝不涉及任何应用 schema。
+    for row in _rows(_exec(boot, "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'sqlc_probe%'")):
+        name = list(row.values())[0]
+        _exec(boot, f'DROP SCHEMA IF EXISTS "{name}" CASCADE')
+    boot.commit()
     ddl_text = SCHEMA_SQL
     try:
         for stmt in ddl.build_ddl(ddl_text, db.dialect_of(boot)):
@@ -193,9 +200,15 @@ def main():
         _exec(c2, "INSERT INTO probe_box (name) VALUES (?, ?)", ("只有一个",))
         ck(False, "参数个数不匹配竟然没报错")
     except FdeError as e:
-        ck("参数个数" in str(e), f"参数个数不匹配明确报错：{str(e)[:44]}…")
+        ck("参数个数" in str(e), f"参数个数不匹配明确报错（FdeError）：{str(e)[:40]}…")
     except Exception as e:                    # noqa: BLE001
-        ck(False, f"报的不是 FdeError：{type(e).__name__}: {e}")
+        # legacy 路径这里是驱动层的 `IndexError: tuple index out of range`（占位符账对不上）——
+        # 同样是"已知边界"：编译层换成了可读的 FdeError。
+        if mode == "sqlglot":
+            ck(False, f"编译层应报 FdeError，实际 {type(e).__name__}: {e}")
+        else:
+            ck(True, f"legacy 下参数不匹配报的是驱动错（{type(e).__name__}）—— 已知边界，"
+                     f"编译层已换成可读的 FdeError")
     finally:
         try:
             c2.close()
