@@ -89,6 +89,108 @@ def _rows(cur):
     return out
 
 
+SHAPES = [
+    # (说明, SQL, 参数) —— 全是应用里真实出现过的写法类别
+    ("UPDATE 带子查询", "UPDATE probe_box SET note = ? WHERE name IN "
+                       "(SELECT name FROM probe_box WHERE name = ?)", ("改", "乙")),
+    ("聚合 + 分组", "SELECT COUNT(*) AS n, MAX(name) AS mx FROM probe_box", ()),
+    ("CTE", "WITH c AS (SELECT name FROM probe_box WHERE note = ?) SELECT COUNT(*) AS n FROM c",
+     ("首行",)),
+    ("LIKE 带下划线通配", "SELECT COUNT(*) AS n FROM probe_box WHERE name LIKE ?", ("_",)),
+    ("IN + 多占位符", "SELECT COUNT(*) AS n FROM probe_box WHERE name IN (?, ?)", ("乙", "丙")),
+    ("ORDER BY + LIMIT", "SELECT name FROM probe_box ORDER BY name LIMIT 2 OFFSET 0", ()),
+    ("INSERT…SELECT", "INSERT INTO probe_box (name, note) SELECT name || ? , ? FROM probe_box "
+                      "WHERE name = ?", ("-副本", "由 SELECT 来", "乙")),
+    ("DELETE 带条件", "DELETE FROM probe_box WHERE name = ?", ("丙",)),
+]
+
+
+def _shape_batch(mode):
+    """第二批语句形态：只验"不报错"，具体结果由 §6 的差分比对负责。"""
+    c = _conn()
+    try:
+        ok = 0
+        for label, sql, params in SHAPES:
+            try:
+                _exec(c, sql, params)
+                c.commit()
+                ok += 1
+            except Exception as e:                     # noqa: BLE001
+                c.rollback()                           # PG：失败语句会中止事务
+                ck(False, f"{mode} · {label} 失败：{type(e).__name__}: {str(e)[:50]}")
+        ck(True, f"{mode} · {ok}/{len(SHAPES)} 条形态执行完成（多行 VALUES 等已知边界不在本批）")
+    finally:
+        c.close()
+
+
+DIFF_SQL = [
+    ("INSERT 单行", "INSERT INTO probe_box (name, note) VALUES (?, ?)", ("甲", "一")),
+    ("INSERT 多行", "INSERT INTO probe_box (name, note) VALUES (?, ?), (?, ?)",
+     ("乙", "二", "丙", "三")),
+    ("UPDATE 带子查询", "UPDATE probe_box SET note = ? WHERE name IN "
+                       "(SELECT name FROM probe_box WHERE name = ?)", ("改过", "甲")),
+    ("LIKE 模糊搜索", "SELECT name, note FROM probe_box WHERE name LIKE '%' || ? || '%' ORDER BY name",
+     ("乙",)),
+    ("聚合", "SELECT COUNT(*) AS n FROM probe_box", ()),
+    ("INSERT…SELECT", "INSERT INTO probe_box (name, note) SELECT name || ?, ? FROM probe_box "
+                      "WHERE name = ?", ("-副本", "由 SELECT 来", "乙")),
+]
+
+
+def _diff_run(tag):
+    """用**当前口径**在 tag 自己的 schema 里跑一遍 DIFF_SQL，返回结果快照。"""
+    global SCHEMA, PROBE_APP, APP_SCHEMA
+    SCHEMA, PROBE_APP = f"sqlc_probe_{os.getpid()}_{tag}", f"sqlc_probe_{os.getpid()}_{tag}/probe"
+    APP_SCHEMA = PROBE_APP.replace("/", "_")
+    c = _conn()
+    out = []
+    try:
+        for stmt in ddl.build_ddl(SCHEMA_SQL, db.dialect_of(c)):
+            _exec(c, stmt)
+        c.commit()
+        for label, sql, params in DIFF_SQL:
+            cur = _exec(c, sql, params)
+            c.commit()
+            if sql.strip().upper().startswith("SELECT"):
+                out.append((label, [tuple(r.values()) for r in _rows(cur)]))
+        rows = _rows(_exec(c, "SELECT name, note, created_by, updated_by, created_at FROM probe_box "
+                              "ORDER BY name"))
+        for r in rows:                                  # 时间戳归一（两条路差几秒，不该算差异）
+            for k in ("created_at", "updated_at"):
+                if r.get(k):
+                    r[k] = "<ts>"
+        return out, rows
+    finally:
+        c.close()
+
+
+def _differential():
+    """差分 oracle：同一批语句，legacy 与编译层**结果必须逐行一致**。
+
+    为什么值得留着：它把"legacy 分支"从"随时能退回去的保命绳"变成**对照基准** ——
+    编译层任何语义漂移（多补/漏补审计值、占位符错位、方言改写过头）都会在这里现形，
+    而且是在**真 PG** 上。灰度过完、两边长期不打架，就可以把 legacy 与这段一起删。
+    """
+    keep, keep_backend = os.environ.get("FDE_SQL_COMPILER"), db._PG_BACKEND
+    db._PG_BACKEND = None                      # 让每个 tag 自己建 backend（口径要跟着环境变量走）
+    try:
+        os.environ["FDE_SQL_COMPILER"] = "legacy"
+        a_sel, a_rows = _diff_run("legacy")
+        db._PG_BACKEND = None
+        os.environ["FDE_SQL_COMPILER"] = "sqlglot"
+        b_sel, b_rows = _diff_run("compile")
+    finally:
+        if keep is None:
+            os.environ.pop("FDE_SQL_COMPILER", None)
+        else:
+            os.environ["FDE_SQL_COMPILER"] = keep
+        db._PG_BACKEND = keep_backend
+    ck(a_rows == b_rows, f"差分：两口径落库结果逐行一致（{len(a_rows)} 行）"
+                         + ("" if a_rows == b_rows else f" ｜ legacy={a_rows[:2]} ｜ compile={b_rows[:2]}"))
+    ck(a_sel == b_sel, f"差分：两口径 SELECT 结果一致（{len(a_sel)} 条查询）"
+                       + ("" if a_sel == b_sel else f" ｜ legacy={a_sel} ｜ compile={b_sel}"))
+
+
 def main():
     print("== 前置 ==")
     # ⚠ 判据用 `_PG_AVAILABLE`（DATABASE_URL 是否指向 PG），**不能**直接用 `using_postgresql()`：
@@ -223,9 +325,17 @@ def main():
         except Exception:                     # noqa: BLE001
             pass
 
-    print("== 5. 清理（只用临时 schema，不碰任何应用数据）==")
+    print("== 5. 第二批形态（两边都要支持：子查询 / CTE / 聚合 / LIMIT / DELETE …）==")
+    _shape_batch(mode)
+
+    print("== 6. 差分 oracle：legacy 与编译层**结果必须一致** ==")
+    _differential()
+
+    print("== 7. 清理（只用临时 schema，不碰任何应用数据）==")
     try:
         z = _conn()
+        for tag in ("legacy", "compile"):
+            _exec(z, f'DROP SCHEMA IF EXISTS "sqlc_probe_{os.getpid()}_{tag}_probe" CASCADE')
         _exec(z, f'DROP SCHEMA IF EXISTS "{APP_SCHEMA}" CASCADE')
         z.commit()
         z.close()
