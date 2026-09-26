@@ -175,6 +175,27 @@ def _rename_placeholders_in_text(sql: str) -> tuple:
     return out, len(ph)
 
 
+def _normalize_conflict_keys(e) -> None:
+    """去掉冲突目标上的**排序修饰符**（`ON CONFLICT(a NULLS FIRST)` 这类）。
+
+    为什么需要（2026-09-27 在真 PG 上实测）：sqlglot 的 **sqlite 解析器**把 `ON CONFLICT(a)`
+    解析成 `Ordered(this=Column(a), nulls_first=True)`（SQLite 语法里"带可选排序的索引列"的产物），
+    而 **postgres 生成器**会忠实渲染那个修饰符 ⇒ 编译出 `ON CONFLICT(a NULLS FIRST)`，
+    **PG 直接语法错**（实测：`syntax error at or near "NULLS"`）。SQLite 侧渲染恰好忽略它，所以本地看不出来
+    —— 又一个"只在 PG 上现形"的形态。
+
+    语义上该去掉：冲突目标（conflict target）在任何方言里都**不接受** `NULLS FIRST/LAST` 或 `DESC`
+    （它是"匹配哪个唯一索引"，不是排序）。去掉包装、留内层列即可。
+
+    ⚠ 顺带说明：`app/psc/sales_forecast/sales_forecast.py:458` 的注释写着"先删后插，避免依赖
+    ON CONFLICT 的方言差异" —— 前人正是绕开了这个坑；本函数把它补上，让这种写法重新可用。
+    """
+    for oc in e.find_all(exp.OnConflict):
+        keys = oc.args.get("conflict_keys") or []
+        if any(isinstance(k, exp.Ordered) for k in keys):
+            oc.set("conflict_keys", [k.this if isinstance(k, exp.Ordered) else k for k in keys])
+
+
 def _escape_percent(e) -> None:
     """把**字符串字面量**里的 `%` 转义成 `%%`（只给 %-插值驱动用）。
 
@@ -284,6 +305,7 @@ def _compile_cached(sql_text: str, dialect: str, pk_col, audit: bool):
 
     injected = _inject_audit(e, dialect) if audit else False
     _time_funcs(e, dialect)                    # SQLite 专有时间函数 → 目标方言（与 DDL 同一口径）
+    _normalize_conflict_keys(e)                # 冲突目标不许带排序修饰符（PG 上会语法错）
     # ⚠ 转义要看**驱动会不会插值**：psycopg2 / pymysql 只在**传了参数**时才做 %-插值，
     #   不传参数时 `%` 就是普通字符 —— 无脑转义会把 `'%'` 变成 `'%%'`（LIKE 模式当场变错，
     #   而且这种错**只在不带参数的查询上出现**，最难发现）。

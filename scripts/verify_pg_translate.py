@@ -251,6 +251,17 @@ cmp_sql("⑭ INSERT 无列清单", "INSERT INTO t DEFAULT VALUES", (), "sqlite",
         expect_err="没有列清单")
 cmp_sql("⑭ 语法错", "SELECT FROM WHERE", (), "sqlite", expect_err="SQL 无法解析")
 
+# ⑳ UPSERT：冲突目标**不许带排序修饰符**（2026-09-27 在真 PG 上实测到的编译层缺陷）
+#    根因：sqlglot 的 sqlite 解析器把 `ON CONFLICT(a)` 解析成 `Ordered(..., nulls_first=True)`，
+#    而 postgres 生成器忠实渲染 ⇒ `ON CONFLICT(a NULLS FIRST)` ⇒ **PG 语法错**（SQLite 侧恰好忽略它，
+#    所以本地看不出来）。修法：编译层归一冲突目标（`sqlc._normalize_conflict_keys`）。
+#    ⚠ 应用里目前没人用 UPSERT —— `sales_forecast.py:458` 的注释写着"先删后插，避免依赖 ON CONFLICT
+#      的方言差异"，前人正是绕开了这个坑。
+_upsert = "INSERT INTO t (a,b) VALUES (?, ?) ON CONFLICT(a) DO UPDATE SET b = ?"
+for _d in ("sqlite", "postgres"):
+    cmp_sql(f"⑳ UPSERT 冲突目标无排序修饰符 [{_d}]", _upsert, ("1", "2", "3"), _d,
+            want_in=("ON CONFLICT", "DO UPDATE"), raw_not_in=("NULLS FIRST", "NULLS LAST"))
+
 # ⑮ 缓存**只缓存 SQL 与参数计划，绝不缓存参数值**
 _s1, _p1, _m1 = sqlc.compile_sql("UPDATE t SET a = ? WHERE id = ?", (1, 2), {"userno": "甲"})
 _s2, _p2, _m2 = sqlc.compile_sql("UPDATE t SET a = ? WHERE id = ?", (1, 2), {"userno": "乙"})
