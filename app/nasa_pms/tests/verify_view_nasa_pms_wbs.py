@@ -419,7 +419,15 @@ def main():
             r = wait_text(row_of(page, "123456"), "已基线", timeout=6000)
             # VT-ACT-24 修订授权列记下 CR-001
             rec("已基线" in r and "v1" in r, "VT-ACT-24 落实变更后回到已基线、版次 v1")
-            rec("CR-001" in r, "VT-ACT-24 修订授权列记下 CR-001")
+            # VT-ACT-24 落实变更把批准号写进「修订授权」
+            #   ⚠ 「修订授权」已列入 `col_default_hidden`（版式需要，见 §7）—— 平台列隐藏走
+            #     `display:none`，而 `inner_text()` **不含未渲染内容**：藏着断言会**静默读空**。
+            #     所以取证改走**详情模态**（同组 technical_measure 页面对同一陷阱的处理）。
+            row_of(page, "123456").locator('button:has-text("详情")').click()
+            page.wait_for_selector('.modal-mask:visible [data-role="modal-rev-auth"]', timeout=8000)
+            auth = page.locator('[data-role="modal-rev-auth"]').inner_text()
+            rec("CR-001" in auth, "VT-ACT-24 修订授权记下 CR-001（详情模态：" + auth.strip()[:16] + "）")
+            close_modal(page)
 
             btn = row_of(page, "123456.01.01").locator('button:has-text("纳入基线")')
             # VT-ACT-25 BR-03 无范围出处 → 「纳入基线」**禁用
@@ -508,11 +516,52 @@ def main():
             page.wait_for_selector("table.tbl", timeout=8000)
             rec(page.locator("table.tbl tr.data").count() == 6, "VT-TREE-43 切回列表视图正常")
 
+            # ── §6 版式（VT-LAYOUT-01..03，2026-09-26 增补）──────────────────
+            # 判据来源：本页 15 列**同时铺开**时表格最小内容宽 1380px > 卡片 1238px（1500 宽 ·
+            #   右栏收起实测），浏览器只能把最后一列「操作」压到 48px → 四个按钮竖排 →
+            #   行高从 39px 涨到 223px，整页看着散架。下面是修完后的固化判据。
+            # ⚠ 量版式必须**说清画布**：默认 context 是 1280×720 且 Agent 右栏默认展开 ——
+            #   那是"更窄的另一种版式"，所以本段显式两档量（默认档 + 1920 档），且量完还原。
+            step("§6 版式（VT-LAYOUT-01..03）")
+
+            def _layout(pg):
+                return pg.evaluate("""() => {
+                  const bx = document.querySelector('.scroll-x');
+                  const tb = bx && bx.querySelector('table.tbl');
+                  if (!tb) return null;
+                  const tr = tb.querySelector('tr.data');
+                  const vis = tr ? Array.from(tr.querySelectorAll('td:last-child button'))
+                                   .filter(b => b.offsetParent !== null) : [];
+                  const tops = new Set(vis.map(b => Math.round(b.getBoundingClientRect().top)));
+                  return {over: tb.scrollWidth - bx.clientWidth, btns: vis.length, lines: tops.size,
+                          rowH: tr ? Math.round(tr.getBoundingClientRect().height) : 0,
+                          hidden: Array.from(document.querySelectorAll('table.tbl th'))
+                                    .filter(t => t.offsetParent === null)
+                                    .map(t => t.textContent.replace(/[⇅▲▼?]/g, '').trim())};
+                }""")
+
+            lay = _layout(page)
+            # VT-LAYOUT-01 操作列按钮不换行（窄画布下也一样 —— "宁可横滚，不可变形"）
+            rec(lay and lay["lines"] <= 1,
+                f"VT-LAYOUT-01 操作按钮不换行（{lay and lay['btns']} 个按钮占 "
+                f"{lay and lay['lines']} 行 · 行高 {lay and lay['rowH']}px）")
+            # VT-LAYOUT-02 四个字典列默认隐藏（表格最小宽 1380 → 938）
+            rec(lay and sorted(lay["hidden"]) == sorted(["内容描述", "规范号", "预算与报告号", "修订授权"]),
+                f"VT-LAYOUT-02 默认隐藏的正是四个字典列：{lay and lay['hidden']}")
+            # VT-LAYOUT-03 正常桌面宽度（1920 · 右栏展开）下列表不横向溢出
+            page.set_viewport_size({"width": 1920, "height": 1080})
+            page.wait_for_timeout(700)
+            lay2 = _layout(page)
+            rec(lay2 and lay2["over"] <= 2,
+                f"VT-LAYOUT-03 1920 宽（右栏展开）不横向溢出（超出 {lay2 and lay2['over']}px）")
+            page.set_viewport_size({"width": 1280, "height": 720})
+            page.wait_for_timeout(400)
+
             # 豁免清单受检（V5）：收集了却从不校验 = 给静默吞掉开口子
             for _ig in ignored:
                 rec(("/favicon.ico" in _ig or ".map" in _ig), f"豁免理由成立：{_ig[:90]}")
 
-            step("§6 硬件指标（VT-HW-90）")
+            step("§7 硬件指标（VT-HW-90）")
             rec(not errors, f"0 console error / 0 pageerror / 0 HTTP≥400（实际 {len(errors)}）")
             for e in errors[:6]:
                 print("      ✗", e)

@@ -79,7 +79,11 @@
           <td class="mono" x-text="dash(d.charge_code)"></td>
           <td class="mono" x-text="dash(d.rev_authorization)"></td>
           <!-- ⚠ 动作按钮用 x-show 隐藏（元素仍在 DOM），e2e 断言存在性必须带 `:visible` -->
-          <td>
+          <!-- ⚠ `white-space:nowrap` 是这个单元格的**版式保险**：画布窄时表格本来就靠
+               `.scroll-x` 横滚，但若允许换行，浏览器会把本列压到 48px、五个按钮竖排，
+               行高从 39px 涨到 223px（整页看着散架）。**宁可横滚，不可变形** —— 判据
+               VT-LAYOUT-01 已固化。 -->
+          <td style="white-space:nowrap">
             <button class="b-link" @click="openDetail(d, 'view')">详情</button>
             <button class="b-link" x-show="canAddChild(d)" @click="openForm(d)">加子元素</button>
             <button class="b-link" x-show="canBaseline(d)" :disabled="needScope(d)"
