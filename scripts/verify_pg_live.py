@@ -134,12 +134,20 @@ DIFF_SQL = [
     ("LIKE 模糊搜索", "SELECT name, note FROM probe_box WHERE name LIKE '%' || ? || '%' ORDER BY name",
      ("乙",)),
     ("聚合", "SELECT COUNT(*) AS n FROM probe_box", ()),
+]
+
+# **legacy 的已知边界批**（现场实测确定的：多行 VALUES 见 §1，这里两条是差分批里发现的）：
+# 差分的前提是"两边都能执行"，所以这些**不进** DIFF_SQL 的逐行比对；
+# 但差分仍然盯着它们 —— 要求「legacy 失败 **且** 编译层成功」（编译层必须严格更强）。
+BOUNDARY_SQL = [
     ("INSERT…SELECT", "INSERT INTO probe_box (name, note) SELECT name || ?, ? FROM probe_box "
                       "WHERE name = ?", ("-副本", "由 SELECT 来", "乙")),
+    ("多行 VALUES", "INSERT INTO probe_box (name, note) VALUES (?, ?), (?, ?)",
+     ("丁", "四", "戊", "五")),
 ]
 
 
-def _diff_run(tag):
+def _diff_run(tag):   # noqa: C901
     """用**当前口径**在 tag 自己的 schema 里跑一遍 DIFF_SQL。
 
     返回 `(每条语句的成败, 落库快照)`：语句级异常**不抛出**，交给差分按策略判定
@@ -162,6 +170,15 @@ def _diff_run(tag):
             except Exception as e:                # noqa: BLE001
                 c.rollback()                      # PG：失败语句中止事务，必须回滚
                 out[label] = ("err", f"{type(e).__name__}: {str(e)[:50]}")
+        bounds = {}
+        for label, sql, params in BOUNDARY_SQL:
+            try:
+                _exec(c, sql, params)
+                c.commit()
+                bounds[label] = "ok"
+            except Exception as e:                # noqa: BLE001
+                c.rollback()
+                bounds[label] = f"{type(e).__name__}"
         rows = _rows(_exec(c, "SELECT name, note, created_by, updated_by, created_at FROM probe_box "
                               "ORDER BY name"))
         _ = out
@@ -169,7 +186,7 @@ def _diff_run(tag):
             for k in ("created_at", "updated_at"):
                 if r.get(k):
                     r[k] = "<ts>"
-        return out, rows
+        return out, rows, bounds
     finally:
         c.close()
 
@@ -185,10 +202,10 @@ def _differential():
     db._PG_BACKEND = None                      # 让每个 tag 自己建 backend（口径要跟着环境变量走）
     try:
         os.environ["FDE_SQL_COMPILER"] = "legacy"
-        a_sel, a_rows = _diff_run("legacy")
+        a_sel, a_rows, a_b = _diff_run("legacy")
         db._PG_BACKEND = None
         os.environ["FDE_SQL_COMPILER"] = "sqlglot"
-        b_sel, b_rows = _diff_run("compile")
+        b_sel, b_rows, b_b = _diff_run("compile")
     finally:
         if keep is None:
             os.environ.pop("FDE_SQL_COMPILER", None)
@@ -209,7 +226,17 @@ def _differential():
     ck(not weaker, f"差分：**没有**「编译层比 legacy 弱 / 结果不一致」的语句"
                    + ("" if not weaker else " ｜ " + "；".join(weaker)))
     ck(True, f"差分：legacy 的已知边界（差分批里）＝{boundary or '无'}")
-    ck(a_rows == b_rows, f"差分：两口径落库结果逐行一致（{len(a_rows)} 行）"
+    # 边界批：要求「legacy 失败 **且** 编译层成功」—— 编译层必须严格更强；
+    # 若哪天 legacy 也能跑通，就不再是边界，届时两边结果必须一致（自检，不留死判据）。
+    for label, _sql, _p in BOUNDARY_SQL:
+        if a_b.get(label) != "ok" and b_b.get(label) == "ok":
+            ck(True, f"边界批：{label} —— legacy 不支持（{a_b.get(label)}）/ 编译层支持 ✓")
+        elif a_b.get(label) == "ok" and b_b.get(label) == "ok":
+            ck(True, f"边界批：{label} 两边都能跑了（不再是边界）—— 请把它挪回差分批")
+        else:
+            ck(False, f"边界批：{label} 编译层也应支持，实际 legacy={a_b.get(label)} "
+                      f"compile={b_b.get(label)}")
+    ck(a_rows == b_rows, f"差分：共同面上两口径落库结果逐行一致（{len(a_rows)} 行）"
                          + ("" if a_rows == b_rows else f" ｜ legacy={a_rows[:2]} ｜ compile={b_rows[:2]}"))
     ck(a_sel == b_sel, f"差分：两口径 SELECT 结果一致（{len(a_sel)} 条查询）"
                        + ("" if a_sel == b_sel else f" ｜ legacy={a_sel} ｜ compile={b_sel}"))
