@@ -408,7 +408,16 @@ async def query(group: str, q: str, mode: str = "hybrid") -> str:
     rag = _get_rag(group)
     await rag.initialize_storages()
     try:
-        result = await rag.aquery(q, param=QueryParam(mode=mode))
+        # ⚠ **显式关掉重排**（2026-09-27 定）：lightrag 的 `enable_rerank` 默认 True，而平台没配
+        # `rerank_model_func` ⇒ 每次查询都打一行
+        # 「Rerank is enabled but no rerank model is configured」的 warning，而它**什么都不做**
+        # （日志里 `84 -> 84 (deduplicated 0)` 就是证据），容易让读日志的人以为检索坏了。
+        # 要不要开：开了才需要（也才值得）配重排模型 ——
+        #   · API 路线（推荐）：lightrag 自带 `ali_rerank` / `jina_rerank` / `cohere_rerank` /
+        #     `generic_rerank_api`，给一家 key 即可（DeepSeek **没有**重排接口）；
+        #   · 本地路线：`bge-reranker-base` ≈ **1.1 GB 下载 + 1.1 GB 常驻内存**（2核2G 的服务器跑不了）。
+        #   开的时候要**两处一起**：这里 `enable_rerank=True` + `_get_rag` 传 `rerank_model_func=`。
+        result = await rag.aquery(q, param=QueryParam(mode=mode, enable_rerank=False))
     finally:
         await rag.finalize_storages()
     if not result:
