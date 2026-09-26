@@ -92,7 +92,19 @@ def wait_up(port, timeout=30):
 
 # §0 自足造数：md_material M1 + md_customer C001 + 两条出库计划
 # （未来日期 → 待出库；过去日期 → 创建即已关闭，供延期恢复用例）
-SEED_JS = r"""async () => {
+import datetime
+
+def _d(offset: int) -> str:
+    """相对**今天**的日期字符串（用例里禁止写死绝对日期）。
+
+    ⚠ 产品把"今天"当活值：`outbound_plan` 的 `out_date < 今天 ⇒ 已关闭`。用例写死绝对日期，
+    就会在某天突然红灯 —— 2026-09-26 实测：写死的 `2026-09-20` 当天过期，
+    「未来日期 → 待出库」的链测试 4 条与前端 e2e 1 条**同时**红了，而产品行为完全正确。
+    """
+    return (datetime.date.today() + datetime.timedelta(days=offset)).isoformat()
+
+
+SEED_JS = r"""async (dates) => {
   const call = async (app, svc, params) => {
     const r = await fetch(`/api/apps/psc/${app}/call/${svc}`, {
       method: "POST",
@@ -118,17 +130,19 @@ SEED_JS = r"""async () => {
   await call("md_material", "create", {material_no: "M1", material_name: "测试物料A", status: "正常"});
   await call("md_customer", "create", {customer_no: "C001", customer_name: "客户A"});
   const open = unwrap(await call("outbound_plan", "create", {
-    customer_no: "C001", material_no: "M1", qty: 300, out_date: "2026-09-20"
+    customer_no: "C001", material_no: "M1", qty: 300, out_date: dates.open
   }));
   const closed = unwrap(await call("outbound_plan", "create", {
-    customer_no: "C001", material_no: "M1", qty: 50, out_date: "2026-08-10"
+    customer_no: "C001", material_no: "M1", qty: 50, out_date: dates.closed
   }));
 
   return {
     seeded: true,
     open_no: (open && open.plan_no) || null,
     closed_no: (closed && closed.plan_no) || null,
-    closed_status: (closed && closed.status) || null
+    closed_status: (closed && closed.status) || null,
+    open_date: dates.open,
+    ext_date: dates.ext
   };
 }"""
 
@@ -266,7 +280,8 @@ def main():
 
             # ===================== §0 造数 =====================
             step("§0 造数（M1 / C001 / 待出库 + 已关闭出库计划）")
-            seed = page.evaluate(SEED_JS)
+            seed = page.evaluate(SEED_JS, {"open": _d(7), "closed": _d(-30),
+                                            "ext": _d(30)})
             assert seed and seed.get("seeded"), f"outbound_plan 造数失败：{seed}"
             assert seed.get("open_no"), f"待出库计划号缺失：{seed}"
             assert seed.get("closed_status") == "已关闭", f"过去日期计划应创建即已关闭：{seed}"
@@ -302,7 +317,7 @@ def main():
             open_txt = open_row.inner_text()
             assert "M1" in open_txt and "C001" in open_txt, "待出库行应回显物料/客户"
             assert "300" in open_txt, "待出库行应回显数量 300"
-            assert "2026-09-20" in open_txt, "待出库行应回显计划出库日期"
+            assert seed["open_date"] in open_txt, "待出库行应回显计划出库日期"
             assert "待出库" in open_txt, "待出库行状态徽章应为 待出库"
             assert open_row.locator('button:visible:has-text("删除")').count() == 1, "待出库行应有删除入口"
             closed_row = rows.filter(has_text=closed_no).first
@@ -332,7 +347,7 @@ def main():
             txt = modal.inner_text()
             for label in ["计划号", "客户", "物料", "数量", "计划出库日期", "实际出库单号", "原始数据"]:
                 assert label in txt, f"详情模态缺字段标签：{label}"
-            for val in [open_no, "C001", "客户A", "M1", "测试物料A", "300", "2026-09-20", "待出库"]:
+            for val in [open_no, "C001", "客户A", "M1", "测试物料A", "300", seed["open_date"], "待出库"]:
                 assert val in txt, f"详情模态缺字段值：{val}"
             ft = modal.locator(".modal-ft")
             assert ft.locator('button:visible:has-text("编辑")').count() == 1, "详情页脚应有「编辑」"
@@ -409,7 +424,7 @@ def main():
             page.locator("table.tbl tr.data", has_text=closed_no).first.locator('button:has-text("编辑")').first.click()
             modal = wait_modal(page)
             assert "编辑出库计划" in modal.inner_text(), "编辑弹窗标题不符"
-            fill_labeled(modal, "计划出库日期", "2026-11-01")
+            fill_labeled(modal, "计划出库日期", seed["ext_date"])
             click_button(modal, ["保存修改"])
             expect_toast(page, "出库计划已更新")
             try:
@@ -418,7 +433,7 @@ def main():
                 pass
             page.wait_for_timeout(700)
             row_txt = page.locator("table.tbl tr.data", has_text=closed_no).first.inner_text()
-            assert "2026-11-01" in row_txt, "延期后日期应回显 2026-11-01"
+            assert seed["ext_date"] in row_txt, f"延期后日期应回显 {seed['ext_date']}"
             assert "待出库" in row_txt, "延期到未来后状态应恢复 待出库"
 
             # §5 VT-DEL-01 删除待出库计划（confirm）

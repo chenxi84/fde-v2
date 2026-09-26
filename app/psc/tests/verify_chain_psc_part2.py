@@ -2,6 +2,18 @@
 # Covers: TC-ERR-01~44
 
 
+import datetime
+
+def _d(offset: int) -> str:
+    """相对**今天**的日期字符串（用例里禁止写死绝对日期）。
+
+    ⚠ 产品把"今天"当活值：`outbound_plan` 的 `out_date < 今天 ⇒ 已关闭`。用例写死绝对日期，
+    就会在某天突然红灯 —— 2026-09-26 实测：写死的 `2026-09-20` 当天过期，
+    「未来日期 → 待出库」的链测试 4 条与前端 e2e 1 条**同时**红了，而产品行为完全正确。
+    """
+    return (datetime.date.today() + datetime.timedelta(days=offset)).isoformat()
+
+
 def run_part(call, step, expect_err, record):
     C001 = "C001"; C002 = "C002"
     M1 = "M1"; M2 = "M2"; M3 = "M3"; M4 = "M4"; M5 = "M5"
@@ -656,7 +668,7 @@ def run_part(call, step, expect_err, record):
     op1 = None
     try:
         op1 = call("outbound_plan", "create", customer_no=C003, material_no=M6,
-                   qty=300, out_date="2026-09-20")
+                   qty=300, out_date=_d(7))
         assert op1.get("status") == "待出库", op1
         assert str(op1.get("plan_no", "")).startswith("OB"), op1
         record(True)
@@ -667,7 +679,7 @@ def run_part(call, step, expect_err, record):
     op2 = None
     try:
         op2 = call("outbound_plan", "create", customer_no=C003, material_no=M6,
-                   qty=50, out_date="2026-08-10")
+                   qty=50, out_date=_d(-30))
         assert op2.get("status") == "已关闭", op2
         record(True)
     except Exception as e:
@@ -676,11 +688,11 @@ def run_part(call, step, expect_err, record):
     step("TC-OP-04 主数据引用铁律 / 数量 / 日期校验")
     try:
         expect_err(lambda: call("outbound_plan", "create", customer_no=C003,
-                                material_no="NO_SUCH_MAT", qty=1, out_date="2026-09-20"), "物料")
+                                material_no="NO_SUCH_MAT", qty=1, out_date=_d(7)), "物料")
         expect_err(lambda: call("outbound_plan", "create", customer_no="NO_SUCH_CUST",
-                                material_no=M6, qty=1, out_date="2026-09-20"), "客户")
+                                material_no=M6, qty=1, out_date=_d(7)), "客户")
         expect_err(lambda: call("outbound_plan", "create", customer_no=C003,
-                                material_no=M6, qty=0, out_date="2026-09-20"), "大于0")
+                                material_no=M6, qty=0, out_date=_d(7)), "大于0")
         expect_err(lambda: call("outbound_plan", "create", customer_no=C003,
                                 material_no=M6, qty=1, out_date="2026-13-99"), "日期")
         record(True)
@@ -690,7 +702,7 @@ def run_part(call, step, expect_err, record):
     step("TC-OP-05 列表过滤（material_no / status）")
     try:
         call("outbound_plan", "create", customer_no=C003, material_no=M6,
-             qty=100, out_date="2026-09-25")
+             qty=100, out_date=_d(10))
         assert call("outbound_plan", "list", material_no=M6).get("total") == 3
         assert call("outbound_plan", "list", material_no=M6, status="待出库").get("total") == 2
         assert call("outbound_plan", "list", material_no=M6, status="已关闭").get("total") == 1
@@ -700,9 +712,10 @@ def run_part(call, step, expect_err, record):
 
     step("TC-OP-06 已关闭计划编辑延期 → 恢复待出库")
     try:
-        r = call("outbound_plan", "update", plan_no=op2["plan_no"], out_date="2026-10-05")
+        _ext = _d(20)
+        r = call("outbound_plan", "update", plan_no=op2["plan_no"], out_date=_ext)
         assert r.get("status") == "待出库", r
-        assert r.get("out_date") == "2026-10-05", r
+        assert r.get("out_date") == _ext, r
         record(True)
     except Exception as e:
         record(False, f"{e}")
@@ -719,11 +732,11 @@ def run_part(call, step, expect_err, record):
     step("TC-OP-08 删除约束（已关闭拦截；待出库可删）")
     try:
         op3 = call("outbound_plan", "create", customer_no=C003, material_no=M6,
-                   qty=10, out_date="2026-08-01")
+                   qty=10, out_date=_d(-40))
         assert op3.get("status") == "已关闭", op3
         expect_err(lambda: call("outbound_plan", "delete", plan_no=op3["plan_no"]), "不可删除")
         # 延期恢复待出库后可删
-        call("outbound_plan", "update", plan_no=op3["plan_no"], out_date="2026-11-01")
+        call("outbound_plan", "update", plan_no=op3["plan_no"], out_date=_d(30))
         r = call("outbound_plan", "delete", plan_no=op3["plan_no"])
         assert r.get("deleted") is True, r
         record(True)
@@ -747,11 +760,11 @@ def run_part(call, step, expect_err, record):
         call("inventory_strategy", "calc", version_no=V202608, material_no=M6)
         call("inventory_projection", "refresh", material_no=M6,
              biz_date="2026-08-20", opening_stock=0)
-        r = call("inventory_projection", "get", material_no=M6, biz_date="2026-09-20")
+        r = call("inventory_projection", "get", material_no=M6, biz_date=_d(7))
         assert r.get("outbound_qty") == 300, r     # TC-OP-02 的计划
-        r = call("inventory_projection", "get", material_no=M6, biz_date="2026-09-25")
+        r = call("inventory_projection", "get", material_no=M6, biz_date=_d(10))
         assert r.get("outbound_qty") == 100, r     # TC-OP-05 新增的计划
-        r = call("inventory_projection", "get", material_no=M6, biz_date="2026-10-05")
+        r = call("inventory_projection", "get", material_no=M6, biz_date=_d(20))
         assert r.get("outbound_qty") == 50, r      # TC-OP-06 延期恢复的计划
         r = call("inventory_projection", "get", material_no=M6, biz_date="2026-08-20")
         assert r.get("outbound_qty") == 0, r       # 起始日无出库
