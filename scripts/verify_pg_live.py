@@ -44,6 +44,12 @@ from fde import FdeError  # noqa: E402
 # 断言就会"看着失败、其实是被污染"（探针第一版就这么翻过车）。应用名 → schema 的映射同线上口径。
 SCHEMA = f"sqlc_probe_{os.getpid()}"
 PROBE_APP = f"{SCHEMA}/probe"
+# ⚠ 平台把应用名映射成 schema 时会把 `/` 换成 `_`（`get_connection` 里的口径）——
+#   于是真实 schema 名是 `sqlc_probe_<pid>_probe`，**不是** SCHEMA 本身。
+#   踩过：前置清理按 `SCHEMA` 比"是不是自己"，结果把自己（带后缀的那个）清了 ⇒
+#   `InvalidSchemaName: no schema has been selected to create in`；末尾清理也删错了名字 ⇒
+#   残留 schema 留到下一轮（上一轮的残留行污染就是它）。两处都以 APP_SCHEMA 为准。
+APP_SCHEMA = PROBE_APP.replace("/", "_").replace("-", "_")
 FAILS = []
 
 
@@ -109,7 +115,7 @@ def main():
     # 只碰 `sqlc_probe%` 前缀，绝不涉及任何应用 schema。
     for row in _rows(_exec(boot, "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'sqlc_probe%'")):
         name = list(row.values())[0]
-        if name == SCHEMA:            # ⚠ 别把自己刚建的清掉（名字也匹配 sqlc_probe%）
+        if name in (SCHEMA, APP_SCHEMA):   # 别把自己刚建的清掉（名字也匹配 sqlc_probe%）
             continue
         _exec(boot, f'DROP SCHEMA IF EXISTS "{name}" CASCADE')
     boot.commit()
@@ -220,10 +226,10 @@ def main():
     print("== 5. 清理（只用临时 schema，不碰任何应用数据）==")
     try:
         z = _conn()
-        _exec(z, f"DROP SCHEMA IF EXISTS {SCHEMA} CASCADE")
+        _exec(z, f'DROP SCHEMA IF EXISTS "{APP_SCHEMA}" CASCADE')
         z.commit()
         z.close()
-        ck(True, f"临时 schema {SCHEMA} 已删除")
+        ck(True, f"临时 schema {APP_SCHEMA} 已删除（只碰 sqlc_probe* 前缀，不涉任何应用 schema）")
     except Exception as e:                    # noqa: BLE001
         ck(False, f"清理失败：{type(e).__name__}: {e}")
 
