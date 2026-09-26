@@ -19,6 +19,9 @@ statsforecast==2.1.1
 
 # 可选：PostgreSQL 驱动（仅 Docker/PostgreSQL 部署需要，默认 SQLite 无需）
 psycopg2-binary>=2.9
+# 部署侧取连接方式（PG/MySQL）：池的 pre-ping / recycle / 等待超时 / 溢出（2026-09-26 加）。
+# 本地 SQLite 开发**不依赖**它 —— 未安装时自动回落 psycopg2 原生池（见 db._pg_pool 的 ImportError 分支）。
+sqlalchemy>=2.0
 
 # 可选：知识图谱（LightRAG 语义问答 + 可视化）
 # 未安装则 Agent 的「图谱问答」工具自动降级（平台其余功能不受影响）；不需要可删除。

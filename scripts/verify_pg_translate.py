@@ -260,9 +260,61 @@ else:
     _fail.append(f"⑮ 参数被缓存污染：{_p1} / {_p2}")
 
 print()
+print("── C 段：部署侧取连接方式（Engine 注册表，离线可断言）────────────")
+
+
+def ck(ok, note):
+    if ok:
+        print(f"  ✓ {note}")
+    else:
+        _fail.append(note)
+
+
+# ⑯ 池参数：默认 + 环境变量
+os.environ.pop("FDE_PG_POOL_MAX", None)
+ck(db._pool_limits() == (2, 10, 30, 1800), f"⑯ 池参数默认 (2,10,30,1800)：{db._pool_limits()}")
+os.environ["FDE_PG_POOL_MAX"] = "25"
+os.environ["FDE_PG_POOL_TIMEOUT"] = "5"
+ck(db._pool_limits()[1] == 25 and db._pool_limits()[2] == 5,
+   f"⑯ 环境变量生效：{db._pool_limits()}")
+
+# ⑰ Engine 注册表：URL 与池参数都是键的一部分（换库/换池 → 必须换 Engine）
+#    ⚠ 这是"模块级常量缓存"陷阱的同款：键漏了 URL，换库后还指着旧库（见 skills.DB_PATH 的教训）
+os.environ.pop("FDE_PG_POOL_MAX", None)
+os.environ.pop("FDE_PG_POOL_TIMEOUT", None)
+_e1 = db.engine_for("postgresql://u:p@h:5432/db_a")          # 默认池参数（2/10）
+ck(db.engine_for("postgresql://u:p@h:5432/db_a") is _e1, "⑰ 同 URL + 同池参数 → 复用同一 Engine")
+ck(_e1.pool.size() == 2 and _e1.pool._max_overflow == 8,
+   f"⑰ 池参数进了 Engine：size={_e1.pool.size()} overflow={_e1.pool._max_overflow}")
+ck(db.engine_for("postgresql://u:p@h:5432/db_b") is not _e1, "⑰ 换库（URL 变）→ 新 Engine")
+os.environ["FDE_PG_POOL_MAX"] = "25"                          # 换池参数，URL 不变
+ck(db.engine_for("postgresql://u:p@h:5432/db_a") is not _e1,
+   "⑰ 换池参数（URL 不变）→ 也是新 Engine（不沿用旧池）")
+os.environ.pop("FDE_PG_POOL_MAX", None)
+
+# ⑱ 池耗尽必须**明确报错**（不是静默等待、也不是莫名的驱动错）
+#    psycopg2 原生池是"立即抛"，Engine 是"等到超时" —— 两条路都要有可读的错误
+class _DeadPool:
+    def getconn(self):
+        raise RuntimeError("connection pool exhausted")
+
+
+_real_pool, _real_backend = db._PG_POOL, db._PG_BACKEND
+try:
+    db._PG_POOL = _DeadPool()
+    try:
+        db._checkout("pool")
+        _fail.append("⑱ 池耗尽没有报错")
+    except RuntimeError as e:
+        ck("连接池耗尽" in str(e) and "FDE_PG_POOL_MAX" in str(e),
+           f"⑱ 池耗尽报错可读：{str(e)[:58]}…")
+finally:
+    db._PG_POOL, db._PG_BACKEND = _real_pool, _real_backend
+
+print()
 if _fail:
     print(f"失败 {len(_fail)} 项：")
     for f in _fail:
         print("  ✗", f)
     sys.exit(1)
-print("SQL 方言改写/编译层：两条路全部通过")
+print("SQL 方言改写/编译层 + 部署侧取连接方式：全部通过")

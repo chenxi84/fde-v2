@@ -24,15 +24,18 @@ _PG_FAIL_REASON = None   # 失败原因（供启动横幅展示）
 
 
 def using_postgresql() -> bool:
-    """当前是否使用 PostgreSQL（仅当连接池已成功建立时返回 True）。"""
-    return _PG_AVAILABLE and _PG_POOL is not None
+    """当前是否使用 PostgreSQL（仅当**取连接方式已成功建立**时返回 True）。"""
+    return _PG_AVAILABLE and (_PG_ENGINE is not None or _PG_POOL is not None)
 
 
 def db_mode() -> str:
     """返回当前数据库模式，供启动横幅展示。"""
     if _PG_AVAILABLE:
-        if _PG_POOL is not None:
-            return f"PostgreSQL ({_PG_URL.split('@')[-1] if '@' in _PG_URL else _PG_URL})"
+        if _PG_ENGINE is not None or _PG_POOL is not None:
+            p_min, p_max, p_timeout, p_recycle = _pool_limits()
+            backend = "Engine" if _PG_BACKEND == "engine" else "psycopg2 原生池"
+            return (f"PostgreSQL ({_PG_URL.split('@')[-1] if '@' in _PG_URL else _PG_URL}"
+                    f") · {backend} {p_min}–{p_max} 条 · 等待 {p_timeout}s · 回收 {p_recycle}s")
         return f"PostgreSQL 连接失败→回退 SQLite（{_PG_FAIL_REASON or '未知原因'}）"
     return "SQLite"
 
@@ -169,9 +172,58 @@ def _open_sqlite(db_path: Path) -> _SqliteAuditWrapper:
 
 # ── PostgreSQL 适配器 ────────────────────────────────────────
 
-_PG_POOL = None
+_PG_POOL = None        # 兜底：未装 SQLAlchemy 时用 psycopg2 原生池
+_PG_ENGINE = None      # 部署路径的取连接方式：SQLAlchemy Engine（pre-ping / recycle / timeout / 溢出）
+_PG_BACKEND = None     # "engine" | "pool" | None（还没定）
 _PG_RETRIES = 5        # 等待 PG 就绪的重试次数
 _PG_RETRY_DELAY = 3     # 每次重试间隔（秒）
+
+# URL → Engine 的注册表。**键是 URL 字符串**：`DATABASE_URL` 变了必须拿到新 Engine，
+# 否则就是"模块级常量缓存"那类陷阱的重演（见 `skills.DB_PATH` 的教训，2026-09-26）。
+# 影子库换根走 `FDE_DB_ROOT` / `FDE_CONFIG_ROOT`，不动 URL，故不受影响。
+_ENGINE_CACHE: dict = {}
+
+
+def _pool_limits() -> tuple:
+    """池参数（环境变量可配）：(基线连接数, 上限, 等待秒, 回收秒)。
+
+    默认 2/10 + 等待 30s + 回收 1800s。⚠ **不是越大越好** —— 天花板是
+    `min(池上限, PG 的 max_connections)`；多组 × 多进程一起开大会把 PG 打满。
+    `FDE_PG_POOL_RECYCLE=0` 表示不回收（长连接场景自己权衡）。
+    """
+    def _int(name, dflt):
+        try:
+            return int(os.environ.get(name, str(dflt)) or dflt)
+        except (TypeError, ValueError):
+            return dflt
+
+    p_min = max(1, _int("FDE_PG_POOL_MIN", 2))
+    p_max = max(p_min, _int("FDE_PG_POOL_MAX", 10))
+    return p_min, p_max, max(1, _int("FDE_PG_POOL_TIMEOUT", 30)), max(0, _int("FDE_PG_POOL_RECYCLE", 1800))
+
+
+def engine_for(url: str, limits: tuple = None):
+    """按 URL 取（或建）Engine。**懒连接**：`create_engine` 不发网络请求，可离线断言。
+
+    为什么借 Engine 而不是自己维护池（2026-09-26 定，见 `design-plus/数据库层评估.md` §4之三）：
+    ① 池满时**等待 + 超时报错**（psycopg2 原生池是**立即**抛 PoolError，不等待）；
+    ② `pool_pre_ping` 顶掉陈旧连接（PG 重启 / 空闲被中间设备断）；
+    ③ `pool_recycle` —— MySQL 的 `wait_timeout` 默认 8h，接第三种库时是必需品；
+    ④ URL 解析（ssl / options 等）交给成熟实现，替掉手写 `urlparse`。
+    """
+    p_min, p_max, p_timeout, p_recycle = limits or _pool_limits()
+    key = (url, p_min, p_max, p_timeout, p_recycle)
+    eng = _ENGINE_CACHE.get(key)
+    if eng is None:
+        from sqlalchemy import create_engine
+
+        eng = create_engine(
+            url,
+            pool_size=p_min, max_overflow=max(0, p_max - p_min),
+            pool_timeout=p_timeout, pool_pre_ping=True, pool_recycle=p_recycle,
+        )
+        _ENGINE_CACHE[key] = eng
+    return eng
 
 
 def _pg_pool():
@@ -186,16 +238,37 @@ def _pg_pool():
         _logger.warning(_PG_FAIL_REASON)
         return None
 
+    global _PG_ENGINE, _PG_BACKEND
+    p_min, p_max, p_timeout, p_recycle = _pool_limits()
+
+    # ① 首选 SQLAlchemy Engine（见 engine_for 的四条理由）
+    try:
+        from sqlalchemy import text as _sa_text
+        engine = engine_for(_PG_URL)
+        for attempt in range(1, _PG_RETRIES + 1):
+            try:
+                with engine.connect() as c:
+                    c.execute(_sa_text("SELECT 1"))
+                _PG_ENGINE, _PG_BACKEND, _PG_FAIL_REASON = engine, "engine", None
+                _logger.info(
+                    "PostgreSQL Engine 就绪（基线 %d + 溢出 %d · 等待 %ds · 回收 %ds · pre-ping）",
+                    p_min, max(0, p_max - p_min), p_timeout, p_recycle)
+                return _PG_BACKEND
+            except Exception as e:
+                _PG_FAIL_REASON = str(e)[:200]
+                if attempt < _PG_RETRIES:
+                    _logger.info("PostgreSQL 尚未就绪（%d/%d），%d 秒后重试…",
+                                 attempt, _PG_RETRIES, _PG_RETRY_DELAY)
+                    time.sleep(_PG_RETRY_DELAY)
+                else:
+                    _logger.error("PostgreSQL 连接失败（已重试 %d 次）：%s", _PG_RETRIES, e)
+        _logger.warning("Engine 建不起来，回落 psycopg2 原生池：[%s]", _PG_FAIL_REASON or "未知")
+    except ImportError:
+        _logger.info("未安装 SQLAlchemy，PostgreSQL 走 psycopg2 原生池（无 pre-ping / recycle / 等待语义）")
+
     import urllib.parse
     url = urllib.parse.urlparse(_PG_URL)
 
-    # 池大小可配（2026-09-26）：默认仍是 2/10。⚠ **不是越大越好** —— 真正的天花板是
-    # min(池大小, PG 的 max_connections)；多组 × 多进程一起开大会把 PG 打满。
-    try:
-        p_min = max(1, int(os.environ.get("FDE_PG_POOL_MIN", "2") or 2))
-        p_max = max(p_min, int(os.environ.get("FDE_PG_POOL_MAX", "10") or 10))
-    except ValueError:
-        p_min, p_max = 2, 10
     for attempt in range(1, _PG_RETRIES + 1):
         try:
             _PG_POOL = pg_pool_mod.ThreadedConnectionPool(
@@ -210,7 +283,8 @@ def _pg_pool():
                          url.hostname, url.port or 5432, url.path.lstrip("/"),
                          p_min, p_max, attempt)
             _PG_FAIL_REASON = None
-            return _PG_POOL
+            _PG_BACKEND = "pool"
+            return _PG_BACKEND
         except Exception as e:
             _PG_FAIL_REASON = str(e)[:200]
             if attempt < _PG_RETRIES:
@@ -220,6 +294,26 @@ def _pg_pool():
             else:
                 _logger.error("PostgreSQL 连接失败（已重试 %d 次）：%s", _PG_RETRIES, e)
     return None
+
+
+def _checkout(backend: str):
+    """取一条 PG 连接（Engine 或原生池）。**池满是明确报错，不是静默等待/静默失败。**"""
+    p_min, p_max, p_timeout, _ = _pool_limits()
+    if backend == "engine":
+        try:
+            return _PG_ENGINE.raw_connection()      # ⚠ 走 raw：别让 SQLAlchemy 再编译一遍
+        except Exception as e:                      #    我们已编译好的 SQL（`%%` 会被二次转义）
+            raise RuntimeError(
+                f"PostgreSQL 连接池已满（{p_min}–{p_max} 条，等待 {p_timeout}s 超时）："
+                f"并发请求超过了池容量。调大 FDE_PG_POOL_MAX，或降低并发。"
+                f"原始错误：{type(e).__name__}: {e}") from e
+    try:
+        return _PG_POOL.getconn()
+    except Exception as e:
+        raise RuntimeError(
+            f"PostgreSQL 连接池耗尽（{p_min}–{p_max} 条）：psycopg2 原生池**不等待**，"
+            f"并发一超过池容量就立刻报这个错（装上 SQLAlchemy 可换成「等待 + 超时」语义）。"
+            f"可先把 FDE_PG_POOL_MAX 调大。原始错误：{type(e).__name__}: {e}") from e
 
 
 class _PgDictRow(dict):
@@ -367,8 +461,9 @@ class _PgCursorWrapper:
 class _PgConnection:
     """包装 psycopg2 连接，对外暴露与 sqlite3 兼容的接口。"""
 
-    def __init__(self, conn):
+    def __init__(self, conn, backend: str = None):
         self._conn = conn
+        self._backend = backend or _PG_BACKEND
 
     def execute(self, sql, params=None):
         sql = sql.strip()  # 去首尾空白，保证和 sql_upper 索引对齐
@@ -473,7 +568,9 @@ class _PgConnection:
             self._conn.commit()
         except Exception:
             pass
-        if _PG_POOL:
+        if getattr(self, "_backend", None) == "engine":
+            self._conn.close()          # Engine 的 raw_connection：close = **归还池**
+        elif _PG_POOL:
             _PG_POOL.putconn(self._conn)
 
 
@@ -488,12 +585,12 @@ def get_connection(app_name: str, db_path: Path = None) -> object:
     if not _PG_AVAILABLE:
         return _open_sqlite(db_path or Path(":memory:"))
 
-    pool = _pg_pool()
-    if pool is None:
+    backend = _pg_pool()
+    if backend is None:
         _logger.warning("PG 连接池不可用，回退 SQLite：[%s]", _PG_FAIL_REASON or "未知")
         return _open_sqlite(db_path or Path(":memory:"))
 
-    conn = pool.getconn()
+    conn = _checkout(backend)
     schema = app_name.replace("/", "_").replace("-", "_")
 
     try:
@@ -509,4 +606,4 @@ def get_connection(app_name: str, db_path: Path = None) -> object:
     except Exception as e:
         _logger.warning("Schema 初始化失败 [%s]：%s", schema, e)
 
-    return _PgConnection(conn)
+    return _PgConnection(conn, backend=backend)

@@ -106,8 +106,10 @@ python app/<组>/tests/verify_view_<组>.py             # 组级壳/菜单/dashb
   **DML 编译层**（2026-09-26 加，`fde_platform/sqlc.py`）：应用照旧写 SQLite 方言裸 SQL + `?` 占位符，
   平台用 sqlglot 在 AST 层做方言翻译（审计列注入 / 占位符命名化 / 字面量 `%` 按驱动转义 / 多方言）。
   `FDE_SQL_COMPILER=sqlglot` 启用（**默认 `legacy`**：仍是 `db.py` 内联的字符串手术）；两条路由
-  `scripts/verify_pg_translate.py`（现名「SQL 方言编译层」）同时覆盖。PG 池大小用
-  `FDE_PG_POOL_MIN`/`FDE_PG_POOL_MAX`（默认 2/10）。评估与决策见 `design-plus/数据库层评估.md`。
+  `scripts/verify_pg_translate.py`（现名「SQL 方言编译层」）同时覆盖。**部署侧取连接走 SQLAlchemy
+  Engine**（2026-09-26 加：等待超时 / pre-ping / recycle / 溢出；未装 SQLAlchemy 自动回落 psycopg2
+  原生池），池参数 `FDE_PG_POOL_MIN/MAX/TIMEOUT/RECYCLE`（默认 2/10/30s/1800s，`db_mode()` 横幅会报）。
+  **SQLite 刻意不池化**（开发底座：标准库、每次开/关）。评估与决策见 `design-plus/数据库层评估.md`。
 - 并发：waitress 工作线程数由 `PLATFORM_THREADS` 控制（默认 64）。**每个请求占一个线程直到响应结束**，而 Agent 对话是 SSE 长连接（一次对话从头占到尾），所以这个数约等于「同时能几个人对话」，超出的排队等而不报错。翻页面这类短请求不受影响（毫秒级完成）。真实的墙通常是 LLM 速率限制而非线程数。再往上（几百并发）要把浏览器协议层下沉到 `agent_service`（`/api/agent2/chat/stream` 现在做的事：确保 leader、建会话、触发、把 AgentScope 事件翻译成前端协议、暂存 HITL 待确认），让 nginx 直接反代 SSE——那是 ~200 行代码搬移 + nginx `auth_request` 子请求解决身份注入，不是配置改动；且 agent_service 直接对外后必须只放行 `/browser/*`。
 - MCP 双传输：**协议分发只有一份**（`fde_platform/mcp_server.py`——`initialize/tools/list/tools/call` + 按 `is_effectively_granted` 过滤），两种传输共用它。stdio（`python -m fde_platform.mcp_server`，身份启动时绑定）与 **Streamable HTTP**（`fde_platform/mcp_http.py`，`POST /mcp` + `Authorization: Bearer` 令牌，身份**按请求**注入 `handle_as`——绝不能写 `self.user`，waitress 多线程会互相覆盖）。令牌存 `config/auth.db` 的 `mcp_tokens` 表（只存 sha256、明文仅创建时显示一次、可吊销、记 `last_used_at`），在 `/auth/users` 页按用户生成。`/mcp` 在 `auth.OPEN_PATHS` 里（无 cookie 的机器请求过不了会话闸门），**不是开洞**：端点自己校验令牌，解出的身份照样走同一套授权过滤。nginx 见 `nginx.conf` 的 `location /mcp`（显式透传 Authorization）。
 - 平台模块「import 失败即回落」：删掉 `auth.py`/`users.py` 即回落无认证；删 scheduler / llm / mcp_http 模块同理，其余代码无需改动。
