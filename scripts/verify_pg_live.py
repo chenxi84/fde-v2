@@ -172,7 +172,7 @@ def main():
         cur = _exec(c, "INSERT INTO probe_box (name, note) VALUES (?, ?)", ("甲", "首行"))
         c.commit()
         pk = cur.lastrowid
-        ck(bool(pk), f"插入后拿到主键 lastrowid={pk}（PG 上靠 RETURNING/currval，不能是 0）")
+        ck(bool(pk), f"插入后拿到主键 lastrowid={pk}（PG 上靠 RETURNING 带回，不能是 0）")
 
         # 多行 VALUES：每个 tuple 都要补审计值（旧的字符串手术只补最后一个 —— 现在没有那条路了）
         _exec(c, "INSERT INTO probe_box (name, note) VALUES (?, ?), (?, ?)",
@@ -235,7 +235,7 @@ def main():
         except Exception:                     # noqa: BLE001
             pass
 
-    print("== 5. 第二批形态（两边都要支持：子查询 / CTE / 聚合 / LIMIT / DELETE …）==")
+    print("== 5. 第二批形态（子查询 / CTE / 聚合 / LIMIT / DELETE … 都要能跑）==")
     _shape_batch(mode)
 
     print("== 6. 清理（只用临时 schema，不碰任何应用数据）==")
