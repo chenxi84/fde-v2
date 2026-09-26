@@ -221,7 +221,7 @@ def sa_url(url: str) -> str:
 def engine_for(url: str, limits: tuple = None):
     """按 URL 取（或建）Engine。**懒连接**：`create_engine` 不发网络请求，可离线断言。
 
-    为什么借 Engine 而不是自己维护池（2026-09-26 定，见 `design-plus/数据库层评估.md` §4之三）：
+    为什么借 Engine 而不是自己维护池（2026-09-26 定，见 `design-plus/CONVENTION.md` §14.1）：
     ① 池满时**等待 + 超时报错**（psycopg2 原生池是**立即**抛 PoolError，不等待）；
     ② `pool_pre_ping` 顶掉陈旧连接（PG 重启 / 空闲被中间设备断）；
     ③ `pool_recycle` —— MySQL 的 `wait_timeout` 默认 8h，接第三种库时是必需品；

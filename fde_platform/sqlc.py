@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """DML 编译层：把**应用写的 SQLite 方言 SQL** 编译到目标方言（含审计列注入）。
 
-## 为什么要有它（2026-09-26 加，方案见 `design-plus/数据库层评估.md` §4之二 / §4之三）
+## 为什么要有它（2026-09-26 加，决策与边界见 `design-plus/CONVENTION.md` §14）
 
 应用侧承诺不变：**裸 SQL + `?` 占位符 + SQLite 方言 + `schema.sql` 是唯一真相源**。
 但"一套 SQL 两边（将来多边）跑"必须有人在**语义层**做方言翻译，而旧做法是三处**字符串手术**：
@@ -76,7 +76,7 @@ _FLAG = "FDE_SQL_COMPILER"
 _ON = ("sqlglot", "compile", "1", "on", "true")
 
 # **默认值**（2026-09-26 当天从 "legacy" 切过来）：切换依据写在
-# `design-plus/数据库层评估.md` §4之三 —— 门禁两条路全绿 + 真 PG 现场验证通过
+# `design-plus/CONVENTION.md` §14.2 —— 门禁两条路全绿 + 真 PG 现场验证通过
 # （`scripts/verify_pg_live.py` 两条路 PASS、32 个应用只读 `list` 两条路各零失败）。
 # 仍可 `FDE_SQL_COMPILER=legacy` 退回；legacy 分支保留一个版本后删（评估文档 §4之三 的落地顺序）。
 DEFAULT_MODE = "sqlglot"

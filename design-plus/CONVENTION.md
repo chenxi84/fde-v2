@@ -343,3 +343,65 @@ class Todo:
 - [ ] 外部系统经 `_` 前缀适配器方法接入（§12.2，不建聚合）
 
 > 注：`<应用>.db` 与 `resource/`（import-file / export-file）**无需手写**——平台加载应用时自动创建（§1 / §10）。
+
+---
+
+## 14. 附：数据层双模与 DML 编译层（**平台内部决策**，应用侧不受影响）
+
+> 本节记录"为什么这么做"，以及**还没做完的那一步**。应用开发者不需要读它 ——
+> 应用侧看到的一切（`self.db.execute(裸 SQL, ?)`、`schema.sql` 是唯一真相源）都没有变。
+
+### 14.1 三条决策（各自的**触发条件**写在一起，将来要重议时看条件，不看结论）
+
+| 决策 | 理由 | 什么情况下重新评估 |
+|---|---|---|
+| **不整体换 SQLAlchemy / Alembic 接管数据层** | 「裸 SQL + `?` 占位符 + `schema.sql` 单一真相源」是**产品属性**（应用由 AI 按规范批量生成、要给人看）。SQLAlchemy Core 的中性绑定风格是 `:name` ⇒ 换它等于改全仓约 297 条应用 SQL 的写法 + 九步法第③步的规范与提示词；ORM 更会推翻"一个聚合根 = 一个文件 = 一个事务边界"的心智 | 若哪天**不再要求应用 SQL 保持这个形状**（例如产品定位变了），则技术最优会变成 SQLAlchemy Core |
+| **SQLite 刻意不池化**（开发底座：标准库 `sqlite3`、每次调用开/关；**部署侧** PG/MySQL 才用 Engine 池） | ① SQLite 只是 Windows 本地开发底座，商业部署走服务器 PG（容器化）；② 池对 SQLite **没有并发收益**（单文件单写者）；③ 保住"clone 下来 `python main.py` 就能跑、零数据库依赖"；④ 风险最小化：影子库隔离靠"复制文件 + 环境变量换根"，每次新开连接让它天然正确 | 不需要（这是定位问题，不是权衡问题） |
+| **不引 Alembic** | 应用库的加列演进**已有机制**：`ddl.execute_schema` 在加载时把已有表**对账补齐**到 `schema.sql` 声明（只加列、绝不删，有 `verify_ddl_reconcile` 门禁守着）；平台自有库（`config/*.db`）用手写幂等 `_migrate()`。Alembic 与"`schema.sql` 是唯一真相源"天然打架（会变成第二份真相） | 平台自有库需要**非常规**结构演进（改类型 / 拆表 / 需要 downgrade）时再评估 |
+
+### 14.2 DML 编译层（`fde_platform/sqlc.py`，2026-09-26 落地，默认启用）
+
+应用照旧写 SQLite 方言裸 SQL + `?`；平台在 **AST 层**（sqlglot）做方言翻译：
+审计列注入（INSERT 每一行 / `INSERT…SELECT` 投影 / UPDATE 的 SET）、占位符按**词法顺序**命名化、
+字面量 `%` 按驱动转义、时间函数归一（与 DDL 共用 `ddl._time_funcs`）、transpile 到目标方言。
+**退回开关**：`FDE_SQL_COMPILER=legacy`（走 `db.py` 内联的字符串手术）。两条路由
+`scripts/verify_pg_translate.py`（门禁"SQL 方言编译层"）**同时覆盖**。
+
+**部署侧取连接**走 SQLAlchemy Engine（等待超时 / pre-ping / recycle / 溢出；未装 SQLAlchemy 自动回落
+psycopg2 原生池），池参数 `FDE_PG_POOL_MIN/MAX/TIMEOUT/RECYCLE`。
+
+### 14.3 legacy 的**已知边界**与**删除条件**（第 3 步待办）
+
+实测出的三条边界（legacy 做不到、编译层做到了；**应用里目前没有任何一处**使用这三种形态）：
+
+| 形态 | legacy 的表现 | 编译层 |
+|---|---|---|
+| 多行 `VALUES (…),(…)` | 审计值只补到**最后一个** tuple ⇒ PG 报 `more target columns than expressions` | 每个 tuple 都补 ✓ |
+| `INSERT … SELECT` | 审计列没注入但参数多塞 ⇒ `not all arguments converted` | 补在投影里 ✓ |
+| 参数个数与占位符不匹配 | 驱动层 `IndexError: tuple index out of range` | 可读的 `FdeError` ✓ |
+
+**删除条件**：服务器上灰度过一个**完整工作周期**、且期间**出现过新的 SQL 形态**（例如下一轮应用组生成）
+而两条路不打架 ⇒ 删。删除清单：`_inject_audit`、`_PgConnection.execute` 的 legacy 内联块、
+`_pg_seq_pk` + `_resolve_lastrowid` + currval（全仓只有 1 处读 `lastrowid`，其表是自增主键 ⇒ 走 `RETURNING`）、
+`FDE_SQL_COMPILER` 开关、门禁 A 段（其中 LIKE/`%`、审计、无参数不转义那 5 条**转成编译层用例**保留）、
+探针里按路径分辨的分支。
+
+### 14.4 接**下一种数据库**时的清单（按边际代价排序，越靠前越便宜）
+
+| 项 | 内容 |
+|---|---|
+| 驱动 paramstyle | 选驱动 + 一行改写规则（⚠ sqlglot 给 mysql 的是 `:name`，而 pymysql 只认 `%(name)s`） |
+| 主键取回策略 | MySQL **没有** `RETURNING` ⇒ 用驱动 `lastrowid`；PG 必须 `RETURNING` |
+| 内省适配 | `runtime._load` / `ddl._existing_columns` / `sqlc.pk_column` 目前只认 sqlite(PRAGMA) 与 pg(information_schema) |
+| schema 语义 | pg 是 `CREATE SCHEMA` + `search_path`；**mysql 的 schema 就是 database**，要 `USE` 或全限定 |
+| **读数归一** | bool：pg 回 `True/False`、mysql/sqlite 回 `0/1`；date/decimal 各驱动返回类型也不同 ⇒ JSON 契约层要按方言归一（**不报错、是读数漂移**，最易漏） |
+| **真实服务器暴露周期** | 静态渲染便宜；真行为必须真库跑。**每加一个方言 = 一轮暴露**（2026-09-20 一天在真 PG 上撞四个就是这么来的） |
+
+⚠ 相关坑：**SQLAlchemy 2.1 起 `postgresql://` 默认解析到 psycopg (v3)**，而本项目装的是 psycopg2
+⇒ 平台在 `db.sa_url()` 里显式补 `+psycopg2`（用户仍只写 `postgresql://`，承诺不变）。
+
+### 14.5 在 PG 部署上跑测试
+
+`shadowdb`（影子库）复制的是 **SQLite 文件**，**PG 上没有等价物** ⇒ 用**克隆空库**：
+配方与三条要点见《验证门禁》§四之二，脚本 `scripts/verify_pg_clone.sh`；
+真 PG 上的编译层/连接层现场验证用 `scripts/verify_pg_live.py`（含**差分 oracle**：legacy 与编译层逐行比对）。
