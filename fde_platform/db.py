@@ -202,6 +202,21 @@ def _pool_limits() -> tuple:
     return p_min, p_max, max(1, _int("FDE_PG_POOL_TIMEOUT", 30)), max(0, _int("FDE_PG_POOL_RECYCLE", 1800))
 
 
+def sa_url(url: str) -> str:
+    """把用户写的 URL 钉到**本项目实际安装的驱动**上。
+
+    ⚠ 2026-09-26 在测试服务器上实测踩到：**SQLAlchemy 2.1 起 `postgresql://` 默认解析到
+    psycopg (v3) 方言**（`sqlalchemy/dialects/postgresql/psycopg.py` → `import psycopg`），
+    而本项目装的是 `psycopg2-binary` ⇒ `create_engine` 抛 `ModuleNotFoundError: No module named 'psycopg'`。
+    平台承诺是"配 `DATABASE_URL=postgresql://…` 即切 PG，应用零改动"——**驱动选择是平台的事**，
+    所以在这里显式补成 `postgresql+psycopg2://`，用户不用改任何东西。
+    """
+    for prefix in ("postgresql://", "postgres://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg2://" + url[len(prefix):]
+    return url
+
+
 def engine_for(url: str, limits: tuple = None):
     """按 URL 取（或建）Engine。**懒连接**：`create_engine` 不发网络请求，可离线断言。
 
@@ -212,6 +227,7 @@ def engine_for(url: str, limits: tuple = None):
     ④ URL 解析（ssl / options 等）交给成熟实现，替掉手写 `urlparse`。
     """
     p_min, p_max, p_timeout, p_recycle = limits or _pool_limits()
+    url = sa_url(url)                       # 钉驱动（见 sa_url 的注释）
     key = (url, p_min, p_max, p_timeout, p_recycle)
     eng = _ENGINE_CACHE.get(key)
     if eng is None:
@@ -263,8 +279,13 @@ def _pg_pool():
                 else:
                     _logger.error("PostgreSQL 连接失败（已重试 %d 次）：%s", _PG_RETRIES, e)
         _logger.warning("Engine 建不起来，回落 psycopg2 原生池：[%s]", _PG_FAIL_REASON or "未知")
-    except ImportError:
-        _logger.info("未安装 SQLAlchemy，PostgreSQL 走 psycopg2 原生池（无 pre-ping / recycle / 等待语义）")
+    except ImportError as e:
+        # ⚠ 别写成"未安装 SQLAlchemy"就完事 —— 实测这条消息**骗过我一次**：
+        #   真实原因是 SQLAlchemy 2.1 把 `postgresql://` 指到 psycopg(v3) 而它没装（见 sa_url）。
+        #   带上异常原文，下一个人一眼看得出来是缺哪个模块。
+        _logger.warning(
+            "SQLAlchemy 不可用（%s: %s），PostgreSQL 回落 psycopg2 原生池（无 pre-ping / recycle / 等待语义）",
+            type(e).__name__, e)
 
     import urllib.parse
     url = urllib.parse.urlparse(_PG_URL)

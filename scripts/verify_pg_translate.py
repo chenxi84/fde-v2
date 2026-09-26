@@ -292,6 +292,15 @@ ck(db.engine_for("postgresql://u:p@h:5432/db_a") is not _e1,
    "⑰ 换池参数（URL 不变）→ 也是新 Engine（不沿用旧池）")
 os.environ.pop("FDE_PG_POOL_MAX", None)
 
+# ⑰b URL 钉驱动：SQLAlchemy 2.1 起 `postgresql://` 默认指 psycopg(v3)，本项目装的是 psycopg2
+#     ⇒ 平台必须自己补 `+psycopg2`（用户只写 `postgresql://…`，承诺不变）
+ck(db.sa_url("postgresql://u:p@h:5432/d") == "postgresql+psycopg2://u:p@h:5432/d",
+   f"⑰b postgresql:// 补成 +psycopg2：{db.sa_url('postgresql://u:p@h:5432/d')}")
+ck(db.sa_url("postgres://u:p@h/d") == "postgresql+psycopg2://u:p@h/d", "⑰b postgres:// 别名同样处理")
+ck(db.sa_url("postgresql+psycopg2://u:p@h/d") == "postgresql+psycopg2://u:p@h/d",
+   "⑰b 已带驱动的不重复补")
+ck(db.sa_url("sqlite:///x.db") == "sqlite:///x.db", "⑰b 非 PG URL 原样返回")
+
 # ⑱ 池耗尽必须**明确报错**（不是静默等待、也不是莫名的驱动错）
 #    psycopg2 原生池是"立即抛"，Engine 是"等到超时" —— 两条路都要有可读的错误
 class _DeadPool:
