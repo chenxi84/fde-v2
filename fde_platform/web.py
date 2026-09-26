@@ -48,7 +48,7 @@ from fde_platform.runtime import FdePlatform
 init_logging()
 
 _PKG_DIR = Path(__file__).parent
-VERSION = "v2.3.0-beta"
+VERSION = "v2.4.0-beta"
 HOST = os.environ.get("PLATFORM_HOST", "127.0.0.1")
 PORT = int(os.environ.get("PLATFORM_PORT", 4000))
 
