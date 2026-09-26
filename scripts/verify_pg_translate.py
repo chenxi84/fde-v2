@@ -321,6 +321,46 @@ finally:
     db._PG_POOL, db._PG_BACKEND = _real_pool, _real_backend
 
 print()
+print("── D 段：PG 侧游标 API 面与 sqlite3.Cursor 对齐（离线可断言）──────────")
+
+
+class _FakeCur2:
+    """最小假游标：只有 sqlite3.Cursor 的常用面（迭代 / fetchall / fetchmany / arraysize）。"""
+
+    def __init__(self, rows):
+        self._rows = list(rows)
+        self.description = [("a",), ("b",)]
+        self.rowcount = len(self._rows)
+        self.lastrowid = 0
+        self.arraysize = 1
+
+    def __iter__(self):
+        return iter(self._rows)
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return list(self._rows)
+
+    def fetchmany(self, n=1):
+        return self._rows[:n]
+
+    def close(self):
+        pass
+
+
+_w = db._PgCursorWrapper(_FakeCur2([(1, "甲"), (2, "乙")]))
+try:
+    _it = list(_w)                                     # ⑲ 裸迭代（应用里 22 处这种写法）
+    ck(len(_it) == 2 and _it[0]["a"] == 1 and _it[1]["b"] == "乙",
+       f"⑲ 游标可迭代且行是字典行：{_it}")
+except TypeError as e:
+    ck(False, f"⑲ 游标不可迭代（PG 上应用会炸）：{e}")
+ck(getattr(_w, "arraysize", None) == 1, "⑲ 未实现的成员透传到底层游标（__getattr__ 兜底）")
+ck(len(_w.fetchmany(1)) == 1, "⑲ fetchmany 同样可用（透传）")
+
+print()
 if _fail:
     print(f"失败 {len(_fail)} 项：")
     for f in _fail:

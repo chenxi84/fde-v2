@@ -476,6 +476,27 @@ class _PgCursorWrapper:
     def fetchall(self):
         return [self._make_row(r) for r in self._cur.fetchall()]
 
+    def __iter__(self):
+        """支持 `for r in self.db.execute(...)`（**裸迭代游标**）。
+
+        ⚠ 2026-09-27 在测试服务器上用克隆库跑链测试时撞到：`wbs.add_child` 直接迭代游标
+        ⇒ PG 下 `TypeError: '_PgCursorWrapper' object is not iterable`（SQLite 上一直正常）。
+        全仓有 22 处这种写法。根因是**游标 API 面**的对齐问题（不是 SQL 方言问题）：
+        `sqlite3.Cursor` 可迭代，而本 shim 只实现了 fetchone/fetchall/close。
+        """
+        for row in self._cur:
+            yield self._make_row(row)
+
+    def __getattr__(self, name):
+        """未显式实现的成员一律透传给底层驱动游标（`fetchmany` / `arraysize` / …）。
+
+        `__getattr__` 只在**正常查找失败**时才被调用 ⇒ 不会遮挡上面显式实现的成员。
+        以 `_` 开头的一律走 AttributeError：防 `__init__` 期间 `self._cur` 还没赋值时递归。
+        """
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._cur, name)
+
     def close(self):
         self._cur.close()
 
