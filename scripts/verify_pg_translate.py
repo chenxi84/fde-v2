@@ -262,6 +262,35 @@ for _d in ("sqlite", "postgres"):
     cmp_sql(f"⑳ UPSERT 冲突目标无排序修饰符 [{_d}]", _upsert, ("1", "2", "3"), _d,
             want_in=("ON CONFLICT", "DO UPDATE"), raw_not_in=("NULLS FIRST", "NULLS LAST"))
 
+# ㉑ 六类"新应用可能用到"的形态：**要么忠实、要么响亮失败**（不许静默改写成语义不同的 SQL）
+#    出处：2026-09-27 为回答"legacy 还有必要留么"而主动撞编译层的那一轮（7 类里 UPSERT 命中真缺陷 ⑳）
+for _label, _sql, _p, _must_in in [
+    ("INSERT OR REPLACE 忠实", "INSERT OR REPLACE INTO t (a,b) VALUES (?, ?)", ("1", "2"), "OR REPLACE"),
+    ("WITH … UPDATE 忠实", "WITH x AS (SELECT a FROM y) UPDATE t SET b = ? WHERE a IN (SELECT a FROM x)",
+     ("v",), "WITH x AS"),
+    # ⚠ strftime 一度被我误判为"翻不了"（看到 `%YYYY-%MM` 就下结论）—— 其实是**转义跑在渲染之前**
+    #   造成的，顺序修正后它翻得忠实（PG：'YYYY-MM'，无 `%`）。这条现在断言的是"忠实翻译"。
+    ("strftime → PG 模板不带 %", "SELECT strftime('%Y-%m', d) AS m FROM t WHERE k = ?",
+     ("1",), "TO_CHAR"),
+
+]:
+    cmp_sql(f"㉑ {_label}", _sql, _p, "postgres", want_in=(_must_in,))
+# 取模 `a % 2` 也要按驱动转义（`%%`）—— ⚠ 断言必须看**未渲染的产物**：
+# `text % params` 会把 `%%` 还原成 `%`，渲染后与"没转义"长得一模一样。
+cmp_sql("㉑ 取模 % 按驱动转义", "SELECT a % 2 FROM t WHERE k = ?", ("1",), "postgres",
+        raw_in=("a %% 2",), want_in=("a % 2",))
+
+# 另三类：**必须响亮失败**（明确 FdeError），不许静默编译成语义不同的语句
+cmp_sql("㉑ DEFAULT VALUES 明确拒绝", "INSERT INTO t DEFAULT VALUES", (), "postgres",
+        expect_err="没有列清单")
+# `datetime(列, 修饰符)` 曾被翻成 CURRENT_TIMESTAMP（"减 7 天"→"当前时间"）—— 现在必须明确拒绝
+cmp_sql("㉑ datetime(列,修饰符) 明确拒绝", "SELECT datetime(d, '-7 days') FROM t WHERE k = ?", ("1",),
+        "postgres", expect_err="不支持把 DATETIME")
+cmp_sql("㉑ julianday 明确拒绝", "SELECT julianday(d) FROM t WHERE k = ?", ("1",),
+        "postgres", expect_err="不支持把 JULIANDAY")
+cmp_sql("㉑ datetime('now') 放行", "SELECT datetime('now','localtime') AS n FROM t WHERE k = ?", ("1",),
+        "postgres", want_in=("CURRENT_TIMESTAMP",))
+
 # ⑮ 缓存**只缓存 SQL 与参数计划，绝不缓存参数值**
 _s1, _p1, _m1 = sqlc.compile_sql("UPDATE t SET a = ? WHERE id = ?", (1, 2), {"userno": "甲"})
 _s2, _p2, _m2 = sqlc.compile_sql("UPDATE t SET a = ? WHERE id = ?", (1, 2), {"userno": "乙"})

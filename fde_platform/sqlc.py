@@ -175,6 +175,42 @@ def _rename_placeholders_in_text(sql: str) -> tuple:
     return out, len(ph)
 
 
+# 我方**无法忠实翻译**的 SQLite 函数（2026-09-27 实测：这些在 PG 上要么静默错值、要么语义不等价）
+_UNMAPPABLE = ("STRFTIME", "JULIANDAY", "PRINTF", "DATE", "TIME")
+
+
+def _check_unmappable(e, dialect: str, sql_text: str) -> None:
+    """拦下"翻不成目标方言"的 SQLite 函数 —— **宁可不支持，也不静默错值**。
+
+    为什么必须有（2026-09-27 实测，都是"新应用可能用到"的形态）：
+      · `strftime('%Y-%m', d)` → `TO_CHAR(d, '%YYYY-%MM')` —— **PG 的模板不带 `%`** ⇒ 静默给出带 `%` 的错值；
+      · `datetime(d, '-7 days')` → **`CURRENT_TIMESTAMP`** —— "某时间减 7 天"被翻成"当前时间"，**最坏的一类**；
+        （根因：我复用了 DDL 的 `ddl._time_funcs`，而它只认 `datetime('now',…)` 那一种，其余一律替换 —— DDL 里
+         只有"默认值"这一种用法，DML 里却有"带列/带修饰符"的用法。）
+      · `julianday` / `printf` / `date(…, '+1 day')` → 原样带过去，PG 上**跑起来才报错**（响亮，但消息难懂）。
+
+    口径：**只放行 `datetime('now'[, 'localtime'])`**（审计列那种用法，翻成 `CURRENT_TIMESTAMP`），
+    其余一律在这里明确拒绝，并告诉调用方两条出路（改用目标方言写法 / 把日期处理挪到应用侧 Python）。
+    """
+    if dialect == "sqlite":
+        return
+    for node in e.find_all(exp.Anonymous):
+        name = str(node.this).upper()
+        if name not in _UNMAPPABLE and name != "DATETIME":
+            continue
+        args = [a.sql(dialect="sqlite").strip().strip("'\"").lower() for a in node.expressions]
+        if name == "DATETIME" and args and args[0] == "now":
+            continue                      # 放行：等价于 CURRENT_TIMESTAMP
+        raise FdeError(
+            f"编译层不支持把 {name}(…) 翻到 {dialect}（会静默给错值或语义不等价）—— "
+            f"请改用目标方言的写法，或把这段日期处理放到应用侧（Python）。语句：{sql_text[:100]}")
+
+    # ⚠ `strftime` 曾被误判为"不可翻译"（我看到 `TO_CHAR(d,'%YYYY-%MM')` 就以为 sqlglot 不支持）——
+    #   实际是**我自己的转义跑在渲染之前**造成的（见 `_escape_percent_text` 的注释）：把顺序修正后，
+    #   sqlglot 对 strftime 的翻译是**忠实**的（实测各格式串 → PG `'YYYY-MM-DD HH24:MI'`（无 `%`）、
+    #   MySQL `'%Y-%m-%d %H:%i'`、TSQL `'yyyy-MM-dd HH:mm'`、Oracle 同 PG）⇒ **不再拦它**。
+
+
 def _normalize_conflict_keys(e) -> None:
     """去掉冲突目标上的**排序修饰符**（`ON CONFLICT(a NULLS FIRST)` 这类）。
 
@@ -196,15 +232,30 @@ def _normalize_conflict_keys(e) -> None:
             oc.set("conflict_keys", [k.this if isinstance(k, exp.Ordered) else k for k in keys])
 
 
-def _escape_percent(e) -> None:
-    """把**字符串字面量**里的 `%` 转义成 `%%`（只给 %-插值驱动用）。
+_PLACEHOLDER = re.compile(r"%\([A-Za-z_]\w*\)s")
 
-    ⚠ 只动字面量：全局 `replace("%","%%")` 会连 `%(p0)s` 这种占位符一起改坏（旧做法靠
-    "先转义再换 `?`"的顺序绕开，但那个顺序同时把"字面量里的 `?`"变成了 `%s`）。
+
+def _escape_percent_text(sql: str) -> str:
+    """把渲染后的 SQL 里**除驱动占位符以外**的 `%` 转义成 `%%`（只给 %-插值驱动用）。
+
+    ⚠ **必须在渲染之后做**（2026-09-27 实测的排序 bug）：原先我在 AST 阶段就把字面量里的 `%`
+    转义了，于是 sqlglot 拿到的是 `'%%Y-%%m'`，它按目标方言翻译**日期格式串**时认歪
+    ⇒ 编出 `TO_CHAR(d, '%YYYY-%MM')`（PG 的模板不带 `%`）**静默错值**。
+    正确的顺序是：**先让 sqlglot 渲染**（它会忠实地把 `%Y-%m` 翻成 `YYYY-MM`），
+    **再**给驱动补转义 —— 此时格式串里的 `%` 已经没有了，只有占位符与真正的取模/字面量 `%`。
+
+    ⚠ 占位符 `%(name)s` 是**我们自己生成的**，必须原样跳过；其余 `%`（字面量里的、以及 `a % 2`
+    这类取模）一律转义 —— 给 pyformat 驱动看的。
     """
-    for lit in e.find_all(exp.Literal):
-        if lit.args.get("is_string") and "%" in (lit.this or ""):
-            lit.set("this", lit.this.replace("%", "%%"))
+    out, i, n = [], 0, len(sql)
+    while i < n:
+        m = _PLACEHOLDER.match(sql, i)
+        if m:                                   # 驱动占位符：原样
+            out.append(m.group(0)); i = m.end(); continue
+        ch = sql[i]
+        out.append("%%" if ch == "%" else ch)
+        i += 1
+    return "".join(out)
 
 
 def _to_driver_placeholders(sql: str, paramstyle: str) -> str:
@@ -304,14 +355,9 @@ def _compile_cached(sql_text: str, dialect: str, pk_col, audit: bool):
         raise FdeError(f"SQL 为空（编译层）：{sql_text[:120]}")
 
     injected = _inject_audit(e, dialect) if audit else False
-    _time_funcs(e, dialect)                    # SQLite 专有时间函数 → 目标方言（与 DDL 同一口径）
+    _check_unmappable(e, dialect, sql_text)    # 翻不成的 SQLite 函数：**明确拒绝**，不静默错值
+    _time_funcs(e, dialect)                    # 只对放行过的 `datetime('now',…)` 生效（与 DDL 同口径）
     _normalize_conflict_keys(e)                # 冲突目标不许带排序修饰符（PG 上会语法错）
-    # ⚠ 转义要看**驱动会不会插值**：psycopg2 / pymysql 只在**传了参数**时才做 %-插值，
-    #   不传参数时 `%` 就是普通字符 —— 无脑转义会把 `'%'` 变成 `'%%'`（LIKE 模式当场变错，
-    #   而且这种错**只在不带参数的查询上出现**，最难发现）。
-    if spec["paramstyle"] == "pyformat" and (n_app > 0 or injected):
-        _escape_percent(e)                     # 只对 %-插值驱动；且只动字面量
-
     uses_returning = False
     if (dialect == "postgres" and pk_col and isinstance(e, exp.Insert)
             and not e.args.get("returning")):
@@ -320,6 +366,11 @@ def _compile_cached(sql_text: str, dialect: str, pk_col, audit: bool):
 
     out = e.sql(dialect=dialect)
     out = _to_driver_placeholders(out, spec["paramstyle"])
+    # ⚠ 转义要看**驱动会不会插值**：psycopg2 / pymysql 只在**传了参数**时才做 %-插值，
+    #   不传参数时 `%` 就是普通字符 —— 无脑转义会把 `'%'` 变成 `'%%'`（LIKE 模式当场变错，
+    #   而且这种错**只在不带参数的查询上出现**，最难发现）。且**必须在渲染之后**（见函数注释）。
+    if spec["paramstyle"] == "pyformat" and (n_app > 0 or injected):
+        out = _escape_percent_text(out)
     return out, n_app, uses_returning, injected
 
 
