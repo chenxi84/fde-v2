@@ -75,10 +75,21 @@ DIALECTS = {
 _FLAG = "FDE_SQL_COMPILER"
 _ON = ("sqlglot", "compile", "1", "on", "true")
 
+# **默认值**（2026-09-26 当天从 "legacy" 切过来）：切换依据写在
+# `design-plus/数据库层评估.md` §4之三 —— 门禁两条路全绿 + 真 PG 现场验证通过
+# （`scripts/verify_pg_live.py` 两条路 PASS、32 个应用只读 `list` 两条路各零失败）。
+# 仍可 `FDE_SQL_COMPILER=legacy` 退回；legacy 分支保留一个版本后删（评估文档 §4之三 的落地顺序）。
+DEFAULT_MODE = "sqlglot"
+
+
+def mode() -> str:
+    """当前取哪种编译口径（横幅与日志据此显示 —— 部署后要靠它核对）。"""
+    return (os.environ.get(_FLAG, DEFAULT_MODE) or DEFAULT_MODE).strip().lower()
+
 
 def enabled() -> bool:
-    """是否启用编译层（**调用时读**，便于测试与灰度）。"""
-    return (os.environ.get(_FLAG, "legacy") or "").strip().lower() in _ON
+    """是否启用编译层（**调用时读**，便于测试与灰度退回）。"""
+    return mode() in _ON
 
 
 def dialect_of_driver(conn, dialect: str) -> str:

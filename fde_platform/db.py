@@ -35,9 +35,10 @@ def db_mode() -> str:
             p_min, p_max, p_timeout, p_recycle = _pool_limits()
             backend = "Engine" if _PG_BACKEND == "engine" else "psycopg2 原生池"
             return (f"PostgreSQL ({_PG_URL.split('@')[-1] if '@' in _PG_URL else _PG_URL}"
-                    f") · {backend} {p_min}–{p_max} 条 · 等待 {p_timeout}s · 回收 {p_recycle}s")
+                    f") · {backend} {p_min}–{p_max} 条 · 等待 {p_timeout}s · 回收 {p_recycle}s"
+                    f" · DML 编译层 {sqlc.mode()}")
         return f"PostgreSQL 连接失败→回退 SQLite（{_PG_FAIL_REASON or '未知原因'}）"
-    return "SQLite"
+    return f"SQLite · DML 编译层 {sqlc.mode()}"
 
 
 def dialect_of(conn) -> str:
