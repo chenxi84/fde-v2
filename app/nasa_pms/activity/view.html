@@ -98,11 +98,21 @@
       <div class="empty">还没有活动 —— 点「新建活动」建第一条</div>
     </template>
     <div style="position:relative">
-      <div style="height:20px;position:relative;border-bottom:1px solid var(--line)">
-        <template x-for="tk in ganttTicks()" :key="'t' + tk.label">
-          <span class="muted mono" style="position:absolute;font-size:11px;top:2px"
-            :style="'left:' + tk.left + '%'" x-text="tk.label"></span>
-        </template>
+      <!-- ⚠ 刻度行要与**条形区**对齐：条形区在「编号 + 名称」两列之后（82 + 160px），
+           刻度若按整宽定位就会全挤到左边（实测踩过）——所以这里用同样的两段占位撑开 -->
+      <div class="sline" style="height:20px;border-bottom:1px solid var(--line);padding-left:0">
+        <span style="width:82px;flex:none"></span>
+        <span style="width:160px;flex:none"></span>
+        <span style="flex:1;position:relative;min-width:120px;height:100%">
+          <template x-for="tk in ganttTicks()" :key="'t' + tk.label">
+            <!-- ⚠ `:style` 的字符串形式会**整条替换** inline style：静态的 position:absolute
+                 会被冲掉、退化成行内元素挤成一团（实测）。定位必须一并写进绑定里。 -->
+            <span class="muted mono"
+              :style="'position:absolute;top:2px;font-size:11px;left:' + tk.left + '%'"
+              x-text="tk.label"></span>
+          </template>
+        </span>
+        <span style="width:180px;flex:none"></span>
       </div>
       <template x-for="g in ganttRows()" :key="'g' + g.act_no">
         <div class="sline" data-role="gantt-row" :data-act="g.act_no"

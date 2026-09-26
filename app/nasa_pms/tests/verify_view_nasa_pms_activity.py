@@ -508,6 +508,23 @@ def main():
             crit_n = sum(1 for i in range(bars.count())
                          if bars.nth(i).get_attribute("data-crit") == "1")
             rec(0 < crit_n < bars.count(), f"VT-GANTT-73 关键路径标出 {crit_n}/{bars.count()} 条")
+            # VT-GANTT-75 刻度必须与**条形区**对齐、且彼此拉开
+            #   ⚠ 这一条是补的：刻度曾按整宽定位（全挤到左边），修好后又因 `:style` 把
+            #     静态 position 冲掉而退化成行内元素 —— 两次都是"看着才知道"，所以固化成判据
+            geom = page.evaluate("""() => {
+              const ticks = Array.from(document.querySelectorAll('[data-role="gantt"] .sline:first-of-type span.mono'));
+              const barArea = document.querySelector('[data-role="gantt-bar"]').parentElement;
+              const xs = ticks.map(e => Math.round(e.getBoundingClientRect().left));
+              return {n: ticks.length, xs: xs,
+                      barLeft: Math.round(barArea.getBoundingClientRect().left),
+                      barW: Math.round(barArea.getBoundingClientRect().width)};
+            }""")
+            gaps = [geom["xs"][i + 1] - geom["xs"][i] for i in range(len(geom["xs"]) - 1)]
+            rec(geom["n"] >= 2 and abs(geom["xs"][0] - geom["barLeft"]) <= 2,
+                f"VT-GANTT-75 首个刻度与条形区左缘对齐（{geom['xs'][0]} vs {geom['barLeft']}）")
+            rec(all(g > 80 for g in gaps),
+                f"VT-GANTT-75 刻度间距拉开（{gaps}，条形区宽 {geom['barW']}）")
+
             # VT-GANTT-74 切回台账
             page.click('button:has-text("台账视图")')
             page.wait_for_selector(".scroll-x table.tbl", timeout=8000)
