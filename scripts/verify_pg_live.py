@@ -140,23 +140,31 @@ DIFF_SQL = [
 
 
 def _diff_run(tag):
-    """用**当前口径**在 tag 自己的 schema 里跑一遍 DIFF_SQL，返回结果快照。"""
+    """用**当前口径**在 tag 自己的 schema 里跑一遍 DIFF_SQL。
+
+    返回 `(每条语句的成败, 落库快照)`：语句级异常**不抛出**，交给差分按策略判定
+    （legacy 单独失败 = 已知边界；编译层单独失败 = 缺陷；两边都成功 = 逐行比对）。"""
     global SCHEMA, PROBE_APP, APP_SCHEMA
     SCHEMA, PROBE_APP = f"sqlc_probe_{os.getpid()}_{tag}", f"sqlc_probe_{os.getpid()}_{tag}/probe"
     APP_SCHEMA = PROBE_APP.replace("/", "_")
     c = _conn()
-    out = []
+    out = {}
     try:
         for stmt in ddl.build_ddl(SCHEMA_SQL, db.dialect_of(c)):
             _exec(c, stmt)
         c.commit()
         for label, sql, params in DIFF_SQL:
-            cur = _exec(c, sql, params)
-            c.commit()
-            if sql.strip().upper().startswith("SELECT"):
-                out.append((label, [tuple(r.values()) for r in _rows(cur)]))
+            try:
+                cur = _exec(c, sql, params)
+                c.commit()
+                out[label] = ("ok", [tuple(r.values()) for r in _rows(cur)]
+                              if sql.strip().upper().startswith("SELECT") else None)
+            except Exception as e:                # noqa: BLE001
+                c.rollback()                      # PG：失败语句中止事务，必须回滚
+                out[label] = ("err", f"{type(e).__name__}: {str(e)[:50]}")
         rows = _rows(_exec(c, "SELECT name, note, created_by, updated_by, created_at FROM probe_box "
                               "ORDER BY name"))
+        _ = out
         for r in rows:                                  # 时间戳归一（两条路差几秒，不该算差异）
             for k in ("created_at", "updated_at"):
                 if r.get(k):
@@ -187,6 +195,20 @@ def _differential():
         else:
             os.environ["FDE_SQL_COMPILER"] = keep
         db._PG_BACKEND = keep_backend
+    boundary, weaker = [], []
+    for label, _sql, _p in DIFF_SQL:
+        a_, b_ = a_sel.get(label), b_sel.get(label)
+        if a_ is None or b_ is None:
+            continue
+        if a_[0] == "err" and b_[0] == "ok":
+            boundary.append(label)                    # legacy 单独失败 = 已知边界，不判失败
+        elif a_[0] == "ok" and b_[0] == "err":
+            weaker.append(f"{label}（{b_[1]}）")       # 编译层单独失败 = 缺陷
+        elif a_[0] == "ok" and b_[0] == "ok" and a_[1] != b_[1]:
+            weaker.append(f"{label} 结果不一致：legacy={a_[1]} vs compile={b_[1]}")
+    ck(not weaker, f"差分：**没有**「编译层比 legacy 弱 / 结果不一致」的语句"
+                   + ("" if not weaker else " ｜ " + "；".join(weaker)))
+    ck(True, f"差分：legacy 的已知边界（差分批里）＝{boundary or '无'}")
     ck(a_rows == b_rows, f"差分：两口径落库结果逐行一致（{len(a_rows)} 行）"
                          + ("" if a_rows == b_rows else f" ｜ legacy={a_rows[:2]} ｜ compile={b_rows[:2]}"))
     ck(a_sel == b_sel, f"差分：两口径 SELECT 结果一致（{len(a_sel)} 条查询）"
@@ -235,7 +257,10 @@ def main():
     finally:
         boot.close()
 
-    mode = os.environ.get("FDE_SQL_COMPILER", "legacy").strip().lower()
+    # ⚠ 标签必须取**单一真相源** `sqlc.mode()`：原先这里写死默认 "legacy"，
+    #   而默认已在 2026-09-26 切成 sqlglot ⇒ 标签与实际口径不一致（实测踩到：日志写着
+    #   "legacy · 8/8"，实际跑的是编译层）。凡是"默认值"都不该在第二个地方再写一遍。
+    mode = sqlc.mode()
 
     print(f"== 1. 写入与审计注入（{mode}）==")
     c = _conn()
