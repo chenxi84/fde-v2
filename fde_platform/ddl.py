@@ -2,14 +2,14 @@
 
 替代 `db.py` 里 `_add_audit_columns` / `_translate_ddl` 的**正则 DDL 改写**。
 只用于「应用加载时建表」这条一次性路径（runtime.py 加载应用时调用），
-不落在每次服务调用上。DML 的审计值注入仍在 `db.py` 的 `_inject_audit`，与此无关。
+不落在每次服务调用上。DML 的审计值注入在 `sqlc.py`（编译层），与此无关。
 
 依赖 `sqlglot`（正式依赖，进 requirements.txt）。import 失败即抛（不回落正则）。
 """
 import sqlglot
 from sqlglot import exp
 
-# 平台统一注入的审计列（TEXT，与 db.py _inject_audit 在 DML 写入的 datetime('now')/NOW() 对应）
+# 平台统一注入的审计列（TEXT，与编译层 sqlc 在 DML 写入的 datetime('now')/CURRENT_TIMESTAMP 对应）
 AUDIT_COLUMNS = ("created_at", "updated_at", "created_by", "updated_by")
 
 

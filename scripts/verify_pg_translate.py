@@ -1,10 +1,9 @@
 r"""SQL 方言改写/编译层的验收（平台级，自包含，**不需要 PostgreSQL、不需要起服务**）。
 
-⚠ **本脚本覆盖两条路**（2026-09-26 扩展）：
-  · **A. legacy**：`db.py` 内联的字符串手术（`_inject_audit` + `%`/`?` 替换）—— 默认路径；
-  · **B. 编译层**：`fde_platform/sqlc.py`（sqlglot AST 改写）—— `FDE_SQL_COMPILER=sqlglot` 时启用。
-A 段先把开关**钉死成 legacy**（否则门禁结果随环境变量漂），B 段直接调 `sqlc` 的 API。
-两条路都要绿：切开关那天，判据不能跟着漂。
+**只有一条路**（2026-09-27 删掉 legacy 之后）：所有 DML 都走 `fde_platform/sqlc.py` 的编译层。
+本脚本断言的是**编译产物**（不吃驱动、不需要 PostgreSQL）与**部署侧取连接方式**；
+曾经钉 legacy 行为的 A 段随 legacy 一起删了 —— 它的意图（LIKE 字面量 %、审计注入、无参数不转义）
+已由 B 段的 ⑥~⑮ 覆盖。
 
 
 ## 为什么需要它
@@ -43,8 +42,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
-os.environ["FDE_SQL_COMPILER"] = "legacy"        # A 段钉死 legacy（见文件头）
-
 from fde_platform import db  # noqa: E402
 from fde_platform import sqlc  # noqa: E402
 from fde import FdeError  # noqa: E402
@@ -60,93 +57,6 @@ except Exception:
 
 _fail = []
 
-
-class _FakeCursor:
-    """接住改写后的 SQL：顺便用 Python 的 `%` 插值模拟 psycopg2 的客户端插值。"""
-
-    def __init__(self, sink):
-        self._sink = sink
-        self.lastrowid = 0
-        self.description = None
-        self.rowcount = 0
-
-    def execute(self, sql, params=None):
-        p = tuple(params or ())
-        if p:
-            rendered = sql % p          # ← 占位符与参数对不上就在这里炸
-        else:
-            rendered = sql
-        self._sink.append(rendered)
-
-
-class _FakeConn:
-    def __init__(self, sink):
-        self._sink = sink
-
-    def cursor(self):
-        return _FakeCursor(self._sink)
-
-    def commit(self):
-        pass
-
-
-def run(label, sql, params, *, expect_in=(), expect_not_in=("%s", "%%")):
-    """跑一次改写；返回渲染后的 SQL（失败则记一笔）。"""
-    sink = []
-    conn = db._PgConnection(_FakeConn(sink))
-    conn._fde_ctx = {"userno": "tester", "departmentno": "", "role": "admin"}
-    try:
-        conn.execute(sql, params)
-    except Exception as e:
-        _fail.append(f"{label}：改写后无法插值 → {type(e).__name__}: {e}")
-        return ""
-    rendered = sink[-1]
-    for frag in expect_in:
-        if frag not in rendered:
-            _fail.append(f"{label}：渲染结果里缺少 {frag!r}\n      实际：{rendered}")
-    for frag in expect_not_in:
-        if frag in rendered:
-            _fail.append(f"{label}：渲染结果里残留了 {frag!r}（占位符被吃掉或没转义）\n"
-                         f"      实际：{rendered}")
-    return rendered
-
-
-# ① 模糊搜索：**字面量 % 必须存活**，且占位符正常取值
-#    这正是 md_customer / md_material / inventory_strategy 等 12 处的形态。
-r = run("① LIKE 字面量 %",
-        "SELECT a FROM t WHERE x LIKE '%' || ? || '%' ORDER BY a", ("CUST",),
-        expect_in=("LIKE '%' || CUST || '%'",))
-if r:
-    print(f"  ✓ ① LIKE 字面量 %：{r}")
-
-# ② UPDATE：审计注入的占位符**不能**被那次转义吃掉
-#    这正是 outbound_plan.close_expired 的形态（曾经报 not all arguments converted）。
-r = run("② UPDATE + 审计注入",
-        "UPDATE t SET status = '已关闭' WHERE status = '待出库' AND d < ?", ("2026-09-20",),
-        expect_in=("updated_at = NOW()", "updated_by = tester", "d < 2026-09-20"))
-if r:
-    print(f"  ✓ ② UPDATE + 审计注入：{r}")
-
-# ③ INSERT：审计列注入 + 占位符计数
-r = run("③ INSERT + 审计注入",
-        "INSERT INTO t (a, b) VALUES (?, ?)", ("1", "2"),
-        expect_in=("created_at, updated_at, created_by, updated_by", "tester"))
-if r:
-    print(f"  ✓ ③ INSERT + 审计注入：{r}")
-
-# ④ 不带参数时不做插值：字面量 % 原样保留（psycopg2 不插值，% 就是普通字符）
-r = run("④ 无参数 + 字面量 %",
-        "SELECT a FROM t WHERE x LIKE '%流水%'", None,
-        expect_in=("LIKE '%流水%'",), expect_not_in=("%%",))
-if r:
-    print(f"  ✓ ④ 无参数 + 字面量 %：{r}")
-
-# ⑤ 边界：SQL 里同时有 % 与 ? 但没有 UPDATE/INSERT 关键字（纯 SELECT）
-r = run("⑤ SELECT 同时含 % 与 ?",
-        "SELECT a FROM t WHERE x LIKE 'a%' AND y = ?", ("v",),
-        expect_in=("LIKE 'a%' AND y = v",))
-if r:
-    print(f"  ✓ ⑤ SELECT 同时含 % 与 ?：{r}")
 
 print()
 print("── B 段：编译层（sqlc，sqlglot AST 改写）──────────────────────────")

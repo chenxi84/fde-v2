@@ -365,27 +365,47 @@ class Todo:
 应用照旧写 SQLite 方言裸 SQL + `?`；平台在 **AST 层**（sqlglot）做方言翻译：
 审计列注入（INSERT 每一行 / `INSERT…SELECT` 投影 / UPDATE 的 SET）、占位符按**词法顺序**命名化、
 字面量 `%` 按驱动转义、时间函数归一（与 DDL 共用 `ddl._time_funcs`）、transpile 到目标方言。
-**退回开关**：`FDE_SQL_COMPILER=legacy`（走 `db.py` 内联的字符串手术）。两条路由
-`scripts/verify_pg_translate.py`（门禁"SQL 方言编译层"）**同时覆盖**。
+**只有一条路**（2026-09-27 起）：原来那个 `FDE_SQL_COMPILER=legacy` 的退回开关（走 `db.py` 内联的
+字符串手术）已随灰度结束删除；**回退手段改为 git**（见 §14.3）。判据在门禁「SQL 方言编译层」
+（`scripts/verify_pg_translate.py`），断言的是**编译产物**。
 
 **部署侧取连接**走 SQLAlchemy Engine（等待超时 / pre-ping / recycle / 溢出；未装 SQLAlchemy 自动回落
 psycopg2 原生池），池参数 `FDE_PG_POOL_MIN/MAX/TIMEOUT/RECYCLE`。
 
-### 14.3 legacy 的**已知边界**与**删除条件**（第 3 步待办）
+### 14.3 legacy 已删除（2026-09-27）· 回退方式与历史边界
 
-实测出的三条边界（legacy 做不到、编译层做到了；**应用里目前没有任何一处**使用这三种形态）：
+**删了什么**：`_inject_audit`（正则审计注入）、`_PgConnection.execute` 的 legacy 内联块（`%`/`?` 字符串替换）、
+`_pg_seq_pk` + `_resolve_lastrowid` + `currval` 兜底、`FDE_SQL_COMPILER` 开关与 `sqlc.enabled()`、
+门禁的 A 段（它的意图已由 B 段 ⑥~⑮ 覆盖）、探针里"按路径分辨"的分支与**差分 oracle**（差分需要两条路）。
 
-| 形态 | legacy 的表现 | 编译层 |
+**回退方式 = git**（不再是环境变量）：legacy 的代码在本仓历史里，真要回退就
+`git revert <删它的提交>`（或 `git checkout <删它之前的提交> -- fde_platform/db.py fde_platform/sqlc.py`）
+**+ 重新部署**（`fde_platform/` 是烤进镜像的）。
+
+**凭什么可以删（判据，不是感觉）**：原定条件是"灰度过一个工作周期 + 出现过新的 SQL 形态而两条路不打架"。
+第二条我用**主动造形态**替代等待 —— 造了 7 类"新应用可能用到"的 SQLite 形态去撞编译层，结果：
+
+- 撞出**三个真缺陷**，都已修 + 已固化进门禁（⑳㉑ 两组）：
+  ① `ON CONFLICT(a)` 被渲染成 `ON CONFLICT(a NULLS FIRST)` ⇒ **PG 语法错**；
+  ② `datetime(列, '-7 days')` 被翻成 `CURRENT_TIMESTAMP` ⇒ **静默错值**（根因：我复用 DDL 的 `_time_funcs`，
+     它只认 `datetime('now',…)` 一种用法）；
+  ③ `strftime` 被翻成 `TO_CHAR(d, '%YYYY-%MM')` ⇒ **静默错值**（根因：**我的转义跑在渲染之前**，
+     把 `%Y` 搞成 `%%Y` 再交给 sqlglot 翻译；顺序修正后它翻得忠实）；
+- 其余形态要么**忠实**（`INSERT OR REPLACE` / `WITH … UPDATE` / `substr` / `IFNULL` / `random`），
+  要么**响亮失败**（`DEFAULT VALUES` → 明确 `FdeError`；`PRAGMA` / `julianday` / `printf` → 运行时报错）
+  —— **没有第三类**（"静默错值"这一类已被上面三条堵掉）。
+
+**历史上的边界**（现在已不可能出现，留作对照 —— 它们曾是"legacy 严格更差"的证据）：
+
+| 形态 | 当年 legacy 的表现 | 现在的编译层 |
 |---|---|---|
-| 多行 `VALUES (…),(…)` | 审计值只补到**最后一个** tuple ⇒ PG 报 `more target columns than expressions` | 每个 tuple 都补 ✓ |
+| 多行 `VALUES (…),(…)` | 审计值只补**最后一个** tuple ⇒ PG 报 `more target columns than expressions` | 每个 tuple 都补 ✓ |
 | `INSERT … SELECT` | 审计列没注入但参数多塞 ⇒ `not all arguments converted` | 补在投影里 ✓ |
 | 参数个数与占位符不匹配 | 驱动层 `IndexError: tuple index out of range` | 可读的 `FdeError` ✓ |
 
-**删除条件**：服务器上灰度过一个**完整工作周期**、且期间**出现过新的 SQL 形态**（例如下一轮应用组生成）
-而两条路不打架 ⇒ 删。删除清单：`_inject_audit`、`_PgConnection.execute` 的 legacy 内联块、
-`_pg_seq_pk` + `_resolve_lastrowid` + currval（**应用代码里**只有 1 处读 `lastrowid`：`app/psc/md_breakpoint/md_breakpoint.py:29`，其表是自增主键 ⇒ 走 `RETURNING`；平台侧 `db.py` 的 22 处是它的实现）、
-`FDE_SQL_COMPILER` 开关、门禁 A 段（其中 LIKE/`%`、审计、无参数不转义那 5 条**转成编译层用例**保留）、
-探针里按路径分辨的分支。
+⚠ 删除的**代价**（如实记）：失去"一个环境变量就能退回"的即时手段，回退要多花一次重新部署。
+换来的是：审计语义只有一份实现、不存在一条"已知会静默出错"的退路、探针与门禁不必再带两套分支。
+应用侧只有 1 处读 `lastrowid`（`app/psc/md_breakpoint/md_breakpoint.py:29`，其表是自增主键 ⇒ 走 `RETURNING` ✓）。
 
 ### 14.4 接**下一种数据库**时的清单（按边际代价排序，越靠前越便宜）
 

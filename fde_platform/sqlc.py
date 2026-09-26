@@ -6,7 +6,7 @@
 应用侧承诺不变：**裸 SQL + `?` 占位符 + SQLite 方言 + `schema.sql` 是唯一真相源**。
 但"一套 SQL 两边（将来多边）跑"必须有人在**语义层**做方言翻译，而旧做法是三处**字符串手术**：
 
-| 旧做法（`db.py` 内联 / `_inject_audit`） | 它的问题 |
+| 旧做法（已在 2026-09-27 删除，此处留作对照） | 它的问题 |
 |---|---|
 | `re.sub(r'\\)\\s*VALUES\\s*\\(', …)` 找 INSERT 的列清单 | 多行 `VALUES (…),(…)` 只补到**最后一行**；`INSERT…SELECT` 直接不匹配 |
 | `re.sub(r'\\)\\s*$', …)` 补审计值 | 同上；`WITH … INSERT` 形态失效 |
@@ -30,8 +30,8 @@
 
 ## 开关
 
-`FDE_SQL_COMPILER=sqlglot` 启用本层；默认 `legacy`（走 `db.py` 的原路径）。
-**调用时读环境变量**，便于测试与灰度；门禁两条路都跑（见 `scripts/verify_pg_translate.py`）。
+**本层是唯一路径**（2026-09-27 起）：原先有个 `FDE_SQL_COMPILER=legacy` 的退回开关（走 `db.py` 内联的
+字符串手术），灰度验证通过后已删除 —— 回退手段改为 git（`CONVENTION.md` §14.3）。
 
 ## 边界：能编译的与不能编译的
 
@@ -72,24 +72,14 @@ DIALECTS = {
     },
 }
 
-_FLAG = "FDE_SQL_COMPILER"
-_ON = ("sqlglot", "compile", "1", "on", "true")
-
-# **默认值**（2026-09-26 当天从 "legacy" 切过来）：切换依据写在
-# `design-plus/CONVENTION.md` §14.2 —— 门禁两条路全绿 + 真 PG 现场验证通过
-# （`scripts/verify_pg_live.py` 两条路 PASS、32 个应用只读 `list` 两条路各零失败）。
-# 仍可 `FDE_SQL_COMPILER=legacy` 退回；legacy 分支保留一个版本后删（评估文档 §4之三 的落地顺序）。
-DEFAULT_MODE = "sqlglot"
+# **只有一条路**（2026-09-27 删掉 legacy 之后）：应用照旧写 SQLite 方言裸 SQL，平台总在编译层翻译。
+# 保留 `mode()` 只为让启动横幅能显示当前口径（部署后据此核对）。
+MODE = "sqlglot"
 
 
 def mode() -> str:
-    """当前取哪种编译口径（横幅与日志据此显示 —— 部署后要靠它核对）。"""
-    return (os.environ.get(_FLAG, DEFAULT_MODE) or DEFAULT_MODE).strip().lower()
-
-
-def enabled() -> bool:
-    """是否启用编译层（**调用时读**，便于测试与灰度退回）。"""
-    return mode() in _ON
+    """当前编译口径（横幅/日志显示用）。"""
+    return MODE
 
 
 def dialect_of_driver(conn, dialect: str) -> str:
@@ -350,7 +340,7 @@ def _compile_cached(sql_text: str, dialect: str, pk_col, audit: bool):
     except Exception as ex:                                    # noqa: BLE001
         raise FdeError(
             f"SQL 无法解析（编译层）：{ex}。语句：{sql_text[:120]}"
-            f"；如需临时绕过，设 {_FLAG}=legacy") from ex
+            f"。这是**编译层无法解析**的语句：请改成标准写法，或把这段逻辑挪到应用侧。") from ex
     if e is None:
         raise FdeError(f"SQL 为空（编译层）：{sql_text[:120]}")
 

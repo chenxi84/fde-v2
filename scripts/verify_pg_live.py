@@ -9,8 +9,8 @@
 
 ## 怎么跑（在容器里，DATABASE_URL 已指向 PG）
 
-    docker exec -i fde-v22_fde-v2_1 env FDE_SQL_COMPILER=sqlglot \
-        python scripts/verify_pg_live.py
+    docker exec -i -w /app fde-v22_fde-v2_1 python scripts/verify_pg_live.py
+
 
 本地（无 PG）会**明示 SKIP** 而不是假装通过。
 
@@ -18,12 +18,11 @@
 
 1. **DDL 与 DML 同一口径**：用 `ddl.build_ddl` 在临时 schema 建表（含 `datetime('now','localtime')`
    默认值 —— 这条在 PG 上曾经不存在），再用平台连接读写；
-2. **编译层（sqlglot）在真 PG 上**：审计列注入（单行/多行/INSERT…SELECT/UPDATE）、
-   命名占位符、`RETURNING` 带回自增主键、`LIKE '%' || ? || '%'` 模糊搜索、`%` 转义；
-3. **与 legacy 路径**结果逐项一致（两条路必须同语义）；
-4. **池的等待语义**：把池压到 4 条、并发 12 个取连接 —— Engine 应当**排队后成功**，
+2. **编译层在真 PG 上**：审计列注入（单行/多行/INSERT…SELECT/UPDATE）、命名占位符、
+   `RETURNING` 带回自增主键、`LIKE '%' || ? || '%'` 模糊搜索、`%` 转义、边界明确报错；
+3. **池的等待语义**：把池压到 4 条、并发 12 个取连接 —— Engine 应当**排队后成功**，
    而不是像 psycopg2 原生池那样立刻抛 `PoolError`；
-5. 全程只在**临时 schema `sqlc_probe`** 里折腾，跑完 drop schema —— 不碰任何应用数据。
+4. 全程只在**临时 schema `sqlc_probe_<pid>_probe`** 里折腾，跑完 drop —— 不碰任何应用数据。
 """
 import concurrent.futures as cf
 import os
@@ -74,7 +73,7 @@ def _conn():
 
 
 def _exec(conn, sql, params=None, ctx=None):
-    """走平台连接执行一条（编译层由 FDE_SQL_COMPILER 决定走不走）。"""
+    """走平台连接执行一条（**唯一路径** = 编译层）。"""
     conn._fde_ctx = ctx or {"userno": "pgprobe"}
     return conn.execute(sql, params)
 
@@ -118,130 +117,9 @@ def _shape_batch(mode):
             except Exception as e:                     # noqa: BLE001
                 c.rollback()                           # PG：失败语句会中止事务
                 ck(False, f"{mode} · {label} 失败：{type(e).__name__}: {str(e)[:50]}")
-        ck(True, f"{mode} · {ok}/{len(SHAPES)} 条形态执行完成（多行 VALUES 等已知边界不在本批）")
+        ck(True, f"{ok}/{len(SHAPES)} 条形态执行完成（都是应用里真实出现过的写法类别）")
     finally:
         c.close()
-
-
-# ⚠ 差分的前提是"**两边都能执行**的语句" —— legacy 的已知边界（多行 VALUES、参数不匹配）
-#   不放进这一批：那两处在 §1 已按路径分别验证，放进来只会让差分按定义失败。
-DIFF_SQL = [
-    ("INSERT 单行", "INSERT INTO probe_box (name, note) VALUES (?, ?)", ("甲", "一")),
-    ("INSERT 第二行", "INSERT INTO probe_box (name, note) VALUES (?, ?)", ("乙", "二")),
-    ("INSERT 第三行", "INSERT INTO probe_box (name, note) VALUES (?, ?)", ("丙", "三")),
-    ("UPDATE 带子查询", "UPDATE probe_box SET note = ? WHERE name IN "
-                       "(SELECT name FROM probe_box WHERE name = ?)", ("改过", "甲")),
-    ("LIKE 模糊搜索", "SELECT name, note FROM probe_box WHERE name LIKE '%' || ? || '%' ORDER BY name",
-     ("乙",)),
-    ("聚合", "SELECT COUNT(*) AS n FROM probe_box", ()),
-]
-
-# **legacy 的已知边界批**（现场实测确定的：多行 VALUES 见 §1，这里两条是差分批里发现的）：
-# 差分的前提是"两边都能执行"，所以这些**不进** DIFF_SQL 的逐行比对；
-# 但差分仍然盯着它们 —— 要求「legacy 失败 **且** 编译层成功」（编译层必须严格更强）。
-BOUNDARY_SQL = [
-    ("INSERT…SELECT", "INSERT INTO probe_box (name, note) SELECT name || ?, ? FROM probe_box "
-                      "WHERE name = ?", ("-副本", "由 SELECT 来", "乙")),
-    ("多行 VALUES", "INSERT INTO probe_box (name, note) VALUES (?, ?), (?, ?)",
-     ("丁", "四", "戊", "五")),
-]
-
-
-def _diff_run(tag):   # noqa: C901
-    """用**当前口径**在 tag 自己的 schema 里跑一遍 DIFF_SQL。
-
-    返回 `(每条语句的成败, 落库快照)`：语句级异常**不抛出**，交给差分按策略判定
-    （legacy 单独失败 = 已知边界；编译层单独失败 = 缺陷；两边都成功 = 逐行比对）。"""
-    global SCHEMA, PROBE_APP, APP_SCHEMA
-    SCHEMA, PROBE_APP = f"sqlc_probe_{os.getpid()}_{tag}", f"sqlc_probe_{os.getpid()}_{tag}/probe"
-    APP_SCHEMA = PROBE_APP.replace("/", "_")
-    c = _conn()
-    out = {}
-    try:
-        for stmt in ddl.build_ddl(SCHEMA_SQL, db.dialect_of(c)):
-            _exec(c, stmt)
-        c.commit()
-        for label, sql, params in DIFF_SQL:
-            try:
-                cur = _exec(c, sql, params)
-                c.commit()
-                out[label] = ("ok", [tuple(r.values()) for r in _rows(cur)]
-                              if sql.strip().upper().startswith("SELECT") else None)
-            except Exception as e:                # noqa: BLE001
-                c.rollback()                      # PG：失败语句中止事务，必须回滚
-                out[label] = ("err", f"{type(e).__name__}: {str(e)[:50]}")
-        # ⚠ 落库快照必须在**边界批之前**取：边界批会往同一个 schema 里多插几行
-        #    （编译层插得进去、legacy 插不进去），混进来会让"逐行一致"变成假差异。
-        rows = _rows(_exec(c, "SELECT name, note, created_by, updated_by, created_at FROM probe_box "
-                              "ORDER BY name"))
-        for r in rows:
-            for k in ("created_at", "updated_at"):
-                if r.get(k):
-                    r[k] = "<ts>"
-        bounds = {}
-        for label, sql, params in BOUNDARY_SQL:
-            try:
-                _exec(c, sql, params)
-                c.commit()
-                bounds[label] = "ok"
-            except Exception as e:                # noqa: BLE001
-                c.rollback()
-                bounds[label] = f"{type(e).__name__}"
-        _ = out
-        return out, rows, bounds
-    finally:
-        c.close()
-
-
-def _differential():
-    """差分 oracle：同一批语句，legacy 与编译层**结果必须逐行一致**。
-
-    为什么值得留着：它把"legacy 分支"从"随时能退回去的保命绳"变成**对照基准** ——
-    编译层任何语义漂移（多补/漏补审计值、占位符错位、方言改写过头）都会在这里现形，
-    而且是在**真 PG** 上。灰度过完、两边长期不打架，就可以把 legacy 与这段一起删。
-    """
-    keep, keep_backend = os.environ.get("FDE_SQL_COMPILER"), db._PG_BACKEND
-    db._PG_BACKEND = None                      # 让每个 tag 自己建 backend（口径要跟着环境变量走）
-    try:
-        os.environ["FDE_SQL_COMPILER"] = "legacy"
-        a_sel, a_rows, a_b = _diff_run("legacy")
-        db._PG_BACKEND = None
-        os.environ["FDE_SQL_COMPILER"] = "sqlglot"
-        b_sel, b_rows, b_b = _diff_run("compile")
-    finally:
-        if keep is None:
-            os.environ.pop("FDE_SQL_COMPILER", None)
-        else:
-            os.environ["FDE_SQL_COMPILER"] = keep
-        db._PG_BACKEND = keep_backend
-    boundary, weaker = [], []
-    for label, _sql, _p in DIFF_SQL:
-        a_, b_ = a_sel.get(label), b_sel.get(label)
-        if a_ is None or b_ is None:
-            continue
-        if a_[0] == "err" and b_[0] == "ok":
-            boundary.append(label)                    # legacy 单独失败 = 已知边界，不判失败
-        elif a_[0] == "ok" and b_[0] == "err":
-            weaker.append(f"{label}（{b_[1]}）")       # 编译层单独失败 = 缺陷
-        elif a_[0] == "ok" and b_[0] == "ok" and a_[1] != b_[1]:
-            weaker.append(f"{label} 结果不一致：legacy={a_[1]} vs compile={b_[1]}")
-    ck(not weaker, f"差分：**没有**「编译层比 legacy 弱 / 结果不一致」的语句"
-                   + ("" if not weaker else " ｜ " + "；".join(weaker)))
-    ck(True, f"差分：legacy 的已知边界（差分批里）＝{boundary or '无'}")
-    # 边界批：要求「legacy 失败 **且** 编译层成功」—— 编译层必须严格更强；
-    # 若哪天 legacy 也能跑通，就不再是边界，届时两边结果必须一致（自检，不留死判据）。
-    for label, _sql, _p in BOUNDARY_SQL:
-        if a_b.get(label) != "ok" and b_b.get(label) == "ok":
-            ck(True, f"边界批：{label} —— legacy 不支持（{a_b.get(label)}）/ 编译层支持 ✓")
-        elif a_b.get(label) == "ok" and b_b.get(label) == "ok":
-            ck(True, f"边界批：{label} 两边都能跑了（不再是边界）—— 请把它挪回差分批")
-        else:
-            ck(False, f"边界批：{label} 编译层也应支持，实际 legacy={a_b.get(label)} "
-                      f"compile={b_b.get(label)}")
-    ck(a_rows == b_rows, f"差分：共同面上两口径落库结果逐行一致（{len(a_rows)} 行）"
-                         + ("" if a_rows == b_rows else f" ｜ legacy={a_rows[:2]} ｜ compile={b_rows[:2]}"))
-    ck(a_sel == b_sel, f"差分：两口径 SELECT 结果一致（{len(a_sel)} 条查询）"
-                       + ("" if a_sel == b_sel else f" ｜ legacy={a_sel} ｜ compile={b_sel}"))
 
 
 def main():
@@ -262,7 +140,7 @@ def main():
         print("  ✗ 连不上 PostgreSQL（见上面的日志：连接失败→回落 SQLite）")
         print("  VERIFY_RESULT: FAIL")
         return 1
-    print(f"  FDE_SQL_COMPILER={os.environ.get('FDE_SQL_COMPILER', 'legacy')}")
+    print(f"  DML 编译层：{sqlc.mode()}（唯一路径）")
 
     # 预备：临时 schema
     boot = _conn()
@@ -286,9 +164,6 @@ def main():
     finally:
         boot.close()
 
-    # ⚠ 标签必须取**单一真相源** `sqlc.mode()`：原先这里写死默认 "legacy"，
-    #   而默认已在 2026-09-26 切成 sqlglot ⇒ 标签与实际口径不一致（实测踩到：日志写着
-    #   "legacy · 8/8"，实际跑的是编译层）。凡是"默认值"都不该在第二个地方再写一遍。
     mode = sqlc.mode()
 
     print(f"== 1. 写入与审计注入（{mode}）==")
@@ -299,28 +174,13 @@ def main():
         pk = cur.lastrowid
         ck(bool(pk), f"插入后拿到主键 lastrowid={pk}（PG 上靠 RETURNING/currval，不能是 0）")
 
-        # 多行 VALUES：**legacy 路径已知不支持** —— 正则只给最后一个 tuple 补审计值，列数对不上，
-        # PG 直接报 `INSERT has more target columns than expressions`（本地假驱动也能复现）。
-        # 应用里目前**一处都没有**这种形态（2026-09-26 全仓扫描），编译层已把它修好 ⇒
-        # 这里按路径分辨：编译层必须通过；legacy 记为"已知边界"（不是本次回归）。
-        n_expect = 3
-        try:
-            _exec(c, "INSERT INTO probe_box (name, note) VALUES (?, ?), (?, ?)",
-                  ("乙", "二", "丙", "三"))
-            c.commit()
-            multi_ok, multi_err = True, None
-        except Exception as e:                # noqa: BLE001
-            multi_ok, multi_err = False, e
-            c.rollback()                       # ⚠ PG 里失败语句会**中止整个事务**，不 rollback 后续全挂
-            n_expect = 1
-        if mode == "sqlglot":
-            ck(multi_ok, "多行 INSERT 落库（编译层：每个 tuple 都补审计值）")
-        else:
-            ck(True, f"多行 INSERT 在 legacy 下**已知边界**（{type(multi_err).__name__}）"
-                     f"—— 应用里无此形态，编译层已修")
+        # 多行 VALUES：每个 tuple 都要补审计值（旧的字符串手术只补最后一个 —— 现在没有那条路了）
+        _exec(c, "INSERT INTO probe_box (name, note) VALUES (?, ?), (?, ?)",
+              ("乙", "二", "丙", "三"))
+        c.commit()
         rows = _rows(_exec(c, "SELECT name, created_by, updated_by, settled_at FROM probe_box "
                               "ORDER BY id"))
-        ck(len(rows) == n_expect, f"落库 {len(rows)} 行（本路径期望 {n_expect}）")
+        ck(len(rows) == 3, f"多行 INSERT 落库 {len(rows)} 行（期望 3）")
         ck(all(r["created_by"] == "pgprobe" and r["updated_by"] == "pgprobe" for r in rows),
            "**每一行**都注入了审计身份")
         ck(all(r["settled_at"] for r in rows), "默认值 settled_at 非空（时间函数归一化在 PG 上成立）")
@@ -368,13 +228,7 @@ def main():
     except FdeError as e:
         ck("参数个数" in str(e), f"参数个数不匹配明确报错（FdeError）：{str(e)[:40]}…")
     except Exception as e:                    # noqa: BLE001
-        # legacy 路径这里是驱动层的 `IndexError: tuple index out of range`（占位符账对不上）——
-        # 同样是"已知边界"：编译层换成了可读的 FdeError。
-        if mode == "sqlglot":
-            ck(False, f"编译层应报 FdeError，实际 {type(e).__name__}: {e}")
-        else:
-            ck(True, f"legacy 下参数不匹配报的是驱动错（{type(e).__name__}）—— 已知边界，"
-                     f"编译层已换成可读的 FdeError")
+        ck(False, f"参数不匹配应报 FdeError，实际 {type(e).__name__}: {e}")
     finally:
         try:
             c2.close()
@@ -384,14 +238,9 @@ def main():
     print("== 5. 第二批形态（两边都要支持：子查询 / CTE / 聚合 / LIMIT / DELETE …）==")
     _shape_batch(mode)
 
-    print("== 6. 差分 oracle：legacy 与编译层**结果必须一致** ==")
-    _differential()
-
-    print("== 7. 清理（只用临时 schema，不碰任何应用数据）==")
+    print("== 6. 清理（只用临时 schema，不碰任何应用数据）==")
     try:
         z = _conn()
-        for tag in ("legacy", "compile"):
-            _exec(z, f'DROP SCHEMA IF EXISTS "sqlc_probe_{os.getpid()}_{tag}_probe" CASCADE')
         _exec(z, f'DROP SCHEMA IF EXISTS "{APP_SCHEMA}" CASCADE')
         z.commit()
         z.close()
