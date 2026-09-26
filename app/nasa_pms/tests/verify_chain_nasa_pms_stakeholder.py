@@ -353,8 +353,13 @@ def main():
     record("status" not in call("get", sh_no="SH-001"),
            "get 返回里**没有** status 字段（主数据无状态机 —— 卡片 11）")
     from fde_platform import db as _db
+    from fde_platform import ddl as _ddl
     conn = _db.get_connection(qname, pf._apps[qname].db_path)
-    cols = [c[1] for c in conn.execute("PRAGMA table_info(stakeholder)").fetchall()]
+    # ⚠ 别用 `PRAGMA table_info(...)` 查列：那是 **SQLite 专属**，PG 上直接语法错
+    #   （2026-09-27 在测试服务器上用克隆库跑这一片时撞到：`syntax error at or near "PRAGMA"`）。
+    #   改用平台的**方言感知内省**（sqlite 走 PRAGMA、PG 走 information_schema）——
+    #   与 `ddl.reconcile_columns` 用的是同一个函数，两边口径也就一致了。
+    cols = sorted(_ddl._existing_columns(conn, "stakeholder", _db.dialect_of(conn)))
     record("status" not in cols and "sh_no" in cols,
            f"stakeholder 表列={cols} —— 无 status 列")
 
