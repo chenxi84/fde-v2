@@ -109,6 +109,8 @@ def main():
     # 只碰 `sqlc_probe%` 前缀，绝不涉及任何应用 schema。
     for row in _rows(_exec(boot, "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'sqlc_probe%'")):
         name = list(row.values())[0]
+        if name == SCHEMA:            # ⚠ 别把自己刚建的清掉（名字也匹配 sqlc_probe%）
+            continue
         _exec(boot, f'DROP SCHEMA IF EXISTS "{name}" CASCADE')
     boot.commit()
     ddl_text = SCHEMA_SQL
