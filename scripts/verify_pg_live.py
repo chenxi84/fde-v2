@@ -123,10 +123,12 @@ def _shape_batch(mode):
         c.close()
 
 
+# ⚠ 差分的前提是"**两边都能执行**的语句" —— legacy 的已知边界（多行 VALUES、参数不匹配）
+#   不放进这一批：那两处在 §1 已按路径分别验证，放进来只会让差分按定义失败。
 DIFF_SQL = [
     ("INSERT 单行", "INSERT INTO probe_box (name, note) VALUES (?, ?)", ("甲", "一")),
-    ("INSERT 多行", "INSERT INTO probe_box (name, note) VALUES (?, ?), (?, ?)",
-     ("乙", "二", "丙", "三")),
+    ("INSERT 第二行", "INSERT INTO probe_box (name, note) VALUES (?, ?)", ("乙", "二")),
+    ("INSERT 第三行", "INSERT INTO probe_box (name, note) VALUES (?, ?)", ("丙", "三")),
     ("UPDATE 带子查询", "UPDATE probe_box SET note = ? WHERE name IN "
                        "(SELECT name FROM probe_box WHERE name = ?)", ("改过", "甲")),
     ("LIKE 模糊搜索", "SELECT name, note FROM probe_box WHERE name LIKE '%' || ? || '%' ORDER BY name",
