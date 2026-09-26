@@ -3,6 +3,13 @@
 
 
 import datetime
+import sys
+
+# ⚠ 本文件本来是**片段**（由父脚本 exec、编码由父脚本钉住）；2026-09-27 为了 `_d()` 加了
+#   模块级 import ⇒ 门禁的结构性判据（「有 run_part 且无模块级 import」）不再把它当片段，
+#   于是它回到编码检查范围、当场暴露出"打印串里有 − / ⇒ 这些非 GBK 码位却没钉编码"。
+#   按门禁的设计意图补上这一行（片段变独立脚本就该自己钉编码；被 exec 时重复钉也无害）。
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 def _d(offset: int) -> str:
     """相对**今天**的日期字符串（用例里禁止写死绝对日期）。
