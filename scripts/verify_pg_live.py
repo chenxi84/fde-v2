@@ -83,11 +83,22 @@ def _rows(cur):
 
 def main():
     print("== 前置 ==")
-    if not db.using_postgresql():
-        print("  ⚠ SKIP：当前不是 PostgreSQL（本地 SQLite）—— 本探针只在有真 PG 的机器上跑")
+    # ⚠ 判据用 `_PG_AVAILABLE`（DATABASE_URL 是否指向 PG），**不能**直接用 `using_postgresql()`：
+    #   后者要求"取连接方式已建立"，而连接池/Engine 是**懒建**的 —— 在 `docker exec` 开的新进程里
+    #   还没取过连接，它恒为 False。踩过一次：探针在真 PG 的容器里报"当前不是 PostgreSQL"。
+    #   （memory `test-server-deploy` 里记的同一个坑：`python -c "from fde_platform import db; print(db.db_mode())"`
+    #     会报「连接失败→回退 SQLite」，那也是懒加载，不代表线上在跑 SQLite。真值要看容器启动横幅。）
+    if not db._PG_AVAILABLE:
+        print("  ⚠ SKIP：DATABASE_URL 未指向 PostgreSQL（本地 SQLite）—— 本探针只在有真 PG 的机器上跑")
         print("  VERIFY_RESULT: SKIP")
         return 0
+    if not db.using_postgresql():
+        db._pg_pool()                     # 懒建：本进程先建立取连接方式
     print(f"  db_mode(): {db.db_mode()}")
+    if not db.using_postgresql():
+        print("  ✗ 连不上 PostgreSQL（见上面的日志：连接失败→回落 SQLite）")
+        print("  VERIFY_RESULT: FAIL")
+        return 1
     print(f"  FDE_SQL_COMPILER={os.environ.get('FDE_SQL_COMPILER', 'legacy')}")
 
     # 预备：临时 schema
