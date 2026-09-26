@@ -170,6 +170,14 @@ def _diff_run(tag):   # noqa: C901
             except Exception as e:                # noqa: BLE001
                 c.rollback()                      # PG：失败语句中止事务，必须回滚
                 out[label] = ("err", f"{type(e).__name__}: {str(e)[:50]}")
+        # ⚠ 落库快照必须在**边界批之前**取：边界批会往同一个 schema 里多插几行
+        #    （编译层插得进去、legacy 插不进去），混进来会让"逐行一致"变成假差异。
+        rows = _rows(_exec(c, "SELECT name, note, created_by, updated_by, created_at FROM probe_box "
+                              "ORDER BY name"))
+        for r in rows:
+            for k in ("created_at", "updated_at"):
+                if r.get(k):
+                    r[k] = "<ts>"
         bounds = {}
         for label, sql, params in BOUNDARY_SQL:
             try:
@@ -179,13 +187,7 @@ def _diff_run(tag):   # noqa: C901
             except Exception as e:                # noqa: BLE001
                 c.rollback()
                 bounds[label] = f"{type(e).__name__}"
-        rows = _rows(_exec(c, "SELECT name, note, created_by, updated_by, created_at FROM probe_box "
-                              "ORDER BY name"))
         _ = out
-        for r in rows:                                  # 时间戳归一（两条路差几秒，不该算差异）
-            for k in ("created_at", "updated_at"):
-                if r.get(k):
-                    r[k] = "<ts>"
         return out, rows, bounds
     finally:
         c.close()
