@@ -86,3 +86,6 @@ config/rules/*
 _flow_*.yaml
 !app/nasa_pms/_flow_*.yaml
 !app/psc/_flow_*.yaml
+
+# 本地起 agent_service 时的控制台日志（每台机器一份，不入库）
+/_agent_service.log

@@ -240,9 +240,14 @@ export default function pageProcess() {
           ).join("") + `</g>`;
       }).join("");
       const intraEls = (L.intraEdges || []).map((e) => hArrow(e.x1, e.x2, e.y)).join("");
-      // ⚠ `max-width:${L.w}px`：**不许放大**（画布比容器小时按自然尺寸渲染，字号才等于设计值；
-      //   容器更窄则由外层 .scroll-x 横向滚动）—— 少了它，窄画布会被 width:100% 放大、字看着超大。
-      return `<svg viewBox="0 0 ${L.w} ${L.h}" width="100%" style="min-width:520px;max-width:${L.w}px;display:block">` +
+      // ⚠ 这里**不设 `max-width`**（2026-09-27 改，用户要求"横向撑满、字体放大，与 PSC 一致"）：
+      //   早先封顶在 `L.w`（≈722）是"不许放大、字号恒定"的路子，但画布只占容器 44%、
+      //   右侧一大片空，演示时又小又空。现在 `width:100%` ⇒ 宽屏**拉满**（字号随 viewBox
+      //   等比放大：1920 演示档 1246/722 ≈ 1.7 倍，13px → 22px）。
+      //   ⚠ `min-width` 必须留在 **520**（不是 PSC 的 720）：窄档（1280 视口 + 右栏展开，
+      //     内容区 638）下 720 会逼出横向滚动条 —— `VT-PROCESS-06` 就是守这条的。
+      //     520 让窄档**等比缩小**（19px→11.5px），宁可字小一点，也不出滚动条。
+      return `<svg viewBox="0 0 ${L.w} ${L.h}" width="100%" style="min-width:520px;display:block">` +
         `<defs><linearGradient id="p-pill" x1="0" y1="0" x2="1" y2="0">` +
         `<stop offset="0" stop-color="#1d2c3f"></stop><stop offset="1" stop-color="#175e54"></stop>` +
         `</linearGradient></defs>` + bg + stageEls + intraEls + nodeEls + `</svg>`;

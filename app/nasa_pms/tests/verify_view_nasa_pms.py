@@ -394,8 +394,13 @@ def main():
                 f"VT-PROCESS-06 出现横向滚动条（scrollWidth {_sc['sw']} > clientWidth {_sc['cw']}）"
                 f" —— 画布太宽，应收紧尺寸或允许缩小")
 
-            # VT-PROCESS-06b 反面：**右栏收起时不得把画布放大**（那会把字放大 —— 用户实测反馈过）
-            # 右栏收起后内容区变宽（~1000px），若画布没封顶就会被 width:100% 放大 1.6 倍
+            # VT-PROCESS-06b **画布要横向撑满，但放大倍数封顶**（2026-09-27 改口径）
+            # ⚠ 这条**推翻了它自己 09-25 版**（旧判据是"不许放大：渲染宽 ≤ 自然宽，否则加 max-width"）。
+            #   推翻的理由是用户看了成片后的直接反馈："要横向撑满界面、字体放大，和 PSC 的流程总览
+            #   保持一致" —— 旧口径正是让画布只占容器 44%、右侧一大片空的原因。
+            #   但"不许放大"也不能反过来变成"随便放大"，所以新判据是**两头都管**：
+            #     · 撑满：渲染宽 ≥ 容器宽 × 0.9（不许再出现大片空白）
+            #     · 封顶：放大倍数 ≤ 2.0（自然宽 722 → 上限 ~1444，1920 演示档实测 1.7 倍）
             page.locator(".agent-toggle").first.click()
             page.wait_for_timeout(500)
             _up = page.evaluate("""() => { const c = document.querySelector('[data-role="process-svg"]');
@@ -403,9 +408,12 @@ def main():
                 return {natural: +svg.getAttribute('viewBox').split(' ')[2],
                         shown: Math.round(svg.getBoundingClientRect().width),
                         contWidth: c.clientWidth}; }""")
-            assert _up["shown"] <= _up["natural"] + 1, (
-                f"VT-PROCESS-06b 画布被放大：容器 {_up['contWidth']}px 时渲染成 {_up['shown']}px"
-                f"（自然宽 {_up['natural']}px）—— 放大即「字太大」，需加 max-width 封顶")
+            assert _up["shown"] >= _up["contWidth"] * 0.9, (
+                f"VT-PROCESS-06b 画布没撑满：容器 {_up['contWidth']}px 只渲染成 {_up['shown']}px"
+                f"（占比 {round(_up['shown'] / max(_up['contWidth'], 1) * 100)}%，要求 ≥ 90%）")
+            assert _up["shown"] <= _up["natural"] * 2.0 + 1, (
+                f"VT-PROCESS-06b 放得太大：自然宽 {_up['natural']}px 被放大到 {_up['shown']}px"
+                f"（{round(_up['shown'] / max(_up['natural'], 1), 2)} 倍，上限 2.0）")
             assert _up["contWidth"] >= _up["shown"], "VT-PROCESS-06b 右栏收起后也不应出现横向滚动"
             page.locator(".agent-toggle").first.click()      # 复原（后续断言依赖右栏展开）
             page.wait_for_timeout(400)
