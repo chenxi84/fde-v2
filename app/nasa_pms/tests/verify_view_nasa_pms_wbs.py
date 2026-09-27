@@ -4,12 +4,14 @@
 **BR-01** 编号必填 → **BR-05** 发起变更只认已批准（模态候选 + 后端校验）→ 落实变更后**版次 +1、
 记修订授权** → **BR-03** 无范围出处不得基线 → **BR-06** 未收口不得关闭 / 草稿没有关闭入口 →
 详情模态的字典字段（范围出处 / 关联需求 / 修订授权）→ 已基线无「编辑」入口（给的是「发起变更」）
-→ 树视图缩进索引 → 全程 0 console error / 0 pageerror / 0 HTTP≥400。
+→ 树视图缩进索引 → 元素↔活动读数与入口 → 版式 → **WBS 甘特（汇总条 = 子树包络，只读派生）**
+→ 全程 0 console error / 0 pageerror / 0 HTTP≥400。
 
-用例来源：app/nasa_pms/wbs/前端测试用例.md（§0 造数 + §1..§6）。
+用例来源：app/nasa_pms/wbs/前端测试用例.md（§0 造数 + §1..§8）。
 运行：python app/nasa_pms/tests/verify_view_nasa_pms_wbs.py
 """
 import atexit
+import datetime
 import http.client
 import os
 import pathlib
@@ -604,11 +606,163 @@ def main():
             page.set_viewport_size({"width": 1280, "height": 720})
             page.wait_for_timeout(400)
 
+            # ── §8 WBS 甘特（VT-WGANTT-01..08，2026-09-27 增补）────────────────────
+            # 材料依据：IMS 的甘特是**按 WBS 层级**呈现的（NASA/SP-2010-3403 §5.5）—— 元素行的
+            #   条是**其子树全部活动的包络**，不是元素自己存的日期（`wbs_element` 没有日期列）。
+            # 造一条**串联链**（123456.01.01 的活动 → 123456.02 的活动 → 123456.02 的里程碑），
+            #   这样"包络"与"两支先后"都能被**量**出来，而不是只断言"有条"。
+            # ⚠ 这一步只造数 + 量条，**不点写按钮**；本页对 `activity` 依旧只读。
+            step("§8 WBS 甘特（VT-WGANTT-01..08）")
+            gseed = page.evaluate(
+                r"""async (a1) => {
+                  const call = async (app, svc, params) => {
+                    const r = await fetch(`/api/apps/${app}/call/${svc}`, {
+                      method: "POST", headers: {"Content-Type": "application/json"},
+                      body: JSON.stringify(params || {})});
+                    const t = await r.text();
+                    let d = null; try { d = t ? JSON.parse(t) : null; } catch (e) {}
+                    if (!r.ok) throw new Error(`${app}.${svc} HTTP ${r.status} ${t.slice(0,120)}`);
+                    if (d && d.status === "error") throw new Error(d.message || t.slice(0,120));
+                    return d && d.data !== undefined ? d.data : d;
+                  };
+                  const ACT = "nasa_pms/activity";
+                  const a2 = await call(ACT, "create", {name: "载荷分系统联试", wbs_no: "123456.02",
+                                                        duration_days: 4, predecessors: a1 + ":FS:0"});
+                  const ms = await call(ACT, "create", {name: "载荷交付里程碑", kind: "milestone",
+                                                        wbs_no: "123456.02", duration_days: 0,
+                                                        predecessors: a2.act_no});
+                  return {a2: a2.act_no, ms: ms.act_no};
+                }""", seed.get("act_no"))
+            rec(bool(gseed and gseed.get("a2")),
+                "造数：123456.02 上新建串联活动 + 里程碑（量包络用）")
+
+            page.click('[data-role="to-wbs-gantt"]')
+            page.wait_for_selector('[data-role="wbs-gantt"]:visible', timeout=8000)
+            page.wait_for_timeout(1200)
+
+            # ⚠ 图是 **canvas**（ECharts 画的），DOM 里**没有"条"可量** —— 所以断言面换成了
+            #   `getOption()`：行模型随 option 挂在 `series[0].data[*].row` 上（实测 getOption()
+            #   原样返回），量的是**渲染真正吃进去的那份数据**，不是页面上另存的一份副本。
+            def gantt_snap(pg):
+                return pg.evaluate(r"""() => {
+                  const el = document.getElementById('wbsGantt');
+                  const E = window.echarts;
+                  const ch = (el && E) ? E.getInstanceByDom(el) : null;
+                  if (!ch) return null;
+                  const o = ch.getOption();
+                  return {w: ch.getWidth(), h: ch.getHeight(),
+                          rows: o.series[0].data.map((x) => x.row),
+                          cats: (o.yAxis[0].data || []).length,
+                          tree: document.querySelectorAll('[data-role="tree"] .sline').length};
+                }""")
+
+            g = gantt_snap(page)
+            # VT-WGANTT-01 图真的建出来了，且 **canvas 有宽度**
+            #   （0 宽 = 整张图什么都不画且不报错 —— 平台在 material360 踩过，故钉成判据）
+            rec(bool(g and g["w"] > 200 and g["h"] > 100),
+                f"VT-WGANTT-01 ECharts 已建图且 canvas 有尺寸（{g and g['w']}×{g and g['h']}）")
+            wr = [r for r in ((g or {}).get("rows") or []) if not r["is_act"]]
+            ar = [r for r in ((g or {}).get("rows") or []) if r["is_act"]]
+            byno = {r["d"]["wbs_no"]: r for r in wr}
+
+            # VT-WGANTT-01 元素行与树视图一一对应（同一棵树的两种呈现，不重不漏）
+            rec(bool(g) and len(wr) == g["tree"],
+                f"VT-WGANTT-01 元素行数 == 树视图行数（{len(wr)} vs {g and g['tree']}）")
+
+            # VT-WGANTT-02 汇总条 = **子树的包络**：根元素的条包住它两支后代的条
+            root, c1, c2 = byno.get("123456"), byno.get("123456.01"), byno.get("123456.02")
+            kids = [x for x in (c1, c2) if x and x.get("from")]
+            ok_env = bool(root and root.get("from") and len(kids) == 2)
+            span_txt = "、".join(f"{k['d']['wbs_no']}:{k['from']}..{k['to']}" for k in kids) or "缺条"
+            rec(ok_env and root["from"] <= min(k["from"] for k in kids)
+                and root["to"] >= max(k["to"] for k in kids),
+                "VT-WGANTT-02 根元素汇总条包住两支后代条（"
+                + (f"{root['from']}..{root['to']} ⊇ {span_txt}" if ok_env else span_txt) + "）")
+            # VT-WGANTT-02 串联链（ACT → ACT:FS:0 → 里程碑）：01 支整条落在 02 支之前
+            rec(bool(c1 and c2 and c1.get("to") and c2.get("from") and c1["to"] < c2["from"]),
+                "VT-WGANTT-02 串联链两支不重叠（"
+                + (f"{c1['to']} < {c2['from']}" if (c1 and c2) else "缺条") + "）")
+
+            # VT-WGANTT-03 只有一支后代的元素：汇总条退化成那支的区间（同起同止）
+            leaf = byno.get("123456.01.01")
+            rec(bool(leaf and c1 and leaf.get("from") == c1.get("from")
+                     and leaf.get("to") == c1.get("to")),
+                "VT-WGANTT-03 单后代元素的汇总条 == 后代区间（"
+                + (f"{c1['from']}..{c1['to']} vs {leaf['from']}..{leaf['to']}"
+                   if (leaf and c1) else "缺条") + "）")
+
+            # VT-WGANTT-04 没有活动的元素：不画条（没有日期区间），只在图上标「无活动」
+            noact = [r for r in wr if not r.get("acts")]
+            rec(bool(noact) and all(not r.get("from") and not r.get("to") for r in noact),
+                f"VT-WGANTT-04 无活动的元素不画条（{len(noact)} 个："
+                + "、".join(r["d"]["wbs_no"] for r in noact) + "）")
+
+            # VT-WGANTT-05 叶子下面挂活动（缩进 +1）· 里程碑是菱形而不是细条
+            rec(bool(ar) and all(r["depth"] >= 1 for r in ar),
+                f"VT-WGANTT-05 活动行缩进挂在元素行下（{len(ar)} 条 · 深度 "
+                + "、".join(sorted({str(r["depth"]) for r in ar})) + "）")
+            rec(any(r.get("is_ms") for r in ar), "VT-WGANTT-05 里程碑按菱形渲染（is_ms 行存在）")
+
+            # VT-WGANTT-06 窗口变化后图跟着伸缩（漏了 resize 监听就会留一张固定宽的图）
+            w0 = g and g["w"]
+            page.set_viewport_size({"width": 1600, "height": 1000})
+            page.wait_for_timeout(800)
+            w1 = page.evaluate("() => { const el = document.getElementById('wbsGantt');"
+                               " const c = el && window.echarts ?"
+                               " window.echarts.getInstanceByDom(el) : null;"
+                               " return c ? c.getWidth() : 0; }")
+            rec(bool(w1 and w0 and w1 > w0 + 100),
+                f"VT-WGANTT-06 窗口变宽后图跟着 resize（{w0} → {w1}）")
+
+            # VT-WGANTT-07/08 两个点击入口（都曾是"看着能点、点了没反应"的地方，故钉住）
+            #   坐标交给 ECharts 自己换算（`convertToPixel({seriesIndex:0}, [天偏移, 行号])`），
+            #   不自己拿 band 高度算 —— 少一处"改版式就失准"的隐式依赖。
+            def chart_pt(day_off, row_i):
+                return page.evaluate(
+                    "([x, y]) => window.echarts.getInstanceByDom("
+                    "document.getElementById('wbsGantt')).convertToPixel({seriesIndex: 0}, [x, y])",
+                    [day_off, row_i])
+
+            gbox = page.locator("#wbsGantt").bounding_box()
+            gbase = datetime.date.fromisoformat(
+                min(r["from"] for r in g["rows"] if r.get("from")))
+
+            i_leaf = [i for i, r in enumerate(g["rows"])
+                      if not r["is_act"] and r["d"]["wbs_no"] == "123456.01.01"][0]
+            pt = chart_pt(0, i_leaf)
+            page.mouse.click(gbox["x"] + 60, gbox["y"] + pt[1])   # 右侧是绘图区，左侧才是标签区
+            page.wait_for_timeout(900)
+            # VT-WGANTT-07 点左侧名称 → 开该元素详情
+            #   ⚠ 轴标签事件的 `p.value` 是**类目名（那串富文本标签）**而不是行号 —— 首版按行号取，
+            #     静默拿到 undefined，点上去毫无反应且不报错（实测）。这条判据就是为它钉的。
+            head = page.locator('.modal-mask:visible [data-role="wbs-head"]')
+            rec(head.count() == 1 and "123456.01.01" in head.inner_text(),
+                "VT-WGANTT-07 点左侧名称 → 开该元素详情（"
+                + (head.inner_text()[:38].replace("\n", " ") if head.count() else "没开") + "）")
+            close_modal(page)
+
+            # VT-WGANTT-08 点活动条 → 跳活动台账并带「挂靠元素」筛选
+            i_act = [i for i, r in enumerate(g["rows"])
+                     if r["is_act"] and r["a"]["act_no"] == seed.get("act_no")][0]
+            arow = g["rows"][i_act]
+            pt = chart_pt((datetime.date.fromisoformat(arow["from"]) - gbase).days + 0.5, i_act)
+            page.mouse.click(gbox["x"] + pt[0], gbox["y"] + pt[1])   # 条上（天偏移 +0.5 天处）
+            page.wait_for_selector('[data-role="f-wbs"]', timeout=10000)
+            page.wait_for_timeout(800)
+            rec(page.input_value('[data-role="f-wbs"]') == "123456.01.01",
+                "VT-WGANTT-08 点活动条 → 跳活动台账并带「挂靠元素」筛选（"
+                + page.input_value('[data-role="f-wbs"]') + "）")
+            page.evaluate("location.hash = '#/wbs'")
+            page.wait_for_selector("table.tbl tr.data", timeout=10000)
+            page.wait_for_timeout(600)
+            page.set_viewport_size({"width": 1280, "height": 720})
+            page.wait_for_timeout(400)
+
             # 豁免清单受检（V5）：收集了却从不校验 = 给静默吞掉开口子
             for _ig in ignored:
                 rec(("/favicon.ico" in _ig or ".map" in _ig), f"豁免理由成立：{_ig[:90]}")
 
-            step("§8 硬件指标（VT-HW-90）")
+            step("§9 硬件指标（VT-HW-90）")
             rec(not errors, f"0 console error / 0 pageerror / 0 HTTP≥400（实际 {len(errors)}）")
             for e in errors[:6]:
                 print("      ✗", e)

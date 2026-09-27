@@ -24,8 +24,10 @@
       <input x-model="f_keyword" @keydown.enter="search()" placeholder="编号 / 名称 / 描述"
         style="width:170px">
       <button class="b-ghost b-sm" @click="search()">搜索</button>
-      <button class="b-ghost b-sm" @click="switchView(view === 'tree' ? 'list' : 'tree')"
-        x-text="view === 'tree' ? '列表视图' : '树视图'"></button>
+      <!-- 三个视图各一个按钮（与活动页同一做法）：不写"切换"按钮 —— 三态下 toggle 会绕圈 -->
+      <button class="b-ghost b-sm" @click="switchView('list')">列表视图</button>
+      <button class="b-ghost b-sm" @click="switchView('tree')">树视图</button>
+      <button class="b-ghost b-sm" data-role="to-wbs-gantt" @click="switchView('gantt')">甘特视图</button>
       <button class="b-pri b-sm" @click="openForm(null)">新建顶层元素</button>
     </div>
   </div>
@@ -47,6 +49,37 @@
         <span class="muted mono" x-text="revText(r.d)"></span>
       </div>
     </template>
+  </div>
+
+  <!-- 甘特视图：**WBS 级汇总条** —— 元素行看子树包络，叶子下面挂活动条。
+       图由 **ECharts** 画（平台已内置 `view/lib/echarts.min.js`，与 psc 三个页同款）：
+       时间轴/网格线/tooltip/缩放/resize 全是白送的；手搓 div 条那版实测日期列被挤爆、
+       文字压在条上、且没有网格线（详见 view.js 顶部那段注释）。
+       ⚠ 本页对 `activity` 只读：日期来自 `activity.schedule_view`（派生量，不落 wbs 库），
+         本应用至今没有日期列（应用详设 §1.3.2「不管理活动与日期」的边界仍在）。
+       ⚠ 图的 DOM 只有这一个 canvas 容器（`#wbsGantt`）——**没有可量的"条"**，e2e 改从
+         `getOption()` 里读行模型对账（`series[0].data[*].row`），见测试脚本 §8。 -->
+  <div data-role="wbs-gantt" x-show="view === 'gantt'" x-cloak style="padding:4px 16px 14px">
+    <div class="muted" style="font-size:12px;margin-bottom:6px;line-height:1.7">
+      WBS 甘特 —— 按元素层级看进度：<b style="color:#475569">细深条 = 元素汇总</b>（子树活动的包络）、
+      <b style="color:#38bdf8">浅蓝条 = 活动</b>（条内深色 = 完成度 · 条下灰线 = 基线）、
+      <b style="color:#0ea5e9">◆ = 里程碑</b>
+      <br>
+      <span x-show="schedule" x-text="schedule ? schHead() : ''"></span>
+      <span style="opacity:.75">　·　点条或名称开详情 · 滚轮缩放时间轴</span>
+    </div>
+    <template x-if="schErr">
+      <div class="empty">取不到进度数据（`activity.schedule_view` 不可用）—— 甘特是只读派生视图，台账/树不受影响</div>
+    </template>
+    <template x-if="!schErr && !ganttRows().length">
+      <div class="empty">还没有活动 —— 去「进度活动」给最底层元素挂活动，这里就会长出汇总条</div>
+    </template>
+    <!-- 图的容器：高度按行数算（一行 26px + 刻度带），宽度撑满卡片
+         ⚠ `width` 也必须写进**同一个** `:style` 绑定里 —— `:style` 字符串会整条替换
+           inline style（pitfalls #51）：分开写就是把 `width:100%` 白送掉，canvas 宽度塌成 0。 -->
+    <div id="wbsGantt" data-role="gantt-canvas"
+      x-show="!schErr && ganttRows().length"
+      :style="'width:100%;height:' + ganttHeight() + 'px'"></div>
   </div>
 
   <div class="scroll-x" x-show="view === 'list'">
