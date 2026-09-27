@@ -1,0 +1,72 @@
+name: 变更请求 → 影响分析 → 审批 → 实施 → 配置项发版
+key: cr_to_release
+description: 配置管理主线：提出变更（影响范围必填）→ 登记影响分析 → 提交审批 → 批准 → 实施 →
+  用该变更号给配置项发版。角色 `nasa_cm`（配置与变更管理员）。
+  链条上每一环都会被下一环校验：发版要变更号、实施要已批准、审批要已提交影响分析。
+nodes:
+- id: raise
+  role: nasa_cm
+  task: |
+    提出一条变更请求（**影响范围必填**，BR-01）：
+    1) 先调 nasa_pms__configuration_item__list 找一个**已受控**的配置项（拿它的 ci_no）；
+    2) 调 nasa_pms__change_request__create：title 写「星务软件时序微调」，requester 写「星务分系统」，
+       ci_nos 填上一步那个 ci_no，req_nos 可留空，description 写清为什么改；
+    3) 回报：变更编号、状态、关联的配置项。
+    注意：影响范围为空、或配置项不存在/已归档，都会被拒。
+  output: raise_note
+- id: analyze
+  role: nasa_cm
+  task: |
+    对「{raise_note}」里那条变更登记影响分析并提交审批（按顺序实际执行）：
+    1) 调 nasa_pms__change_request__analyze 登记影响分析（写清影响哪些配置项/需求、要不要重测）；
+    2) 调 nasa_pms__change_request__submit_review 提交审批；
+    3) 回报：两次调用各自推进到哪个状态。
+    注意：先批后分析会被拒（审批门的唯一入口是「提交审批」）；影响分析为空也会被拒。
+  input:
+  - raise_note
+  depends_on:
+  - raise
+  output: analyze_note
+- id: approve
+  role: nasa_cm
+  task: |
+    批准上一步提交的那条变更（调 nasa_pms__change_request__approve，comment 写审批意见、approver 写审批人）。
+    回报：变更编号 + 状态 + 审批意见。若状态不是「审批中」，如实说明**缺哪一步**，不要绕。
+  input:
+  - analyze_note
+  depends_on:
+  - analyze
+  output: approve_note
+- id: implement
+  role: nasa_cm
+  task: |
+    实施上一步批准的那条变更（调 nasa_pms__change_request__implement，note 写实施说明）。
+    回报状态。注意：**未批准就实施会被拒**。
+  input:
+  - approve_note
+  depends_on:
+  - approve
+  output: implement_note
+- id: release
+  role: nasa_cm
+  task: |
+    给配置项发版（发版**必须带变更号**，BR-03 的入口校验）：
+    用「{implement_note}」里那条变更的编号，调 nasa_pms__configuration_item__release
+    （ci_no 用这条变更当初关联的配置项，change_no 用变更编号）。
+    回报：配置项编号、状态、记录下的变更号。
+    注意：本应用只校验"带了变更号"，**"批准没批"由变更请求保证** —— 所以别跳过前面的审批环节。
+  input:
+  - implement_note
+  depends_on:
+  - implement
+  output: release_note        # ⚠ 被下游 input 引用的节点必须声明 output，否则下游按「缺输入」被跳过
+- id: summary
+  role: nasa_cm
+  task: |
+    汇总这一轮配置管理闭环（提出 → 影响分析 → 审批 → 实施 → 发版）：
+    列出变更编号、配置项编号与当前版本、以及**这条链上每一步的状态**（哪一步被谁推进）。
+  input:
+  - release_note
+  depends_on:
+  - release
+  output: summary_note        # 终端节点也声明 output：结论才会进 state（进度快照与后续复用都靠它）

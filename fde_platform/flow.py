@@ -124,6 +124,48 @@ def _migrate(conn) -> None:
     conn.commit()
 
 
+def flow_problems(data: dict) -> list[str]:
+    """静态校验一份 flow 声明，返回**问题清单**（空 = 没问题）。
+
+    为什么需要它（2026-09-27 加）：`app/nasa_pms/_flow_wbs_baseline.yaml` 的 `recheck` 节点
+    `depends_on: [change]`，而本文件里那个节点叫 `revise` —— 声明"合法"、流程也报 `done`，
+    但第 7 步**永远不执行**：`deps['recheck']` 永不被满足 ⇒ `ready` 为空 ⇒ break，
+    而 `_report_progress` 照样按 `step_total` 报完成。**跑完少一步还显示成功**，没人看得出来。
+    同类还有：`output` 被下游 `input` 引用却没声明（下游按「缺输入」被跳过，见
+    `_flow_cr_to_release.yaml` 里那条注释）。
+
+    判据只有三条，都是"静默少跑一步"的成因：
+      1. 节点 `id` 必须唯一（重名会让 `node_by_id` 覆盖掉一个，被覆盖那个静默不跑）；
+      2. `depends_on` 里的每个 id 必须真实存在；
+      3. 被下游 `input: [x]` 引用的 `x`，必须由某个节点 `output` 声明。
+    """
+    out: list[str] = []
+    # 校验**归一化之后**的节点（steps 形态的 id/depends_on 是 `_normalize_nodes` 补出来的）
+    nodes = _normalize_nodes(data) if isinstance(data, dict) else []
+    ids = [str(n.get("id") or "") for n in nodes]
+    seen: set = set()
+    for i in ids:
+        if not i:
+            out.append("有节点缺 id")
+        elif i in seen:
+            out.append(f"节点 id 重复：{i}")
+        seen.add(i)
+    known = {i for i in ids if i}
+    outs = {str(n.get("output") or "") for n in nodes if isinstance(n, dict)} - {""}
+    for n in nodes:
+        if not isinstance(n, dict):
+            continue
+        nid = str(n.get("id") or "?")
+        for d in (n.get("depends_on") or []):
+            if str(d) not in known:
+                out.append(f"节点 {nid} 的 depends_on 指向不存在的节点：{d}")
+        for dep in (n.get("input") or []):
+            # input 里可能写占位符（`{xxx}`）：那是运行期变量，不按 output 校验
+            if str(dep) in known and str(dep) not in outs:
+                out.append(f"节点 {nid} 引用了 {dep}，但该节点没有声明 output")
+    return out
+
+
 def _load_flows() -> dict[str, dict]:
     """扫描 app/<组>/_flow_*.yaml，返回 {flow_name: flow_def}（def 含 group/key）。"""
     flows: dict[str, dict] = {}
@@ -139,6 +181,10 @@ def _load_flows() -> dict[str, dict]:
                 continue  # 声明有误：跳过该 flow
             if not isinstance(data, dict):
                 continue
+            # ⚠ 声明有问题**照样加载**（不改变既有行为），但**必须出声**：静默少跑一步
+            #   是这类声明的典型症状（见 flow_problems 的说明）。
+            for prob in flow_problems(data):
+                print(f"[flow] ⚠ {f.name}：{prob}")
             name = data.get("name")
             if not name:
                 continue

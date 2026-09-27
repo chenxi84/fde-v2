@@ -1,0 +1,107 @@
+name: 产销协同链
+key: forecast_to_plan
+description: 销售域先跑预测（基线→决策→汇总），库存域算出水位、计划域算出净需求并导回主计划；
+  交付域据净需求登记出库计划，库存域最后刷新推移表——把未来出库算进去，水位击穿即自动生成补库单。
+nodes:
+- id: forecast
+  role: sales
+  task: |
+    做本月产销协同的销售侧准备工作，按顺序实际执行（不是给建议，是调服务把事做完）：
+    1) 调 psc__md_monthly_version__get_active 取当前活跃版本号；
+    2) 调 psc__sales_forecast__calc_baseline_batch 批量计算该版本的统计基线；
+    3) 调 psc__sales_forecast__decide_batch 批量决策；
+    4) 调 psc__sales_forecast__summarize 汇总该版本。
+    完成后汇报：活跃版本号、被标记为异常的客户×物料、各自的最终预测量。
+  output: forecast
+  input: []
+  depends_on: []
+  when: null
+  until: null
+- id: inventory
+  role: inventory
+  task: |
+    基于销售侧结论「{forecast}」，做库存侧承接（版本号取自销售侧结论）：
+    1) 调 psc__inventory_strategy__calc_batch 计算该版本的库存策略三层水位
+       ——**version_no 要显式传**（形如 202610）：计划节点会在本节点之后跑
+       （它依赖本节点算出的水位），且它会把版本推入冻结态，
+       届时再取「活跃版本」就不是这个版本了；
+    2) 调 psc__inventory_strategy__list 查看计算结果。
+    汇报：哪些物料走「库存对冲」、哪些走「速度对冲」，以及水位带下限/上限偏紧的物料。
+  output: inventory
+  input:
+  - forecast
+  depends_on:
+  - forecast
+  when: null
+  until: null
+- id: plan
+  role: planning
+  task: |
+    基于销售侧结论「{forecast}」，做计划侧承接，按顺序执行（版本号取自销售侧结论）：
+    1) 调 psc__demand__build_gross 合成该版本的毛需求；
+    2) 调 psc__demand__publish 把毛需求发布冻结（**不发布则第 3 步会报
+       「毛需求未发布冻结」**）；
+    3) 调 psc__demand__calc_net 计算净需求（这一步会把版本推入冻结态，属预期）；
+    4) 调 psc__master_plan__import_from_net 把净需求「原样通过」回主计划：
+       version_no 传上面那个版本号（形如 202610），rolling_month 传 "N+1"，
+       latest_inbound_date 传 "2026-10-31"，
+       material_nos 传 ["BYD-HAN-FB26", "BYD-HAN-RB26", "BYD-HAN-WIR"]。
+       取数、换算、拼行都由该服务自己完成（net_qty 即 plan_qty），
+       **你不要手抄任何数量**，只把上面几个参数传对。
+    汇报：import_from_net 返回的 success 行数（应为 3）与涉及的料号。
+  output: plan
+  input:
+  - forecast
+  - inventory
+  # inventory 是**硬前置**：build_gross 要把库存水位（A+C+B）叠进毛需求，
+  # 而水位由库存策略节点算出来。原先是 [forecast] 一个依赖 → 与 inventory 并行抢跑
+  # → 水位取不到 → 毛需求整层漏掉（且 demand 那边曾静默按 0 处理，两边都不报错）。
+  depends_on:
+  - forecast
+  - inventory
+  when: null
+  until: null
+- id: outbound
+  role: delivery
+  task: |
+    基于库存结论「{inventory}」与计划结论「{plan}」，做交付侧承接
+    （**必须跑在推移刷新之前**——推移表要拿它算未来出库后的水位）：
+    1) 调 psc__outbound_plan__list 查看现有出库计划；
+    2) 调 psc__demand__export_net 取净需求清单（版本号取自计划结论里的那个版本）；
+    3) 对库存结论里点名的**水位偏紧**物料，用 psc__outbound_plan__create 各登记一条
+       出库计划。该服务的参数名是 customer_no / material_no / qty / out_date：
+       客户取 BYD，out_date 取 "2026-10-10"，qty 取该物料 N+1 的 net_qty
+       （从第 2 步返回值里取原值，不要自己编数）。
+    汇报：登记了哪些出库计划（物料 / 数量）。
+  output: outbound
+  input:
+  - inventory
+  - plan
+  depends_on:
+  - inventory
+  - plan
+  when: null
+  until: null
+- id: projection
+  role: inventory
+  task: |
+    出库计划已登记（见「{outbound}」），现在刷新库存推移表并处理击穿：
+    1) 调 psc__inventory_projection__refresh_batch 刷新全量库存推移表，
+       **biz_date 必须传本次协同版本的开库日**（版本 YYYYMM → 该月第一天，
+       如 202610 → "2026-10-01"）。不传会默认按今天推演，落到已冻结的
+       202609 版本上，就取不到 202610 的水位线了。
+       刷新时若水位击穿，系统会自动生成补库单；
+    2) 从返回值的 replenishments 字段看本次触发了哪些补库单；
+    3) 调 psc__demand_pool__list 核对需求池里的补库单。
+    汇报：哪些物料出现击穿、本次自动生成了几条补库单、补库数量各是多少。
+  output: projection
+  input:
+  - inventory
+  - plan
+  - outbound
+  depends_on:
+  - inventory
+  - plan
+  - outbound
+  when: null
+  until: null

@@ -1,16 +1,21 @@
 """nasa_pms 演示数据 · 造数（**写入真库**，供演示/看板/知识库用）。
 
-场景：**近地轨道遥感卫星 EO-3 项目**（Earth Observation 3）—— 一条从"用户方提出观测需求"
-到"技术度量超阈值告警"的完整系统工程故事。11 个聚合根**每个状态档位都有样本**，
-所以看板的状态分布、列表筛选、状态机动作在演示时都能点得动。
+场景：**近地轨道遥感卫星 EO-3 项目**（Earth Observation 3）—— 一条从"用户方提出观测需求"、
+经"研制与总装试验"，走到**"公司要发射这颗卫星"**（发射段与在轨段）的完整系统工程故事。
+13 个聚合根**每个状态档位都有样本**，所以看板的状态分布、列表筛选、状态机动作在演示时都能点得动。
 
     python app/nasa_pms/demo/demo_seed.py            # 清空本组数据后重建
-    python app/nasa_pms/demo/demo_seed.py --keep      # 不清空，直接追加（调试用）
+    python app/nasa_pms/demo/demo_seed.py --keep      # 清空后追加（调试用）
+
+**发射任务段（2026-09-27 加）**：`review` 的 trr/prr/frr/orr、`verification` 的 on_orbit、
+`tech_plan` 的 d/e 阶段、`configuration_item` 的 as_deployed、`interface` 的 icp 本来就在字典里 ——
+所以"发射"**靠已有模型装得下**，不需要新聚合（见 §发射任务段前的注释）。
+其中**飞行就绪评审 FRR 与发射活动链刻意不预置**：录屏里由数字员工/流程编排现场创建。
 
 设计要点（与 `app/psc` 的 `宣传/demo_seed.py` 同形态）：
   · **一律经服务造数**（`platform.call`），不直连 SQL —— 状态机、BR 校验、跨应用弱引用
     都走真实路径，所以造出来的数据**天生是合法的演示状态**；顺带也是一次端到端演练。
-  · **幂等**：默认先清空本组 11 张表（保留 config/ 下的平台库与用户/角色）。
+  · **幂等**：默认先清空本组 13 张表（保留 config/ 下的平台库与用户/角色）。
   · **跨应用顺序**按弱引用依赖排：stakeholder → requirement(基线) → tech_plan → configuration_item
     → change_request(审批到已批准) → 配置项发版(用该变更号) → verification → risk
     → technical_measure → review(引计划) → decision(引度量)。
@@ -430,20 +435,207 @@ def seed(pf):
     call("activity", "record_progress", act_no="ACT-002", percent_complete=60,
          actual_start="2026-10-06")
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # 以下是**发射任务段**（2026-09-27 加）：把"研制中的一颗星"推进到"公司要发射它"。
+    #
+    # 为什么这么加（而不是新开一个聚合）：NASA 的 13 个聚合根是按**过程产出的东西**选的，
+    # 「发射」在模型里不是对象而是**各台账在不同阶段的行** —— 所以发射任务靠**已有模型装得下**：
+    #   · 阶段轴   → `tech_plan.phase` / `review.phase` 的 d（总装集成与发射）、e（运行与保障）
+    #   · 发射前评审 → `review.review_type` 已内置 trr/prr/**frr**/orr（测试/生产/**飞行**就绪/运行就绪）
+    #   · 在轨测试 → `verification.phase` 第 8 档 **on_orbit**
+    #   · 部署构型 → `configuration_item.baseline` 的 **as_deployed**
+    #   · 整星—运载 → `interface.if_type=icp`（运载火箭作为接口的另一方）
+    # 一条**没有**预置、刻意留给数字员工现场做的：**飞行就绪评审 FRR** 与**发射活动链**
+    #   —— 录屏里由 Agent / 流程编排现场创建（BR-06 要求活动名唯一，预置了现场就造不出来）。
+    # ══════════════════════════════════════════════════════════════════════════
+
+    # ── ⑫ 发射任务的对外接口方（运载 / 发射场 / 测控网）───────────────────
+    call("stakeholder", "upsert", sh_no="SH-006", name="运载火箭研究院", sh_type="contractor",
+         duty="提供运载火箭与发射服务", org="航天发射集团")
+    call("stakeholder", "upsert", sh_no="SH-007", name="发射场测发大队", sh_type="contractor",
+         duty="发射场地面保障与射前作业")
+    call("stakeholder", "upsert", sh_no="SH-008", name="测控站网", sh_type="internal_org",
+         duty="入轨段与在轨测控支持")
+    call("stakeholder", "add_expectation", sh_no="SH-006",
+         statement="星箭接口包络不超过 2.2 m × 3.6 m、发射质量不超过 1200 kg",
+         kind="constraint", source="运载接口控制文件 ICP-004", committed=True)
+    call("stakeholder", "add_expectation", sh_no="SH-008",
+         statement="入轨段与在轨每圈测控覆盖率不低于 98%", kind="need", source="测控网支持协议")
+
+    # ── ⑬ 发射段 / 在轨段需求（发射基线 B2）───────────────────────────────
+    call("requirement", "create", title="入轨精度满足轨道设计值",
+         statement="半长轴偏差 ≤ 5 km、倾角偏差 ≤ 0.05°、偏心率偏差 ≤ 0.001。",
+         req_type="system", verify_method="analysis", owner="总体设计部")
+    call("requirement", "create", title="每月有不少于 3 天的发射窗口",
+         statement="受光照角与测控弧段约束，每月可用发射窗口不少于 3 天（连续）。",
+         req_type="system", verify_method="analysis", owner="总体设计部")
+    call("requirement", "create", title="测控覆盖率不低于 98%",
+         statement="入轨段与在轨长期管理阶段，每圈测控覆盖率不低于 98%。",
+         req_type="technical", verify_method="test", owner="测控分系统")
+    call("requirement", "create", title="星箭分离冲击不超过 1000 g",
+         statement="分离面冲击响应不超过 1000 g（星上设备安装面，三轴）。",
+         req_type="technical", verify_method="test", owner="结构分系统")
+    call("requirement", "create", title="在轨成像质量五年内不退化",
+         statement="在轨第 5 年 GSD 相对发射初期退化不超过 10%。",
+         req_type="system", verify_method="test", owner="载荷分系统")
+    call("requirement", "create", title="寿命末期太阳翼输出功率不低于 1.2 kW",
+         statement="寿命末期（5 年）太阳翼输出功率不低于 1.2 kW。",
+         req_type="technical", verify_method="test", owner="电源分系统")
+    # 发射基线 B2：发射段四条冻进基线（B1 是研制期基线，两版并存便于演示"基线不覆盖"）
+    for no in ("REQ-014", "REQ-015", "REQ-016", "REQ-017"):
+        call("requirement", "submit_review", req_no=no)
+    call("requirement", "baseline", req_nos=["REQ-014", "REQ-015", "REQ-016", "REQ-017"],
+         baseline_ver="B2")
+    # REQ-018 停在待评审（发射窗口评审要看的另一条），REQ-019 留草稿
+    call("requirement", "submit_review", req_no="REQ-018")
+
+    # ── ⑭ 技术计划：发射实施计划（D 阶段）+ 在轨测试计划（E 阶段）──────────
+    call("tech_plan", "create", name="发射实施计划", plan_type="integration", phase="d",
+         maturity="baseline", scope="总装集成、发射场作业、射前检查与发射窗口安排",
+         owner="发射任务总体")
+    call("tech_plan", "submit", plan_no="PLAN-005")
+    call("tech_plan", "approve", plan_no="PLAN-005", approver="技术副总师",
+         note="发射实施安排已评审，按要求落实")
+    call("tech_plan", "create", name="在轨测试计划", plan_type="verification", phase="e",
+         maturity="preliminary", scope="入轨后 30 天的在轨功能与性能测试安排", owner="在轨测试组")
+    call("tech_plan", "submit", plan_no="PLAN-006")
+
+    # ── ⑮ 配置项：发射状态构型（产品基线）与在轨部署构型（部署基线）────────
+    call("configuration_item", "create", name="发射状态构型（星箭组合体）", ci_type="hardware",
+         owner="总体设计部")
+    call("configuration_item", "control", ci_no="CI-007")
+    call("configuration_item", "assign_baseline", ci_no="CI-007", baseline="product",
+         baseline_ver="B2")
+    call("configuration_item", "create", name="在轨部署构型", ci_type="document",
+         owner="总体设计部")
+    call("configuration_item", "control", ci_no="CI-008")
+    call("configuration_item", "assign_baseline", ci_no="CI-008", baseline="as_deployed",
+         baseline_ver="B2")
+
+    # ── ⑯ 变更：整星质量超限 → 减重变更（与 TPM-002 的超阈值告警同一条故事线）──
+    call("change_request", "create", title="整星质量超限减重变更（发射质量考核）",
+         requester="总体设计部", ci_nos=["CI-007"], req_nos=["REQ-003"],
+         description="初样称重 1225 kg 超发射质量约束 1200 kg，需减重并重新称重")
+    call("change_request", "analyze", cr_no="CR-005",
+         impact_analysis="影响 CI-007（发射状态构型）与 REQ-003；复材舱板减重方案需重跑力学试验")
+    call("change_request", "submit_review", cr_no="CR-005")
+    call("change_request", "approve", cr_no="CR-005", comment="减重方案可行，同意实施后再复核质量",
+         approver="CCB 主任")
+
+    # ── ⑰ 验证项：**在轨（on_orbit）** 三条 —— 补上发射后在轨测试的验证矩阵 ──
+    call("verification", "create", req_no="REQ-002", method="test", phase="on_orbit",
+         criteria="在轨靶标成像判读 GSD ≤ 1.5 m", owner="载荷分系统")
+    call("verification", "create", req_no="REQ-016", method="test", phase="on_orbit",
+         criteria="连续 30 天统计每圈测控覆盖率 ≥ 98%", owner="测控分系统")
+    call("verification", "create", req_no="REQ-014", method="analysis", phase="on_orbit",
+         criteria="入轨后 7 天定轨结果半长轴偏差 ≤ 5 km", owner="总体设计部")
+
+    # ── ⑱ 风险：发射段与在轨段四条（技术 / 计划 / 进度三类）────────────────
+    call("risk", "create", title="发射窗口受光照与天气约束",
+         statement="连续阴雨或测控弧段不满足会导致窗口推迟，影响交付节点",
+         category="programmatic", req_no="REQ-015", owner="发射任务总体")
+    call("risk", "create", title="星箭耦合振动导致部组件失效",
+         statement="分离面冲击与低频正弦振动可能超出部组件耐受", category="technical",
+         req_no="REQ-017", owner="结构分系统")
+    call("risk", "create", title="发射场排期与其它型号冲突", statement="发射工位与加注资源可能被占用",
+         category="schedule", owner="发射场测发大队")
+    call("risk", "create", title="在轨单粒子翻转引起星务复位",
+         statement="轨道环境单粒子效应可能导致星务计算机复位、任务中断", category="technical",
+         req_no="REQ-018", owner="星务分系统")
+    call("risk", "assess", risk_no="RSK-007", likelihood=3, consequence=4)     # → 高
+    call("risk", "assess", risk_no="RSK-008", likelihood=2, consequence=5)     # → 高
+    call("risk", "assess", risk_no="RSK-009", likelihood=3, consequence=3)     # → 中
+    call("risk", "assess", risk_no="RSK-010", likelihood=2, consequence=4)     # → 中
+    call("risk", "mitigate", risk_no="RSK-007",
+         mitigation="提前 30 天做窗口分析并锁定两个备份窗口月")
+    call("risk", "mitigate", risk_no="RSK-008",
+         mitigation="补做分离冲击试验并加装减振垫（试验矩阵已并入 PLAN-005）")
+
+    # ── ⑲ 技术度量：入轨精度 / 太阳翼功率 / 测控覆盖率（发射基线 B2）────────
+    call("technical_measure", "create", name="入轨半长轴偏差", category="tpm", direction="lower",
+         target_value=3, threshold_value=5, unit="km", req_no="REQ-014", owner="总体设计部")
+    call("technical_measure", "create", name="太阳翼输出功率", category="tpm", direction="higher",
+         target_value=1.5, threshold_value=1.2, unit="kW", req_no="REQ-019", owner="电源分系统")
+    call("technical_measure", "create", name="测控覆盖率", category="mop", direction="higher",
+         target_value=0.99, threshold_value=0.98, unit="—", req_no="REQ-016", owner="测控分系统")
+    for no in ("TPM-005", "TPM-006", "TPM-007"):
+        call("technical_measure", "baseline", tpm_no=no, baseline_ver="B2")
+    call("technical_measure", "record", tpm_no="TPM-005", period="2026-Q3", measured_value=4.2,
+         note="入轨精度仿真预示（偏差在阈值内）")
+    call("technical_measure", "record", tpm_no="TPM-006", period="2026-Q3", measured_value=1.45,
+         note="太阳翼地面测试（寿命初期）")
+    call("technical_measure", "record", tpm_no="TPM-007", period="2026-Q3", measured_value=0.985,
+         note="测控覆盖率仿真统计")
+
+    # ── ⑳ 评审：发射就绪链上**已过**的 TRR 与**跟踪中**的 PRR ────────────────
+    # （飞行就绪评审 FRR 刻意不预置 —— 录屏里由数字员工现场建）
+    call("review", "create", title="测试就绪评审（TRR）", review_type="trr", phase="d",
+         subject="总装集成与试验完成后是否具备发射场作业条件", plan_no="PLAN-005",
+         owner="发射任务总体")
+    call("review", "add_item", review_no="RV-004", item="所有环境试验项已完成并判读通过",
+         criterion="试验报告齐套、无未关闭的飞行件偏离")
+    call("review", "add_item", review_no="RV-004", item="发射场作业文件齐套", criterion="作业流程与应急预案已批准")
+    call("review", "start", review_no="RV-004")
+    call("review", "conclude", review_no="RV-004", conclusion="pass",
+         minutes="试验项齐套，转入发射场作业", actions=[])
+    call("review", "close", review_no="RV-004", note="无行动项，直接关闭")
+
+    call("review", "create", title="生产就绪评审（PRR）", review_type="prr", phase="d",
+         subject="发射场保障与射前作业准备情况", plan_no="PLAN-005", owner="发射场测发大队")
+    call("review", "add_item", review_no="RV-005", item="发射工位与加注资源已锁定",
+         criterion="排期表已确认且无冲突")
+    call("review", "start", review_no="RV-005")
+    call("review", "conclude", review_no="RV-005", conclusion="conditional",
+         minutes="保障资源基本到位，气象保障方案需补充",
+         actions=[{"content": "补充发射窗口期气象保障与备选窗口方案", "owner": "发射场测发大队",
+                   "due_date": "2026-10-20"}])
+    # 停在「行动项跟踪中」：FRR 之前这条行动项必须收口（发射就绪链的活口）
+
+    # ── ㉑ 接口：星箭分离 / 发射场保障 / 测控站（发射段的对外接口）──────────
+    call("interface", "create", if_name="整星—运载分离接口", if_type="icp",
+         provider="总体设计部", consumer="运载火箭研究院",
+         icd_content="分离冲击 ≤ 1000 g；分离时序 T+1200 s；包络 2.2 m × 3.6 m",
+         ci_no="CI-007", owner="结构分系统")
+    call("interface", "release", if_no="IF-005")
+    call("interface", "create", if_name="发射场地面保障接口", if_type="idd",
+         provider="发射场测发大队", consumer="总体设计部",
+         icd_content="供电 400 V/50 Hz；空调温湿度 20±5 ℃ / ≤60%RH；吊装载荷 ≤ 3 t",
+         owner="发射任务总体")
+    call("interface", "release", if_no="IF-006")
+    call("interface", "create", if_name="测控站—卫星测控接口", if_type="ird",
+         provider="测控分系统", consumer="测控站网",
+         icd_content="S 频段上行 2 kbps / 下行 8 kbps；单圈测控弧段 ≥ 8 min",
+         owner="测控分系统")
+    call("interface", "release", if_no="IF-007")
+
+    # ── ㉒ WBS：发射支持系统（使能性工作）+ 其下的工作包「发射场保障」────────
+    # 这是流程编排现场造「发射活动链」的挂靠点（活动只能挂**叶子**元素，BR-05）
+    call("wbs", "add_child", parent_no="400000", title="发射支持系统", kind="enabling",
+         owner="发射任务总体")
+    call("wbs", "update", wbs_no="400000.04", scope_ref="SOW §5 发射支持范围",
+         req_nos="REQ-015")
+    call("wbs", "add_child", parent_no="400000.04", title="发射场保障", kind="wp",
+         owner="发射场测发大队")
+    call("wbs", "update", wbs_no="400000.04.01", scope_ref="SOW §5.1 发射场作业",
+         req_nos="REQ-017")
+    call("wbs", "baseline", wbs_no="400000.04")
+    call("wbs", "baseline", wbs_no="400000.04.01")
+
     return {
-        "stakeholder": 5, "expectations": 4,
-        "requirement": 13, "baselined": 4, "baseline_ver": "B1",
-        "tech_plan": 4, "configuration_item": 6, "released_ci": 2,
-        "change_request": 3, "cr_implemented": 1, "cr_approved": 1,
-        "verification": 4, "ver_closed": 1, "ver_failed": 1,
-        "risk": 6, "risk_closed": 2, "risk_accepted": 1,
-        "technical_measure": 4, "tpm_exceeded": 1, "tpm_closed": 1,
-        "review": 3, "review_closed": 1, "review_tracking": 1,
+        "stakeholder": 8, "expectations": 6,
+        "requirement": 19, "baselined": 8, "baseline_ver": "B2",
+        "tech_plan": 6, "configuration_item": 8, "released_ci": 2,
+        "change_request": 5, "cr_implemented": 1, "cr_approved": 2,
+        "verification": 7, "ver_closed": 1, "ver_failed": 1, "ver_on_orbit": 3,
+        "risk": 10, "risk_closed": 2, "risk_accepted": 1,
+        "technical_measure": 7, "tpm_exceeded": 1, "tpm_closed": 1,
+        "review": 5, "review_closed": 2, "review_tracking": 2,
         "decision": 3, "decision_decided": 2, "decision_implemented": 1,
-        "interface": 4, "if_frozen": 1, "if_released": 2,
-        # WBS（2026-09-26 并入）：8 个元素 —— 已基线 4 / 变更中 1 / 已关闭 2 / 草稿 1
-        "wbs": 8, "wbs_baselined": 4, "wbs_in_change": 1, "wbs_closed": 2, "wbs_draft": 1,
-        # 进度活动（2026-09-26 并入）：5 条 —— 已基线 4 / 已完成 1 / 进行中 1 / 计划 3
+        "interface": 7, "if_frozen": 1, "if_released": 5,
+        # WBS（2026-09-26 并入）：10 个元素 —— 已基线 6 / 变更中 1 / 已关闭 2 / 草稿 1
+        "wbs": 10, "wbs_baselined": 6, "wbs_in_change": 1, "wbs_closed": 2, "wbs_draft": 1,
+        # 进度活动（2026-09-26 并入）：6 条 —— 已基线 4 / 已完成 1 / 进行中 1 / 计划 3
+        # ⚠ **发射活动链刻意不预置**：录屏里由流程编排现场造（BR-06 活动名唯一，预置了就造不出来）
         "activity": 6, "activity_baselined": 4, "activity_completed": 1,
         "activity_in_progress": 1,
     }

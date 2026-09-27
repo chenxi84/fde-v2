@@ -1,0 +1,73 @@
+name: 度量超阈值 → 告警 → 纠正 → 复测 → 关闭
+key: tpm_alert_heal
+description: 技术度量的自愈环：先**确定性地**扫出未了结告警（call 节点，不过 LLM）→ 若为空则整条流程在此收束
+  （`when` 跳过）→ 否则由智能体做纠正 → 复测 → 达标则关闭 → 再确定性地复核告警清单。
+  角色 `nasa_risk_tpm`（风险与度量分析师）。
+  混用两种节点：`call` 是**可复现、不烧模型**的取证/复核，`agent` 才是需要判断的那几段。
+nodes:
+- id: scan
+  type: call
+  call:
+    service: technical_measure.list_alerts
+    args:
+      status: open
+  output: open_alerts
+- id: triage
+  role: nasa_risk_tpm
+  task: |
+    下面是从平台取回的**未了结告警**（原始返回）：
+    {open_alerts}
+    请读它，回答三件事：① 涉及哪几条度量（编号 + 名称）；② 各自超的是目标值还是阈值、超了多少；
+    ③ 你建议的纠正动作与**先做哪一条**（理由）。
+    只做判断与说明，**先不要改数据**。
+  input:
+  - open_alerts
+  depends_on:
+  - scan
+  when:
+    key: open_alerts
+    op: not_empty
+  output: triage_note
+- id: correct
+  role: nasa_risk_tpm
+  task: |
+    按你的判断「{triage_note}」对**优先级最高的那条**度量登记纠正：
+    调 nasa_pms__technical_measure__correct（tpm_no 用该度量编号，corrective_action 写清纠正动作）。
+    回报：编号、动作、纠正后的状态。注意：未超阈值的度量没有可纠正的告警（会被拒）。
+  input:
+  - triage_note
+  depends_on:
+  - triage
+  output: correct_note
+- id: retest
+  role: nasa_risk_tpm
+  task: |
+    对上一步纠正过的度量**记一期复测读数**（调 nasa_pms__technical_measure__record）：
+    period 用一个**新的期次标签**（如 2026-Q3；同一度量同一期次不能重复记），measured_value 取
+    一个"纠正后达标"的值（方向为大越好就取高于目标值、小越好就取低于目标值）。
+    回报：读数、判定结果、当前状态。
+  input:
+  - correct_note
+  depends_on:
+  - correct
+  output: retest_note
+- id: close
+  role: nasa_risk_tpm
+  task: |
+    若「{retest_note}」显示该度量已经达标，就调 nasa_pms__technical_measure__close 关闭它
+    （note 写关闭依据）；**若仍未达标就不要关闭**，如实说明还差多少。
+    回报最终状态。
+  input:
+  - retest_note
+  depends_on:
+  - retest
+  output: close_note
+- id: recheck
+  type: call
+  call:
+    service: technical_measure.list_alerts
+    args:
+      status: open
+  depends_on:
+  - close
+  output: remaining_alerts

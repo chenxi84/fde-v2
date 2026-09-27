@@ -1,0 +1,98 @@
+name: WBS 分解 → 覆盖对账 → 基线 → 变更
+key: wbs_baseline
+description: 工作分解侧的闭环：按产品分解元素树（子号由系统分配）→ **确定性**核对需求覆盖 →
+  **自顶向下**基线（进配置控制）→ 用一条已批准的变更请求发起修订 → 落实变更（版次 +1）→
+  确定性复核。角色 `nasa_planner`（技术计划与评审主管）。
+  依据 `NASA/SP-20250006071`《NASA WBS Handbook》§3.3.3 / §3.3.5 / §3.3.6 / §3.4.2。
+  ⚠ 变更那一段**必须拆成两个节点**：角色的工具面是收窄的 —— `nasa_planner` 拿不到
+  `configuration_item` / `change_request` 的工具，硬写成一个节点会在跑的时候被拒。
+nodes:
+- id: tree
+  role: nasa_planner
+  task: |
+    为「EO-3 遥感卫星」建一棵三层 WBS（按顺序**实际执行**，不是给建议）：
+    1) 调 nasa_pms__wbs__create 建顶层元素：wbs_no 用「300000」，title 写「卫星平台」，
+       scope_ref 写「SOW §3 平台范围」，owner 写「总体设计部」；
+    2) 调 nasa_pms__wbs__add_child 在 300000 下建「结构分系统」；
+    3) 再调 nasa_pms__wbs__add_child 在 300000 下建「热控分系统」；
+    4) 调 nasa_pms__wbs__add_child 在**结构分系统**下建「复合材料舱板」；
+    5) 回报：新建了哪几个编号、各自层级。
+    注意：**不要手写子编号**（子号由系统按规则分配，手写会与编号规则冲突被拒）；
+    元素名必须按**产品**起 —— 用「设计」「工程部」「A 阶段」这类职能/组织/阶段词会被 BR-04 拒。
+  output: tree_note
+- id: coverage
+  type: call
+  call:
+    service: wbs.coverage
+  depends_on:
+  - tree
+  output: coverage_note
+- id: review
+  role: nasa_planner
+  task: |
+    下面是从平台取回的**需求覆盖对账**（原始返回）：
+    {coverage_note}
+    请读它并回答三件事：① 几条需求已被 WBS 元素认领、几条还没被认领；
+    ② 还没被认领的那几条，你建议挂到哪个元素上（说明理由）；
+    ③ 「有元素但没挂需求」的那些项，分别更像产品分解的哪一层（或是不是使能性工作）。
+    只做判断与说明，**先不要改数据**。
+  input:
+  - coverage_note
+  depends_on:
+  - coverage
+  output: review_note
+- id: baseline
+  role: nasa_planner
+  task: |
+    按「{tree_note}」把刚建的四个元素**自顶向下**纳入基线（父先子后）：
+    依次调 nasa_pms__wbs__baseline，顺序是 顶层 → 两个子分系统 → 复合材料舱板。
+    若某个元素被拒说「没有填范围定义出处」，就先调 nasa_pms__wbs__update 补上 scope_ref 再重试
+    （顶层已有，子元素大概率要补）；若被拒说「父元素尚未基线」，说明顺序错了，按自顶向下重来。
+    回报：每个元素基线后的状态与版次。
+  input:
+  - tree_note
+  depends_on:
+  - review
+  output: baseline_note
+- id: raise_cr
+  role: nasa_cm
+  task: |
+    提一条变更请求并批准它（配置与变更管理员的活，**这一步不碰 WBS**）：
+    1) 调 nasa_pms__configuration_item__list 拿一个已受控配置项的 ci_no；
+    2) 调 nasa_pms__change_request__create：title 写「WBS 舱板材料变更」，requester 写「结构分系统」，
+       ci_nos 填上一步的 ci_no，description 写清为什么改；
+    3) 依次调 analyze → submit_review → approve（批准之后这条变更才能被下游引用）；
+    4) 回报：变更编号与最终状态。
+  input:
+  - baseline_note
+  depends_on:
+  - baseline
+  output: cr_note
+- id: revise
+  role: nasa_planner
+  task: |
+    用上一步批准的变更，修订并落实那个**已基线**的 WBS 元素：
+    1) 调 nasa_pms__wbs__change 对「复合材料舱板」（编号见「{baseline_note}」）发起修订，
+       change_no 用「{cr_note}」里的那个编号，note 写修订原因；
+    2) 调 nasa_pms__wbs__baseline **落实变更**（版次会 +1、并把变更号记进修订授权）；
+    3) 回报：元素编号、状态、版次与修订授权。
+    注意：变更**未批准**就调 wbs.change 会被拒（BR-05），此时如实回报缺哪一步，不要绕。
+  input:
+  - cr_note
+  depends_on:
+  - raise_cr
+  output: change_note
+- id: recheck
+  type: call
+  call:
+    service: wbs.list
+    args:
+      status: baselined
+  # ⚠ 这里曾写成 `- change`（**不存在的 id**，本文件的节点叫 `revise`）—— 后果是这条流程
+  #   每次都报 `done`、但**第 7 步静默不执行**：`flow.run_flow` 里 `deps['recheck']={'change'}`
+  #   永不被满足 ⇒ `ready` 为空 ⇒ break，而 `_report_progress` 照样按 `step_total` 报完成。
+  #   2026-09-27 修（并给 `flow.load_flows` 加了「depends_on 必须指向存在的节点」的加载期校验，
+  #   让同类错误**开跑前**就报出来，而不是跑完少一步还显示成功）。
+  depends_on:
+  - revise
+  output: baselined_elements

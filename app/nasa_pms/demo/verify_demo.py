@@ -83,14 +83,35 @@ CHECKS = [
     ("activity.get(act_no=ACT-006)", "predecessors", "ACT-003:SS:3:与单元测试并行，文档随代码走",
      "另有一条 **SS + 滞后 + 理由**（§5.5.8.2 的四种关系模型）"),
     ("interface.get(if_no=IF-001)", "status", "released", "接口已发布"),
+    # ── 发射任务段（2026-09-27 加）：把"公司在发射一颗卫星"这件事按身份钉住 ──
+    ("stakeholder.get(sh_no=SH-006)", "name", "运载火箭研究院", "运载方作为对外接口方入册"),
+    ("requirement.get(req_no=REQ-014)", "status", "baselined", "发射基线 B2 已建立"),
+    ("tech_plan.get(plan_no=PLAN-005)", "status", "approved", "发射实施计划已批准（D 阶段）"),
+    ("review.get(review_no=RV-004)", "status", "closed", "测试就绪评审 TRR 已通过并关闭"),
+    ("review.get(review_no=RV-005)", "status", "tracking",
+     "生产就绪评审 PRR 停在「行动项跟踪中」（FRR 之前必须收口）"),
+    ("verification.get(ver_no=VER-005)", "phase", "on_orbit", "有在轨（on_orbit）验证项"),
+    ("configuration_item.get(ci_no=CI-008)", "baseline", "as_deployed",
+     "在轨部署构型（as_deployed 基线）"),
+    ("interface.get(if_no=IF-005)", "status", "released", "星箭分离接口已发布"),
+    ("risk.get(risk_no=RSK-007)", "status", "mitigating", "发射窗口风险在缓解中"),
+    ("technical_measure.get(tpm_no=TPM-005)", "status", "measuring",
+     "入轨精度度量已冻进发射基线 B2 并记了一期读数（记读数会把状态推到 measuring）"),
+    ("change_request.get(cr_no=CR-005)", "status", "approved", "减重变更已批准（质量超限的处置）"),
+    ("wbs.get(wbs_no=400000.04.01)", "status", "baselined",
+     "发射场保障工作包已基线（流程编排现场挂活动的那片叶子）"),
+    # ⚠ 飞行就绪评审 FRR **刻意不在这里查**：它是录屏里由数字员工现场建的，
+    #   造数完就该不存在（查了反而会把"现场造数"这条演示路径钉死）。
 ]
 COUNT_CHECKS = [
-    ("stakeholder", "list", {}, 5, "利益相关者"),
-    ("requirement", "list", {}, 13, "需求"),
-    ("risk", "list", {}, 6, "风险"),
-    ("technical_measure", "list", {}, 4, "技术度量"),
-    ("wbs", "list", {}, 8, "WBS 元素"),
-    ("activity", "list", {}, 6, "进度活动"),
+    ("stakeholder", "list", {}, 8, "利益相关者"),
+    ("requirement", "list", {}, 19, "需求"),
+    ("risk", "list", {}, 10, "风险"),
+    ("technical_measure", "list", {}, 7, "技术度量"),
+    ("wbs", "list", {}, 10, "WBS 元素"),
+    ("activity", "list", {}, 6, "进度活动（发射链由流程编排现场造，不在这里）"),
+    ("review", "list", {}, 5, "评审（FRR 同样留给现场）"),
+    ("interface", "list", {}, 7, "接口"),
 ]
 
 

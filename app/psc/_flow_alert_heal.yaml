@@ -1,0 +1,26 @@
+# 库存巡检自愈（含条件分支 when + 循环 until 示例）
+name: 库存巡检自愈
+description: 扫描击穿预警 → 击穿才补货(when) → 复核直到满足(until) → 写报告
+nodes:
+  - id: scan
+    role: inventory
+    task: "扫描库存推移表，返回击穿水位预警的物料清单与结论。"
+    output: alert
+  - id: replenish
+    role: inventory
+    task: "对「{alert}」中的击穿物料生成补货单。"
+    input: [alert]
+    output: replenish
+    when: {key: alert, op: contains, value: "击穿"}
+  - id: verify
+    role: inventory
+    task: "复核补货后的库存水位，返回「已满足」或「仍击穿」。"
+    input: [replenish]
+    output: status
+    until: {key: status, op: contains, value: "已满足"}
+    max_loop: 3
+  - id: report
+    role: inventory
+    task: "基于扫描结果「{alert}」和补货结果「{replenish}」写巡检报告。"
+    input: [alert, replenish]
+    output: report

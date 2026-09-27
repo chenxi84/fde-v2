@@ -1,0 +1,61 @@
+name: 需求 → 派生 → 基线 → 验证矩阵
+key: req_to_verify
+description: 需求侧的闭环：录入系统需求 → 派生一条 → 纳入新基线（全或无）→ 为基线内需求规划验证项 → 汇总。
+  角色 `nasa_requirements`（需求与验证工程师），工具面只含 需求/验证项/利益相关者 三个应用。
+nodes:
+- id: intake
+  role: nasa_requirements
+  task: |
+    录入一条**系统级**需求（按顺序实际执行，不是给建议）：
+    1) 调 nasa_pms__requirement__create：title 用「数传误码率优于 1E-7」，statement 写成**可验证的陈述**
+       （含判据，如"在仰角 10° 以上、速率 900 Mbps 条件下误码率优于 1E-7"），req_type=system，
+       verify_method=test，owner 写「测控分系统」；
+    2) 回报：新需求的编号、状态、以及**下一步该做什么**。
+    注意：正文空、验证方法空都会被拒（BR-01）；只有标题的需求不算需求。
+  output: intake_note
+- id: derive
+  role: nasa_requirements
+  task: |
+    基于上一步的结论「{intake_note}」派生一条需求（**派生必须挂上游**，BR-02）：
+    调 nasa_pms__requirement__derive，title 用「地面接收站误码率测试项覆盖」，source_req_no 用
+    上一步新建的那条需求编号，verify_method=analysis。回报新编号与它挂的上游。
+  input:
+  - intake_note
+  depends_on:
+  - intake
+  output: derive_note
+- id: baseline
+  role: nasa_requirements
+  task: |
+    把**本轮新建的两条需求**（上一步「{derive_note}」里给出的编号，及其上游）纳入基线 B-DEMO：
+    调 nasa_pms__requirement__baseline，要求**两条都带上**（baseline 是整批全或无：任一条缺验证方法则整批被拒）。
+    若报错说「须先提交评审」，就按提示**先对这两条分别 `submit_review`，再重试 `baseline`**（一次即可）；
+    若仍被拒（例如缺验证方法），**如实回报报错原文**并说明缺少哪一步，不要绕过、不要伪造基线已建立。
+  input:
+  - derive_note
+  depends_on:
+  - derive
+  output: baseline_note
+- id: matrix
+  role: nasa_requirements
+  task: |
+    为刚进基线的两条需求规划验证项（验证矩阵的行 = 需求 × 方法 × 阶段）：
+    1) 调 nasa_pms__verification__create 逐条建（req_no 用基线里的编号，method 与该需求的 verify_method 一致，
+       phase 用 system_functional，criteria 写成**可判定**的判据）；
+    2) 调 nasa_pms__verification__list 核对条数；
+    3) 回报：验证矩阵新增了哪几行、各自的状态。
+  input:
+  - baseline_note
+  depends_on:
+  - baseline
+  output: matrix_note
+- id: summary
+  role: nasa_requirements
+  task: |
+    汇总这一轮（录入 → 派生 → 基线 → 验证矩阵）的结果「{matrix_note}」：
+    用 3–5 行说清：新增了哪些编号、基线版本、验证矩阵覆盖情况，
+    以及**还有哪些需求没有验证项**（用 nasa_pms__verification__list 或 requirement.list 对照）。
+  input:
+  - matrix_note
+  depends_on:
+  - matrix

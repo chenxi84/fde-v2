@@ -18,6 +18,8 @@ import os
 import pathlib
 import sys
 
+import yaml
+
 # 输出编码：控制台代码页在本机默认是 GBK，而本脚本的结论里有 ✓/✗/⚠/⇒ 这类**非 GBK 码位** ——
 # 不钉住的话 print 自己会抛 UnicodeEncodeError（**崩在打印结论那一步**），
 # 而外层门禁把它显示成「该检查 FAIL」——像判据报了缺陷，其实判据根本没跑完。
@@ -295,6 +297,24 @@ def main():
                     drift.append(f"{label}/{gname}.{meta.get('service')}")
     check("组内工具全部可调（工具面与执行侧同口径）", not drift,
           f"不一致：{drift[:6]}" if drift else "无漂移")
+
+    # ── 流程声明的静态自洽（2026-09-27 加）────────────────────
+    # 「静默少跑一步」是这一类声明的典型症状：`depends_on` 指向不存在的节点 ⇒ 那一步永远
+    # 不执行，而流程**照样报 done、照样按 step_total 显示满进度**。真踩过：
+    # `_flow_wbs_baseline.yaml` 的 `recheck` 写成了 `depends_on: [change]`（本文件里叫
+    # `revise`）—— 7 步的流程实际只跑 6 步，谁都没发现。
+    # 判据只放一处：`flow.flow_problems()`（不在本脚本复刻一份，复刻正是漂移的来源）。
+    bad_flows = []
+    for _f in sorted(pathlib.Path("app").glob("*/_flow_*.yaml")):
+        try:
+            _d = yaml.safe_load(_f.read_text(encoding="utf-8"))
+        except Exception as e:                                   # noqa: BLE001
+            bad_flows.append(f"{_f.name}（YAML 解析失败：{e}）")
+            continue
+        for _p in _flow.flow_problems(_d if isinstance(_d, dict) else {}):
+            bad_flows.append(f"{_f.name}：{_p}")
+    check("流程声明自洽（依赖存在 / id 唯一 / output 有声明）", not bad_flows,
+          f"{len(bad_flows)} 处：{bad_flows[:3]}" if bad_flows else "全部自洽")
 
     # ── 汇总 ──────────────────────────────────────────────────
     print("\n" + "=" * 74)

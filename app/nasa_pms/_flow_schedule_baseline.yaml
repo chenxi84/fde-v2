@@ -1,0 +1,82 @@
+name: 发射链排程 → 体检 → 基线 → 回填实绩
+key: schedule_baseline
+description: 进度侧闭环（**发射任务段**）：把「发射场保障」这个 WBS 叶子元素分解成一条
+  **发射活动链**（星箭对接开工里程碑 → 星箭对接与联合检查 → 推进剂加注与射前检查 →
+  **发射**里程碑）→ **确定性**体检（开口端 / 冗余 / 环 / 工期）→ 修掉体检报出来的问题 →
+  看派生排程并建立**进度基线** → 回填实绩（**不动基线**）→ 确定性复核。
+  角色 `nasa_planner`（技术计划与评审主管）—— 进度是技术规划产物（SE 手册 6.1 与 WBS/SEMP 并列）。
+  依据 `NASA/SP-2010-3403`《Schedule Management Handbook》§5.5.7 / §5.5.8 / §5.5.9 / §7.3。
+  ⚠ 这条链**刻意不预置**在演示数据里（`demo_seed.py` 只造到"发射场保障"这个叶子）——
+  "让数字员工把发射前的最后一段排出来"就是本流程要演示的事；活动名唯一（BR-06），
+  跑第二遍会因重名被拒，重跑前先 `python app/nasa_pms/demo/demo_build.py` 重建。
+nodes:
+- id: plan
+  role: nasa_planner
+  task: |
+    把 WBS 的「发射场保障」叶子元素（`400000.04.01`）分解成一条**发射活动链**（按顺序**实际执行**）：
+    ⚠ 名称要与演示数据里已有的活动**不重名**（材料 §5.5.5 要求活动描述唯一，重名会被 BR-06 拒）：
+    1) 调 nasa_pms__activity__add_milestone 建**起始**里程碑：name 写「星箭对接开工」，
+       wbs_no 用「400000.04.01」，phase 写 "start"；
+    2) 调 nasa_pms__activity__create 建活动「星箭对接与联合检查」，wbs_no 同上，duration_days 写 6，
+       predecessors 填上一步那个里程碑的编号；
+    3) 再建活动「推进剂加注与射前检查」，duration_days 写 3，predecessors 填「星箭对接与联合检查」的编号；
+    4) 调 nasa_pms__activity__add_milestone 建**完成**里程碑「发射」，phase 写 "finish"，
+       predecessors 填「推进剂加注与射前检查」的编号；
+    5) 回报：四个编号、各自类型与工期。
+    注意：**只能挂到叶子元素**（400000.04.01 是最底层元素，可以挂）；
+    里程碑的工期必须是 0（它是事件不是工作）。
+  output: plan_note
+- id: check
+  type: call
+  call:
+    service: activity.check_network
+  depends_on:
+  - plan
+  output: check_note
+- id: fix
+  role: nasa_planner
+  task: |
+    下面是从平台取回的**网络体检结果**（原始返回）：
+    {check_note}
+    请读它：如果 `total` 是 0，直接回报「网络无问题，可以进入基线」；
+    如果报出**开口端**（open_ends），就用 nasa_pms__activity__link 把缺的那一头补上
+    （注意：只有**起始 / 完成**两个边界里程碑允许单向，其余活动都必须有前置与后续）；
+    如果报出**挂靠非叶子**（non_leaf），如实说明并**不要**擅自搬家（那是人的判断）。
+    改完再调一次 nasa_pms__activity__check_network 确认。回报本轮的处置与最终 total。
+  input:
+  - check_note
+  depends_on:
+  - check
+  output: fix_note
+- id: baseline
+  role: nasa_planner
+  task: |
+    现在建立进度基线（先看清排程，再冻基线）：
+    1) 调 nasa_pms__activity__schedule_view 看这条链的**派生日期**（正推）与关键路径；
+    2) 调 nasa_pms__activity__baseline，act_nos 填「{plan_note}」里那四个编号，
+       并**把 schedule_view 返回的 project_start 一并传进去**（不传会按当天算，基线就与你看到的排程不是一个基准）；
+    3) 回报：每条活动的基线起止日期，以及总完工日（也就是「发射」里程碑那一天）。
+  input:
+  - plan_note
+  depends_on:
+  - fix
+  output: baseline_note
+- id: progress
+  role: nasa_planner
+  task: |
+    登记实绩（**这一步不动基线**）：
+    对「星箭对接与联合检查」那条活动调 nasa_pms__activity__record_progress：
+    percent_complete 写 100，actual_start / actual_finish 各写一个日期（YYYY-MM-DD，用它的基线起止日期即可），
+    备注写「发射场作业已完成」。回报：状态、百分比，以及**它的基线日期有没有变**（应当一字未变）。
+  input:
+  - baseline_note
+  depends_on:
+  - baseline
+  output: progress_note
+- id: recheck
+  type: call
+  call:
+    service: activity.schedule_view
+  depends_on:
+  - progress
+  output: final_schedule
