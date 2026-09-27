@@ -126,6 +126,7 @@ export function agentRail() {
       self.live = { content: "", tool_calls: [] };
       self.confirm = null;
       const tools = [];
+      let sawEvent = false;      // 这一轮是否真的产过事件（finally 里的 waitTurnSettled 要用）
       try {
         if (!self.sid) {
           const s = await post("/api/agent2/sessions" + self.groupQs(), {});
@@ -136,6 +137,7 @@ export function agentRail() {
         self.scrollEnd();
         const sid = self.sid;
         const onEvent = (evt) => {
+          sawEvent = true;
           if (evt.event === "delta") { self.live.content += evt.data; }
           else if (evt.event === "tool") {
             tools.push(toolDisp(evt.data));
@@ -174,6 +176,17 @@ export function agentRail() {
         if (self.live && !self.live.content) self.live.content = "⚠ 请求失败，请重试";
         this.commitLive();
       } finally {
+        // ⚠ 解禁的条件是**会话真的跑完**，不是「流结束了」（2026-09-27 修）。
+        //
+        // 这条流会因为任何原因提前结束（前端收敛判据、客户端断连、平台侧收尾、超时），
+        // 而"活还在不在跑"只有会话状态说得准。原来在 finally 里无条件 `sending = false`：
+        // 流一提前收掉，按钮就亮 —— 长回合（比如让数字员工跑一条 5–8 分钟的流程）时
+        // 会出现「活还在跑、发送按钮却亮了」：用户能往**同一个会话**里塞第二条指令，
+        // 而平台侧对「会话在跑又来一条」没有定义（排队还是报错都说不准）。
+        // 同时，解禁过早还会让下面那次历史对账**在答案落盘前**跑（对账守卫会看到
+        // "历史比本地短"而放弃采纳）⇒ 右栏永远停在半截，得手动刷新才补上。
+        // 现在两件事共用一个判据：会话说 idle 才解禁、才去对账。
+        await this.waitTurnSettled(sawEvent);
         self.sending = false;
         self.scrollEnd();
       }
@@ -230,6 +243,38 @@ export function agentRail() {
       } finally {
         clearInterval(watch);
       }
+    },
+
+    /* 等这一轮**真的跑完**（会话回到 idle），期间 `sending` 保持 true ⇒ 发送按钮保持禁用。
+     *
+     * 与 `streamUntilIdle` 同一判据、同一个 `/api/agent2/sessions` 接口 —— 两处若各写一份
+     * 判据，迟早会出现「流那边认定跑完了、按钮这边还认为在跑」这类自相矛盾（本项目里
+     * "两处各写一份判据"是出过事的老路）。
+     *
+     * `started` = 这一轮产过事件。产过就**一次 idle 即认**（`streamUntilIdle` 同款：
+     * 跑起来过又回到 idle，就是完了）；一次都没产过则要连着两次（防首次探测撞上启动间隙）。
+     * 上限对齐平台侧的兜底 `web.py::_MAX_TURN_SECS`（30 分钟）：超了也必须解禁 ——
+     * 按钮永久禁用比"多等一会儿"糟得多（用户报过的就是那个）。
+     */
+    async waitTurnSettled(started, maxMs = 30 * 60 * 1000) {
+      if (!self.sid) return false;
+      const t0 = Date.now();
+      let idleStreak = 0;
+      while (Date.now() - t0 < maxMs) {
+        try {
+          const list = await get("/api/agent2/sessions" + self.groupQs(), { quiet: true });
+          const me = (list || []).find((s) => s.session_id === self.sid);
+          if (me && me.status === "idle") {
+            idleStreak += 1;
+            if (started || idleStreak >= 2) return true;
+          } else {
+            idleStreak = 0;
+          }
+        } catch (e) { /* 查不到就接着等（与 streamUntilIdle 同款保守策略） */ }
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+      console.warn("[agent-rail] 等会话收敛超时（30 分钟），强制解禁发送按钮");
+      return false;
     },
 
     /* POST SSE 流式读取：逐帧解析 data: {...} 并回调。 */
