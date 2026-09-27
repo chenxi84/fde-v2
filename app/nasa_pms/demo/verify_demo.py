@@ -76,8 +76,8 @@ CHECKS = [
     ("activity.get(act_no=ACT-004)", "kind", "milestone", "完成里程碑（工期恒 0）"),
     ("activity.get(act_no=ACT-001)", "baseline_start", "2026-10-05",
      "基线冻在**派生日期**上（不是手填的）"),
-    ("activity.get(act_no=ACT-005)", "baseline_start", None,
-     "有一条未基线的活动（它还是开口端）"),
+    ("activity.get(act_no=ACT-006)", "baseline_start", None,
+     "有一条未基线的活动（SS 并行支线，刻意不冻基线）"),
     ("activity.get(act_no=ACT-004)", "predecessors", "ACT-003",
      "主线是完成→开始（默认关系）"),
     ("activity.get(act_no=ACT-006)", "predecessors", "ACT-003:SS:3:与单元测试并行，文档随代码走",
@@ -100,6 +100,19 @@ CHECKS = [
     ("change_request.get(cr_no=CR-005)", "status", "approved", "减重变更已批准（质量超限的处置）"),
     ("wbs.get(wbs_no=400000.04.01)", "status", "baselined",
      "发射场保障工作包已基线（流程编排现场挂活动的那片叶子）"),
+    # ── 完整产品树 + 活动网络（2026-09-27 加：让每片叶子都有活干）──
+    ("wbs.get(wbs_no=400000.05)", "title", "测控分系统", "补的 7 个分系统之一（编号 .05 起）"),
+    ("wbs.get(wbs_no=400000.11.01)", "kind", "wp", "整星总装是最底层工作包"),
+    ("wbs.get(wbs_no=400000.08.01)", "status", "baselined", "结构分系统下的工作包已基线"),
+    ("wbs.get(wbs_no=400000.02.01)", "status", "draft",
+     "父元素（载荷分系统）在变更中 ⇒ 子项不得基线，停在草稿（BR-02 的真实样子）"),
+    ("wbs.get(wbs_no=400000.03)", "status", "draft", "地面支持系统仍无范围出处（BR-03 样本）"),
+    ("wbs.get(wbs_no=400000.09.01)", "title", "热控涂层与多层", "热控那片叶子（留给体检报开口端）"),
+    ("activity.get(act_no=ACT-005)", "wbs_no", "400000.02.01",
+     "载荷相机标定已挂到相机主体、并接进相机支线（不再是开口端）"),
+    ("activity.get(act_no=ACT-010)", "phase", "start", "相机研制开工是起始里程碑"),
+    ("activity.get(act_no=ACT-006)", "predecessors", "ACT-003:SS:3:与单元测试并行，文档随代码走",
+     "SS + 滞后 + 理由那条仍在（§5.5.8.2 的四种关系模型）"),
     # ⚠ 飞行就绪评审 FRR **刻意不在这里查**：它是录屏里由数字员工现场建的，
     #   造数完就该不存在（查了反而会把"现场造数"这条演示路径钉死）。
 ]
@@ -108,8 +121,8 @@ COUNT_CHECKS = [
     ("requirement", "list", {}, 19, "需求"),
     ("risk", "list", {}, 10, "风险"),
     ("technical_measure", "list", {}, 7, "技术度量"),
-    ("wbs", "list", {}, 10, "WBS 元素"),
-    ("activity", "list", {}, 6, "进度活动（发射链由流程编排现场造，不在这里）"),
+    ("wbs", "list", {}, 32, "WBS 元素（12 片新增叶子：每个分系统都有工作包）"),
+    ("activity", "list", {}, 39, "进度活动（发射链由流程编排现场造，不在这里）"),
     ("review", "list", {}, 5, "评审（FRR 同样留给现场）"),
     ("interface", "list", {}, 7, "接口"),
 ]
@@ -147,6 +160,23 @@ def main() -> int:
         sys.stdout.write(f"  {'✓' if ok else '✗'} {app}.{svc} 的 {label}条数 → {n}（期望 {want}）\n")
         if not ok:
             problems.append(f"{app}.{svc}.total：期望 {want}，实际 {n}")
+
+    # ── 结构性判据：**每片叶子都有活干**（2026-09-27 加）────────────────────────
+    # 为什么单列一条：甘特是**按 WBS 层级**呈现的（SP-2010-3403 §5.5），叶子没活动 → 甘特上
+    # 那一行就是「无活动」，整张图看着不像真项目。材料 WBS 手册 §4 原话是
+    # "The lowest level of each WBS element should have at least one task or activity"。
+    # ⚠ 唯一豁免：`400000.04.01`（发射场保障）—— 它的活动**故意留给流程编排现场造**（录屏 e2）。
+    wbs_all = (call("wbs", "list") or {}).get("items") or []
+    acts_all = (call("activity", "list") or {}).get("items") or []
+    parents = {w.get("parent_no") for w in wbs_all if w.get("parent_no")}
+    leaves = [w for w in wbs_all if w.get("wbs_no") not in parents]
+    has_act = {a.get("wbs_no") for a in acts_all}
+    EXEMPT = {"400000.04.01"}
+    naked = [w["wbs_no"] for w in leaves if w["wbs_no"] not in has_act and w["wbs_no"] not in EXEMPT]
+    sys.stdout.write(f"  {'✓' if not naked else '✗'} 每片叶子都有活动 → "
+                     f"{len(leaves) - len(naked)}/{len(leaves)} 片（豁免 {sorted(EXEMPT)}：留给流程编排现场造）\n")
+    if naked:
+        problems.append(f"这些叶子一条活动都没有：{naked}")
 
     # 作废理由必须**落库**（`obsolete(reason=…)` → `void_reason`；2026-09-25 起留痕）
     ob = call("requirement", "get", req_no="REQ-012")

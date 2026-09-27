@@ -407,6 +407,71 @@ def seed(pf):
     call("wbs", "close", wbs_no="500000.01", note="天线阵交付完成")
     call("wbs", "close", wbs_no="500000", note="地面站配套整枝收口")
 
+    # 发射支持系统（使能性工作）+ 其下的工作包「发射场保障」：**必须在这里建**，
+    # 才能稳稳拿住 `400000.04` / `400000.04.01` 这两个编号（子号按创建顺序分配）。
+    # 它是流程编排现场造「发射活动链」的挂靠点（活动只能挂**叶子**，BR-05）——
+    # 所以这里**不预置任何活动**，那一段留给录屏里的数字员工。
+    call("wbs", "add_child", parent_no="400000", title="发射支持系统", kind="enabling",
+         owner="发射任务总体", scope_ref="SOW §5 发射支持范围", req_nos="REQ-015")
+    call("wbs", "add_child", parent_no="400000.04", title="发射场保障", kind="wp",
+         owner="发射场测发大队", scope_ref="SOW §5.1 发射场作业", req_nos="REQ-017")
+    call("wbs", "baseline", wbs_no="400000.04")
+    call("wbs", "baseline", wbs_no="400000.04.01")
+
+    # ── ⑩之二 完整产品树：让**每片叶子都有活干**（2026-09-27 加）────────────────
+    # 为什么补：甘特是**按 WBS 层级**呈现的（SP-2010-3403 §5.5），树越完整、排程越像真型号。
+    # 原来 10 个元素里只有 5 片叶子挂着活动，其余行全是「无活动」。这里补到
+    # **7 个分系统 + 12 片新叶子**，目标：**每片叶子至少一条活动**（材料 WBS 手册 §4：
+    # "The lowest level of each WBS element should have at least one task or activity"）。
+    # ⚠ 编号**只能追加**（.05 起）：已有编号落库不可变（BR-07），且体检/测试按身份引用它们。
+    # ⚠ `400000.02`（载荷分系统）正在**变更中**（CR-004）⇒ 它的子项**不基线**
+    #   （父未基线时子不得基线，BR-02）—— 停在草稿正是"变更未落实"的真实样子。
+    # ⚠ `400000.04.01`（发射场保障）同样**不预置**活动：那一段留给流程编排现场造（e2 那段录屏）。
+    NEW_SUBS = [
+        ("测控分系统", "product", "测控分系统", "REQ-016",
+         [("测控应答机", "SOW §3.5.1 测控应答机"), ("测控天线", "SOW §3.5.2 测控天线")]),
+        ("数传分系统", "product", "数传分系统", "REQ-004",
+         [("数传发射机", "SOW §3.6.1 数传发射机"), ("固存与格式化单元", "SOW §3.6.2 固存")]),
+        ("姿轨控分系统", "product", "控制分系统", "REQ-007",
+         [("星敏感器", "SOW §3.7.1 星敏感器"), ("动量轮组件", "SOW §3.7.2 动量轮")]),
+        ("结构与机构分系统", "product", "结构分系统", "REQ-003",
+         [("主承力结构", "SOW §3.8.1 主承力结构"), ("太阳翼驱动机构", "SOW §3.8.2 驱动机构")]),
+        ("热控分系统", "product", "热控分系统", "REQ-009",
+         [("热控涂层与多层", "SOW §3.9.1 热控实施")]),
+        ("电源分系统", "product", "电源分系统", "REQ-019",
+         [("太阳电池阵", "SOW §3.10.1 太阳电池阵"), ("锂离子蓄电池组", "SOW §3.10.2 蓄电池组")]),
+        # 集成与试验是**使能性工作**（不是产品本身），与 400000.03/04 同类。
+        # ⚠ 名字不能叫「总体装配」—— BR-04 拦非产品词（材料 §3.5.2 点名了「装配」）。
+        ("整星集成与试验", "enabling", "总装测试部", "REQ-003",
+         [("整星总装", "SOW §4.1 整星总装与试验")]),
+    ]
+    LEAF = {}          # "分系统/工作包" → **实际分配到的编号**（下面活动网络按名字引用它）
+    for title, kind, owner, req, wps in NEW_SUBS:
+        el = call("wbs", "add_child", parent_no="400000", title=title, kind=kind, owner=owner,
+                  req_nos=req, scope_ref=f"SOW 范围：{title}")
+        no = el["wbs_no"]
+        codes = []
+        for wp_title, wp_scope in wps:
+            wp = call("wbs", "add_child", parent_no=no, title=wp_title, kind="wp", owner=owner,
+                      scope_ref=wp_scope)
+            codes.append(wp["wbs_no"])
+            LEAF[f"{title}/{wp_title}"] = wp["wbs_no"]
+        # 自顶向下基线：父先基线，子才允许（BR-02）
+        call("wbs", "baseline", wbs_no=no)
+        for c in codes:
+            call("wbs", "baseline", wbs_no=c)
+
+    # 星务分系统下再补一片叶子（该支原来只有「星务软件」一片）
+    dhu = call("wbs", "add_child", parent_no="400000.01", title="星务数据管理单元", kind="wp",
+               owner="星务分系统", scope_ref="SOW §3.2.2 数据管理单元")
+    call("wbs", "baseline", wbs_no=dhu["wbs_no"])
+    LEAF["星务分系统/星务数据管理单元"] = dhu["wbs_no"]
+    # 载荷分系统（变更中）下的两片叶子：建出来、给范围出处，但**不基线**（见上）
+    for t, sc in (("相机主体", "SOW §3.3.1 相机主体"), ("相机控制器", "SOW §3.3.2 相机控制器")):
+        wp = call("wbs", "add_child", parent_no="400000.02", title=t, kind="wp", owner="载荷分系统",
+                  scope_ref=sc)
+        LEAF[f"载荷分系统/{t}"] = wp["wbs_no"]
+
     # ── ⑪ 进度活动（活动网络 + 基线 + 实绩；挂在 WBS **叶子**上）──────────
     # 一条单链网络：起始里程碑 → 编写 → 单元测试 → 完成里程碑（都在「星务软件」工作包下）
     call("activity", "add_milestone", name="星务软件开工", wbs_no="400000.01.01.01",
@@ -417,9 +482,10 @@ def seed(pf):
          duration_days=5, predecessors="ACT-002", owner="测试组")
     call("activity", "add_milestone", name="星务软件交付", wbs_no="400000.01.01.01",
          predecessors="ACT-003", phase="finish")
-    # 另一条挂到「载荷分系统」叶子：**故意不连逻辑链** —— 演示"开口端"（体检会报出来）
-    call("activity", "create", name="载荷相机标定", wbs_no="400000.02",
-         duration_days=4, owner="载荷分系统")
+    # 另一条挂到「相机主体」叶子（400000.02 已是分系统级、下面有子元素，不能再挂）；
+    # 这里**先不连逻辑链**，等下面整张网络建完再用 `activity.link` 接进相机那条支线
+    cam_fix = call("activity", "create", name="载荷相机标定", wbs_no=LEAF["载荷分系统/相机主体"],
+                   duration_days=4, owner="载荷分系统")
     # 基线：**显式给 project_start**，免得基线随"今天"漂（BR-07 的基准要可复现）
     call("activity", "baseline", act_nos=["ACT-001", "ACT-002", "ACT-003", "ACT-004"],
          project_start="2026-10-05")
@@ -429,11 +495,113 @@ def seed(pf):
          owner="星务分系统")
     # 日历：假日表放**十二月**（不影响上面按十月冻结的基线，只让"跳过非工作日"看得见）
     call("activity", "update_calendar", cal_no="CAL-001", add_holiday="2026-12-25")
-    # 实绩：一条已完成（演示 BR-08：基线不动）、一条进行中
+
+    # ── ⑪之二 完整活动网络：一条"从分系统研制排到发射"的排程（2026-09-27 加）──────
+    # 形状：每支以**起始里程碑**（`phase=start`）开头 → 若干任务 →（FS）汇入「整星总装」
+    #   → EMC → 力学 → 热真空（**末端留开口**，等录屏里流程编排现场把发射链接上）。
+    # 为什么这样长：甘特的横轴是**天**，只有一支链时看着像根棍子；真实型号是"多支并行、
+    #   总装等齐配套"，所以最长的那一支（相机主体 45d→装调 15d→标定 4d）自然成为关键路径。
+    # ⚠ 只有**起始 / 完成**两个边界里程碑允许单向（BR-01），故每支的起点都建成 start 里程碑。
+    # ⚠ 刻意留的两个样本：① `热控实施` 无前置无后继（体检会报「开口端」）；
+    #   ② `星务软件文档编写`（ACT-006）用 SS+滞后+理由（四种关系模型）。两条都**不基线**。
+    NET = [
+        # (key, 叶子, 名称, 工期, [前置 key], owner, phase)
+        ("dhu_s", LEAF["星务分系统/星务数据管理单元"], "数据管理单元开工", 0, [], "星务分系统", "start"),
+        ("dhu_d", LEAF["星务分系统/星务数据管理单元"], "数据管理单元研制", 12, ["dhu_s"], "星务分系统", None),
+        ("dhu_a", LEAF["星务分系统/星务数据管理单元"], "数据管理单元验收", 6, ["dhu_d"], "星务分系统", None),
+
+        ("cam_s", LEAF["载荷分系统/相机主体"], "相机研制开工", 0, [], "载荷分系统", "start"),
+        ("cam_b", LEAF["载荷分系统/相机主体"], "相机主体研制", 45, ["cam_s"], "载荷分系统", None),
+        ("cam_m", LEAF["载荷分系统/相机主体"], "相机装调", 15, ["cam_b"], "载荷分系统", None),
+        # 相机标定（ACT-005）就落在这条支线上：主体研制完 → 装调 → 标定
+        ("cam_c", LEAF["载荷分系统/相机控制器"], "相机控制器研制", 20, ["cam_s"], "载荷分系统", None),
+
+        # 测控支：应答机与天线并行，同起于测控开工
+        ("tt_s", LEAF["测控分系统/测控应答机"], "测控研制开工", 0, [], "测控分系统", "start"),
+        ("tt_d", LEAF["测控分系统/测控应答机"], "测控应答机研制", 25, ["tt_s"], "测控分系统", None),
+        ("tt_t", LEAF["测控分系统/测控应答机"], "应答机验收测试", 8, ["tt_d"], "测控分系统", None),
+        ("ant_d", LEAF["测控分系统/测控天线"], "测控天线研制", 20, ["tt_s"], "测控分系统", None),
+
+        # 数传支（与测控同源开工）
+        ("dt_d", LEAF["数传分系统/数传发射机"], "数传发射机研制", 28, ["tt_s"], "数传分系统", None),
+        ("ssu_d", LEAF["数传分系统/固存与格式化单元"], "固存与格式化单元研制", 22, ["tt_s"], "数传分系统", None),
+
+        ("aoc_s", LEAF["姿轨控分系统/星敏感器"], "姿轨控研制开工", 0, [], "控制分系统", "start"),
+        ("star_d", LEAF["姿轨控分系统/星敏感器"], "星敏感器研制", 24, ["aoc_s"], "控制分系统", None),
+        ("mw_d", LEAF["姿轨控分系统/动量轮组件"], "动量轮组件研制", 20, ["aoc_s"], "控制分系统", None),
+
+        ("st_s", LEAF["结构与机构分系统/主承力结构"], "结构投产开工", 0, [], "结构分系统", "start"),
+        ("st_m", LEAF["结构与机构分系统/主承力结构"], "主承力结构投产", 30, ["st_s"], "结构分系统", None),
+        ("sam_d", LEAF["结构与机构分系统/太阳翼驱动机构"], "太阳翼驱动机构研制", 26, ["st_s"], "结构分系统", None),
+        # 地面支持设备（400000.03 是**草稿**、没有范围出处 —— 它照样可以有活干）
+        ("gse_d", "400000.03", "地面支持设备研制", 20, ["st_s"], "总体设计部", None),
+
+        # ⚠ 热控这一条**故意不连链**：体检会把它报成「开口端」（演示 + 给流程编排留的活）
+        ("tc_i", LEAF["热控分系统/热控涂层与多层"], "热控实施", 18, [], "热控分系统", None),
+
+        ("pw_s", LEAF["电源分系统/太阳电池阵"], "电源研制开工", 0, [], "电源分系统", "start"),
+        ("sa_d", LEAF["电源分系统/太阳电池阵"], "太阳电池阵研制", 35, ["pw_s"], "电源分系统", None),
+        ("bat_d", LEAF["电源分系统/锂离子蓄电池组"], "锂离子蓄电池组研制", 28, ["pw_s"], "电源分系统", None),
+
+        # 地面站配套（另一棵树，已收口）：把已经干完的活补出来 —— 它是**独立的一支**，
+        # 末端用**完成里程碑**收口（finish 里程碑允许没有后继，BR-01）
+        ("ant_s", "500000.01", "天线阵安装开始", 0, [], "地面站", "start"),
+        ("ant_i", "500000.01", "天线阵安装", 15, ["ant_s"], "地面站", None),
+        ("ant_c", "500000.01", "天线阵调试", 7, ["ant_i"], "地面站", None),
+        ("ant_e", "500000.01", "地面站交付", 0, ["ant_c"], "地面站", "finish"),
+
+        # 总装主线：**等齐 14 项配套**才开工（真实型号就是这样，甘特上能看见"汇流"）
+        ("ais_s", LEAF["整星集成与试验/整星总装"], "整星总装开工", 0, [], "总装测试部", "start"),
+    ]
+    made = {"cam_cal": cam_fix["act_no"]}          # 上面已建（编号由系统给，不写死）
+    for key, leaf, name, dur, preds, owner, phase in NET:
+        kw = {"wbs_no": leaf, "owner": owner}
+        if preds:
+            kw["predecessors"] = ",".join(made[p] for p in preds)
+        if phase:
+            kw["phase"] = phase
+            act = call("activity", "add_milestone", name=name, **kw)
+        else:
+            act = call("activity", "create", name=name, duration_days=dur, **kw)
+        made[key] = act["act_no"]
+
+    # 总装主线（前置最多的一条：14 项配套 + 总装开工）
+    for key, name, dur, preds, phase in (
+            ("ais", "整星总装", 20,
+             ["ais_s", "cam_cal", "dhu_a", "cam_c", "tt_t", "ant_d", "dt_d", "ssu_d",
+              "star_d", "mw_d", "st_m", "sam_d", "sa_d", "bat_d", "gse_d"], None),
+            ("emc", "整星 EMC 试验", 8, ["ais"], None),
+            ("mech", "力学试验", 10, ["emc"], None),
+            ("tv", "热真空试验", 12, ["mech"], None)):
+        kw = {"wbs_no": LEAF["整星集成与试验/整星总装"], "owner": "总装测试部",
+              "predecessors": ",".join(made[p] for p in preds)}
+        if phase:
+            kw["phase"] = phase
+            act = call("activity", "add_milestone", name=name, **kw)
+        else:
+            act = call("activity", "create", name=name, duration_days=dur, **kw)
+        made[key] = act["act_no"]
+
+    # 把相机标定那条接进相机支线（建它的时候支线还没建出来，所以这里补链）
+    call("activity", "link", act_no=made["cam_cal"], predecessor_no=made["cam_m"])
+
+    # 基线：整条网络一起冻（**只留两条不基线**，见上面的说明）
+    call("activity", "baseline",
+         act_nos=[made[k] for k in made if k not in ("tc_i",)],
+         project_start="2026-10-05")
+
+    # 实绩：已完成的几支（演示 BR-08：回填实绩**不动基线**）+ 一条进行中
     call("activity", "record_progress", act_no="ACT-001", percent_complete=100,
          actual_start="2026-10-05", actual_finish="2026-10-05")
     call("activity", "record_progress", act_no="ACT-002", percent_complete=60,
          actual_start="2026-10-06")
+    for k in ("st_m", "sa_d", "ant_i", "ant_c"):
+        # 实绩日期取**它自己的基线日期**：状态由百分比派生，而"100% 且无实际完成"只会是
+        # `in_progress`（会把"已完成"显示成"进行中"）—— 所以实际日期要一并回填。
+        a = call("activity", "get", act_no=made[k])
+        call("activity", "record_progress", act_no=made[k], percent_complete=100,
+             actual_start=a["baseline_start"], actual_finish=a["baseline_finish"],
+             note="按基线日期完成")
 
     # ══════════════════════════════════════════════════════════════════════════
     # 以下是**发射任务段**（2026-09-27 加）：把"研制中的一颗星"推进到"公司要发射它"。
@@ -608,18 +776,11 @@ def seed(pf):
          owner="测控分系统")
     call("interface", "release", if_no="IF-007")
 
-    # ── ㉒ WBS：发射支持系统（使能性工作）+ 其下的工作包「发射场保障」────────
-    # 这是流程编排现场造「发射活动链」的挂靠点（活动只能挂**叶子**元素，BR-05）
-    call("wbs", "add_child", parent_no="400000", title="发射支持系统", kind="enabling",
-         owner="发射任务总体")
-    call("wbs", "update", wbs_no="400000.04", scope_ref="SOW §5 发射支持范围",
-         req_nos="REQ-015")
-    call("wbs", "add_child", parent_no="400000.04", title="发射场保障", kind="wp",
-         owner="发射场测发大队")
-    call("wbs", "update", wbs_no="400000.04.01", scope_ref="SOW §5.1 发射场作业",
-         req_nos="REQ-017")
-    call("wbs", "baseline", wbs_no="400000.04")
-    call("wbs", "baseline", wbs_no="400000.04.01")
+    # ── ㉒ WBS：发射支持系统（**已挪到 ⑩ 里建**，早于新增分系统）─────────────
+    # ⚠ 2026-09-27 挪位说明：`add_child` 的子号是**按创建顺序**分配的，而发射支持系统必须
+    #   固定在 `400000.04`（流程 YAML、已录的片子、体检都钉着 `400000.04.01` 这个叶子）。
+    #   后来补的 7 个分系统只能排在它后面，所以发射支持系统的创建要**提前**到 ⑩ 里。
+    #   活动仍由流程编排现场造（那一段录屏就是演这个），这里不留任何活动。
 
     return {
         "stakeholder": 8, "expectations": 6,
@@ -632,11 +793,13 @@ def seed(pf):
         "review": 5, "review_closed": 2, "review_tracking": 2,
         "decision": 3, "decision_decided": 2, "decision_implemented": 1,
         "interface": 7, "if_frozen": 1, "if_released": 5,
-        # WBS（2026-09-26 并入）：10 个元素 —— 已基线 6 / 变更中 1 / 已关闭 2 / 草稿 1
-        "wbs": 10, "wbs_baselined": 6, "wbs_in_change": 1, "wbs_closed": 2, "wbs_draft": 1,
-        # 进度活动（2026-09-26 并入）：6 条 —— 已基线 4 / 已完成 1 / 进行中 1 / 计划 3
+        # WBS：**32 个元素**（12 个分系统/使能性二级 + 19 片叶子）—— 每片叶子都有活动
+        # （2026-09-27 补：原来只有 5 片叶子有活干，甘特上一半的行是「无活动」）
+        "wbs": 32, "wbs_baselined": 26, "wbs_in_change": 1, "wbs_closed": 2, "wbs_draft": 3,
+        # 进度活动：**39 条**（分系统研制支线 + 总装主线 + 地面站支线）
+        # ⚠ 两条**刻意不基线**：热控实施（开口端样本）、星务软件文档编写（SS 支线）
         # ⚠ **发射活动链刻意不预置**：录屏里由流程编排现场造（BR-06 活动名唯一，预置了就造不出来）
-        "activity": 6, "activity_baselined": 4, "activity_completed": 1,
+        "activity": 39, "activity_baselined": 37, "activity_completed": 5,
         "activity_in_progress": 1,
     }
 
