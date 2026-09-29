@@ -29,6 +29,8 @@ fde_platform/.dbguard.lock
 
 # 运行日志
 config/logs/
+# nginx 访问日志（docker-compose 把 ./logs 挂到容器的 /var/log/fde）
+/logs/
 
 # PostgreSQL 数据目录
 pgdata/
